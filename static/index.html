@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Audio Lab - Batch Ingestion & Soundsystem Quality Control for Audio Engineers and Programmers">
+  <title>Audio Lab // Ingestion & Soundsystem QC</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="dark-theme">
+  <!-- Top Navigation & System Status Bar -->
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 18V5l12-2v13"></path>
+          <circle cx="6" cy="18" r="3"></circle>
+          <circle cx="18" cy="16" r="3"></circle>
+        </svg>
+      </div>
+      <div class="brand-info">
+        <h1 class="brand-title">AUDIO LAB <span class="badge-studio">PRO FOH</span></h1>
+        <p class="brand-subtitle">High-Fidelity Ingestion &amp; Soundsystem QC Monitor</p>
+      </div>
+    </div>
+
+    <!-- System Diagnostics Bar -->
+    <div class="system-status-group" id="systemStatusGroup">
+      <div class="status-pill" id="statusPython">
+        <span class="status-indicator active"></span>
+        <span class="status-label">Python:</span>
+        <span class="status-val" id="pythonVal">3.12</span>
+      </div>
+      <div class="status-pill" id="statusYtdlp">
+        <span class="status-indicator" id="ytdlpDot"></span>
+        <span class="status-label">yt-dlp:</span>
+        <span class="status-val" id="ytdlpVal">checking...</span>
+      </div>
+      <div class="status-pill" id="statusFfmpeg">
+        <span class="status-indicator" id="ffmpegDot"></span>
+        <span class="status-label">FFmpeg:</span>
+        <span class="status-val" id="ffmpegVal">checking...</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="app-container">
+    <!-- Notice Banner for Missing Binaries if any -->
+    <div class="system-notice-card hidden" id="systemNoticeCard">
+      <div class="notice-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="12" y1="8" x2="12" y2="12"></line>
+          <line x1="12" y1="16" x2="12.01" y2="16"></line>
+        </svg>
+      </div>
+      <div class="notice-content">
+        <h3 id="noticeTitle">Dependency Not Detected</h3>
+        <p id="noticeDesc">Beberapa tool CLI audio belum terpasang di sistem PATH.</p>
+        <div class="code-pill" id="noticeCode">pip install yt-dlp</div>
+      </div>
+    </div>
+
+    <!-- Top Grid: Ingestion Console + Queue Monitor -->
+    <div class="dashboard-grid">
+      <!-- Batch Ingestion Panel -->
+      <section class="console-card ingestion-panel" aria-labelledby="ingestionHeading">
+        <div class="panel-header">
+          <div class="panel-title-wrap">
+            <span class="icon-chip">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+              </svg>
+            </span>
+            <h2 id="ingestionHeading">Batch Ingestion Console</h2>
+          </div>
+          <span class="panel-badge">Native Audio Stream (No Re-encode)</span>
+        </div>
+
+        <form id="ingestForm" class="ingest-form">
+          <div class="field-group">
+            <label for="urlInput" class="field-label">
+              <span>YouTube / YouTube Music URLs</span>
+              <span class="label-hint">Satu URL per baris (mendukung video atau playlist)</span>
+            </label>
+            <textarea
+              id="urlInput"
+              class="field-textarea"
+              rows="4"
+              placeholder="https://www.youtube.com/watch?v=...&#10;https://music.youtube.com/watch?v=...&#10;https://www.youtube.com/playlist?list=..."
+              required
+            ></textarea>
+          </div>
+
+          <div class="field-group">
+            <label class="field-label">
+              <span>Format &amp; Kualitas Output</span>
+              <span class="label-hint">Dianjurkan Native Opus untuk fidelitas soundsystem panggung &amp; FOH</span>
+            </label>
+            <div class="format-grid">
+              <label class="format-card">
+                <input type="radio" name="audioFormat" value="premium_aac" checked>
+                <div class="format-card-inner">
+                  <div class="format-badge-row">
+                    <span class="format-badge emerald">PREMIUM AAC 256k</span>
+                    <span class="format-sub">YouTube Music Max</span>
+                  </div>
+                  <p class="format-desc">AAC 256 kbps dari akun YouTube Premium (format 141) dengan fallback otomatis ke Native Opus.</p>
+                </div>
+              </label>
+
+              <label class="format-card">
+                <input type="radio" name="audioFormat" value="native">
+                <div class="format-card-inner">
+                  <div class="format-badge-row">
+                    <span class="format-badge cyan">NATIVE OPUS 48kHz</span>
+                    <span class="format-sub">Default FOH</span>
+                  </div>
+                  <p class="format-desc">Opus (~160kbps 48kHz). Preservasi bit stream murni tanpa re-encoding (0% degradasi generasi &amp; transient utuh).</p>
+                </div>
+              </label>
+
+              <label class="format-card">
+                <input type="radio" name="audioFormat" value="mp3_320k">
+                <div class="format-card-inner">
+                  <div class="format-badge-row">
+                    <span class="format-badge gold">MP3 320 KBPS</span>
+                    <span class="format-sub">CBR Maksimum</span>
+                  </div>
+                  <p class="format-desc">Bitrate tertinggi MP3 (LAME 320k). Pilihan jika butuh kompatibilitas CDJ panggung lama atau flashdisk mobil.</p>
+                </div>
+              </label>
+
+              <label class="format-card">
+                <input type="radio" name="audioFormat" value="mp3_vbr0">
+                <div class="format-card-inner">
+                  <div class="format-badge-row">
+                    <span class="format-badge purple">MP3 VBR 0</span>
+                    <span class="format-sub">LAME Extreme</span>
+                  </div>
+                  <p class="format-desc">Variable Bitrate profil tertinggi LAME (-q:a 0). Alokasi bit dinamis berdasarkan kompleksitas audio.</p>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <div class="options-row">
+            <label class="custom-toggle">
+              <input type="checkbox" id="optUseCookies" checked>
+              <span class="toggle-slider"></span>
+              <div class="toggle-text-wrap">
+                <span class="toggle-text">Gunakan Sesi YouTube Premium (Google Chrome)</span>
+                <span class="toggle-hint">Baca cookies Chrome untuk akses AAC 256k &amp; katalog penuh (otomatis fallback publik jika terkunci)</span>
+              </div>
+            </label>
+
+            <label class="custom-toggle">
+              <input type="checkbox" id="optPlaylist" checked>
+              <span class="toggle-slider"></span>
+              <div class="toggle-text-wrap">
+                <span class="toggle-text">Simpan Playlist Otomatis per Folder</span>
+                <span class="toggle-hint">Otomatis buat subfolder dengan nama playlist di dalam library/inbox</span>
+              </div>
+            </label>
+
+            <label class="custom-toggle">
+              <input type="checkbox" id="optAutoScan" checked>
+              <span class="toggle-slider"></span>
+              <div class="toggle-text-wrap">
+                <span class="toggle-text">Otomatis Jalankan Audio QC (True Peak &amp; LUFS)</span>
+              </div>
+            </label>
+          </div>
+
+          <div class="action-footer">
+            <div class="format-spec-tag">
+              <span class="spec-dot" id="specDot"></span>
+              <span id="specText">Target: Premium AAC 256k (YouTube Music via Chrome - Smart Fallback)</span>
+            </div>
+            <button type="submit" id="btnStartIngest" class="btn-primary">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+                <polygon points="5 3 19 12 5 21 5 3"></polygon>
+              </svg>
+              <span>Mulai Ekstraksi Batch</span>
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Active Queue & Real-time Progress Monitor -->
+      <section class="console-card monitor-panel" aria-labelledby="monitorHeading">
+        <div class="panel-header">
+          <div class="panel-title-wrap">
+            <span class="icon-chip accent-amber">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polyline points="12 6 12 12 16 14"></polyline>
+              </svg>
+            </span>
+            <h2 id="monitorHeading">Queue &amp; Execution Monitor</h2>
+          </div>
+          <span class="queue-counter" id="queueCounter">Antrian: 0</span>
+        </div>
+
+        <!-- Active Progress Container -->
+        <div class="monitor-body">
+          <div class="active-job-box" id="activeJobBox">
+            <div class="job-meta">
+              <span class="job-status-tag" id="jobStatusTag">IDLE</span>
+              <span class="job-url-label" id="jobUrlLabel">Belum ada tugas unduhan aktif</span>
+            </div>
+
+            <!-- Sleek Gauge Progress Bar -->
+            <div class="progress-track">
+              <div class="progress-fill" id="progressFill" style="width: 0%;"></div>
+            </div>
+            <div class="progress-legend">
+              <span id="progressText">0% Complete</span>
+              <span id="progressETA" class="mono-stat">--:--</span>
+            </div>
+          </div>
+
+          <!-- Live Terminal Output Console -->
+          <div class="terminal-container">
+            <div class="terminal-bar">
+              <div class="terminal-dots">
+                <span class="tdot red"></span>
+                <span class="tdot yellow"></span>
+                <span class="tdot green"></span>
+              </div>
+              <span class="terminal-title">LIVE PROCESS STREAM</span>
+              <button type="button" id="btnClearLogs" class="btn-text">Clear</button>
+            </div>
+            <div class="terminal-content" id="terminalLogs">
+              <p class="log-line info">[SYSTEM] Engine initialized in background. Ready for batch jobs.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Library Inbox & Soundsystem QC Audit Table -->
+    <section class="console-card library-panel" aria-labelledby="libraryHeading">
+      <div class="panel-header">
+        <div class="panel-title-wrap">
+          <span class="icon-chip accent-cyan">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
+            </svg>
+          </span>
+          <div>
+            <h2 id="libraryHeading">Library Inbox &amp; Soundsystem Readiness</h2>
+            <p class="panel-sub">File audio yang tersimpan di library/inbox beserta metrik True Peak dan Loudness</p>
+          </div>
+        </div>
+
+        <div class="library-actions">
+          <button type="button" id="btnRefreshLibrary" class="btn-secondary">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="23 4 23 10 17 10"></polyline>
+              <polyline points="1 20 1 14 7 14"></polyline>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+            </svg>
+            <span>Segarkan File</span>
+          </button>
+          <button type="button" id="btnAuditAll" class="btn-accent">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+            </svg>
+            <span>Jalankan Full QC Audit</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Table Container -->
+      <div class="table-responsive">
+        <table class="qc-table" id="qcTable">
+          <thead>
+            <tr>
+              <th scope="col">Nama File Audio</th>
+              <th scope="col">Ukuran</th>
+              <th scope="col">Codec</th>
+              <th scope="col">Sample Rate</th>
+              <th scope="col">True Peak (dBTP)</th>
+              <th scope="col">Integrated LUFS</th>
+              <th scope="col">LRA (LU)</th>
+              <th scope="col">Status Soundsystem</th>
+            </tr>
+          </thead>
+          <tbody id="libraryTableBody">
+            <tr class="empty-row">
+              <td colspan="8">Belum ada file audio di <code>library/inbox</code>. Masukkan URL YouTube di atas untuk memulai.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Audio Engineering Legend Guide -->
+      <div class="audio-legend-card">
+        <h4 class="legend-title">Panduan Evaluasi Akustik Soundsystem Besar:</h4>
+        <div class="legend-grid">
+          <div class="legend-item">
+            <span class="legend-badge badge-safe">READY FOR FOH</span>
+            <p>True Peak &lt; -1.0 dBTP. Aman dari distorsi inter-sample DAC/DSP di volume konser tinggi.</p>
+          </div>
+          <div class="legend-item">
+            <span class="legend-badge badge-warning">TRIM PREAMP</span>
+            <p>True Peak antara -1.0 s/d 0 dBTP. Dianjurkan turunkan fader channel / preamp sebesar -2.0 dBFS.</p>
+          </div>
+          <div class="legend-item">
+            <span class="legend-badge badge-danger">CLIPPING HAZARD</span>
+            <p>True Peak &gt; 0 dBTP. Sinyal berisiko clipping analog pada converter D/A amplifier panggung.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <p>Audio Lab Ingestion Engine &bull; Strictly running on <code>127.0.0.1:8765</code> &bull; Native Audio Preservation</p>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

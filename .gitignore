@@ -1,0 +1,70 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Python distribution / packaging
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+
+# Project Data & Downloaded Media
+# Keep directory structure via .gitkeep, ignore downloaded files & playlist subdirectories
+library/inbox/*
+!library/inbox/.gitkeep
+library/downloaded_ids.txt
+downloaded_ids.txt
+
+# Audio media files (prevent accidental commits if stored anywhere in workspace)
+*.opus
+*.m4a
+*.mp3
+*.aac
+*.flac
+*.wav
+*.ogg
+*.webm
+*.wma
+*.alac
+*.aif
+*.aiff
+
+# yt-dlp temporary / partial download files
+*.part
+*.ytdl
+*.temp
+
+# Generated reports & logs
+*.csv
+*.log
+
+# Sensitive credentials & cookies
+.env
+.env.*
+!*.env.example
+*.cookies
+cookies.txt
+
+# Operating System files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE & Text Editor artifacts
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
