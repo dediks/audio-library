@@ -33,10 +33,10 @@ yt-dlp -F "URL_KONTEN_BERIZIN"
 Downloader mendukung pengambilan stream terbaik dengan fallback otomatis:
 
 1. **Dengan Akun YouTube Premium (AAC 256 kbps High Quality)**:
-   Membaca sesi login dari browser (misal Chrome) tanpa login manual:
+   Otomatis membaca file `library/cookies.txt` jika tersedia, atau membaca sesi browser:
 
    ```bash
-   python audio_manager.py download "URL_KONTEN_BERIZIN" --authorized --format premium --cookies-from-browser chrome --scan
+   python audio_manager.py download "URL_KONTEN_BERIZIN" --authorized --format premium --scan
    ```
 
 2. **Native Opus 48kHz / AAC Standar FOH (Default Publik)**:

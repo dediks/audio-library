@@ -15,9 +15,10 @@ import subprocess
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 # Import existing audit and helper functions from audio_manager
 import audio_manager
@@ -26,6 +27,7 @@ BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 INBOX_DIR = BASE_DIR / "library" / "inbox"
 ARCHIVE_FILE = BASE_DIR / "library" / "downloaded_ids.txt"
+COOKIES_FILE = BASE_DIR / "library" / "cookies.txt"
 
 # In-memory queue state
 queue_lock = threading.Lock()
@@ -33,6 +35,71 @@ task_queue: list[dict] = []
 current_task: dict | None = None
 task_history: list[dict] = []
 cached_qc_results: dict[str, dict] = {}
+cached_meta_results: dict[str, dict] = {}
+
+
+def get_allowed_roots() -> list[Path]:
+    """Returns allowed base directories for local folder browsing and conversion."""
+    roots = [BASE_DIR.resolve(), Path.home().resolve(), Path("/tmp").resolve()]
+    for extra in ("/media", "/mnt", "/run/media"):
+        ep = Path(extra)
+        if ep.exists():
+            roots.append(ep.resolve())
+    return roots
+
+
+def resolve_safe_dir(raw_path: str | None, default_dir: Path, must_exist: bool = True) -> Path:
+    """Validates and resolves a directory path within allowed local roots."""
+    if not raw_path or not isinstance(raw_path, str) or not raw_path.strip():
+        return default_dir.resolve()
+    cleaned = raw_path.strip()
+    p = Path(cleaned).expanduser()
+    if not p.is_absolute():
+        p = BASE_DIR / p
+    resolved = p.resolve()
+
+    allowed_roots = get_allowed_roots()
+    matched_root = next((r for r in allowed_roots if resolved.is_relative_to(r)), None)
+    if matched_root is None:
+        raise ValueError(f"Akses folder ditolak (di luar Home / Media / Project): {resolved}")
+
+    rel_parts = resolved.relative_to(matched_root).parts
+    if any(part.startswith(".") for part in rel_parts):
+        raise ValueError("Tidak diizinkan mengakses folder sistem tersembunyi (dot-folder).")
+
+    if must_exist and not resolved.is_dir():
+        raise ValueError(f"Folder tidak ditemukan: {resolved}")
+    return resolved
+
+
+def probe_files_fast(files: list[Path]) -> None:
+    """Fast parallel ffprobe metadata check for sample rate, codec, and bitrate."""
+    if not shutil.which("ffprobe"):
+        return
+    to_probe: list[tuple[Path, int]] = []
+    for p in files:
+        try:
+            mtime = int(p.stat().st_mtime)
+        except OSError:
+            continue
+        existing = cached_meta_results.get(str(p))
+        if not existing or existing.get("_mtime") != mtime:
+            to_probe.append((p, mtime))
+
+    if not to_probe:
+        return
+
+    def _one(item: tuple[Path, int]):
+        path_obj, mtime_val = item
+        try:
+            meta = audio_manager.metadata(path_obj)
+            meta["_mtime"] = mtime_val
+            cached_meta_results[str(path_obj)] = meta
+        except Exception:
+            pass
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(_one, to_probe))
 
 
 def check_system_binaries() -> dict:
@@ -42,6 +109,7 @@ def check_system_binaries() -> dict:
         "yt_dlp": shutil.which("yt-dlp") is not None,
         "ffmpeg": shutil.which("ffmpeg") is not None,
         "ffprobe": shutil.which("ffprobe") is not None,
+        "cookies_present": COOKIES_FILE.is_file(),
     }
 
 
@@ -83,6 +151,145 @@ def run_worker():
         task["logs"] = []
         task["progress"] = 0
 
+        if task.get("type") == "resample":
+            target_rate = int(task.get("target_rate", 44100))
+            target_bitrate = int(task.get("target_bitrate", 320))
+            rel_path = task.get("rel_path")
+            rel_paths = task.get("rel_paths")
+            playlist = task.get("playlist")
+            only_mp3 = bool(task.get("only_mp3", False))
+            overwrite = bool(task.get("overwrite", False))
+            raw_source_dir = task.get("source_dir")
+            raw_dest_dir = task.get("dest_dir")
+
+            if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+                task["status"] = "FAILED"
+                task["error"] = "FFmpeg / FFprobe belum terinstall di PATH."
+                with queue_lock:
+                    task_history.insert(0, task)
+                    current_task = None
+                continue
+
+            try:
+                source_resolved = resolve_safe_dir(raw_source_dir, INBOX_DIR, must_exist=True)
+                dest_resolved = (
+                    resolve_safe_dir(raw_dest_dir, INBOX_DIR, must_exist=False)
+                    if (raw_dest_dir and str(raw_dest_dir).strip())
+                    else None
+                )
+            except Exception as dir_exc:
+                task["status"] = "FAILED"
+                task["error"] = str(dir_exc)
+                task["logs"].append(f"[RESAMPLE ERROR] {dir_exc}")
+                with queue_lock:
+                    task_history.insert(0, task)
+                    current_task = None
+                continue
+
+            allowed = {".mp3"} if only_mp3 else audio_manager.EXTENSIONS
+
+            if isinstance(rel_paths, list) and rel_paths:
+                files = []
+                for rp in rel_paths:
+                    if isinstance(rp, str) and rp.strip():
+                        cand = (source_resolved / rp.strip()).resolve()
+                        if cand.is_relative_to(source_resolved) and cand.is_file() and cand.suffix.lower() in allowed:
+                            files.append(cand)
+            elif rel_path:
+                target_file = (source_resolved / rel_path).resolve()
+                files = [target_file] if (target_file.is_relative_to(source_resolved) and target_file.is_file()) else []
+            elif playlist:
+                if playlist == "__ROOT__":
+                    files = sorted(
+                        p for p in source_resolved.iterdir()
+                        if p.is_file() and p.suffix.lower() in allowed and not p.name.startswith(".")
+                    )
+                else:
+                    pl_dir = (source_resolved / playlist).resolve()
+                    if pl_dir.is_relative_to(source_resolved) and pl_dir.is_dir():
+                        files = sorted(
+                            p for p in pl_dir.rglob("*")
+                            if p.is_file() and p.suffix.lower() in allowed and not p.name.startswith(".")
+                        )
+                    else:
+                        files = []
+            else:
+                files = sorted(
+                    p for p in source_resolved.rglob("*")
+                    if p.is_file()
+                    and p.suffix.lower() in allowed
+                    and not p.name.startswith(".")
+                    and not re.search(r"\[(44\.1kHz|48kHz)(?:\s+\d+k)?\]$", p.parent.name)
+                )
+
+            total = len(files)
+            if total == 0:
+                task["logs"].append("[RESAMPLE] Tidak ada file audio yang cocok untuk dikonversi.")
+                task["status"] = "SUCCESS"
+                task["progress"] = 100
+                with queue_lock:
+                    task_history.insert(0, task)
+                    current_task = None
+                continue
+
+            mode_desc = "OVERWRITE" if overwrite else (f"TUJUAN: {dest_resolved}" if dest_resolved else "SALIN BARU OTOMATIS")
+            task["logs"].append(
+                f"[RESAMPLE] Memulai konversi ke {target_rate} Hz • {target_bitrate} kbps [{mode_desc}] ({total} file)..."
+            )
+            converted_count = 0
+            skipped_count = 0
+            error_count = 0
+
+            for idx, fpath in enumerate(files, 1):
+                task["progress"] = min(99, round(((idx - 1) / total) * 100))
+                try:
+                    file_out_dir = None
+                    if dest_resolved is not None:
+                        rel_parent = fpath.parent.relative_to(source_resolved)
+                        file_out_dir = dest_resolved / rel_parent if rel_parent != Path(".") else dest_resolved
+
+                    res = audio_manager.resample_one(
+                        fpath,
+                        target_rate=target_rate,
+                        target_bitrate=target_bitrate,
+                        overwrite=overwrite,
+                        out_dir=file_out_dir,
+                    )
+                    if res["status"] == "CONVERTED":
+                        converted_count += 1
+                        task["logs"].append(f"[{idx}/{total}] CONVERTED: {res['message']}")
+                        out_p = Path(res["file"])
+                        old_p_str = res.get("old_file", str(fpath))
+                        if overwrite and old_p_str != str(out_p):
+                            cached_qc_results.pop(old_p_str, None)
+                            cached_meta_results.pop(old_p_str, None)
+                        try:
+                            meta = audio_manager.metadata(out_p)
+                            meta["_mtime"] = int(out_p.stat().st_mtime)
+                            cached_meta_results[str(out_p)] = meta
+                            if str(out_p) in cached_qc_results:
+                                cached_qc_results[str(out_p)].update(meta)
+                        except Exception:
+                            pass
+                    else:
+                        skipped_count += 1
+                        task["logs"].append(f"[{idx}/{total}] SKIPPED: {fpath.name} ({res['message']})")
+                except Exception as exc:
+                    error_count += 1
+                    task["logs"].append(f"[{idx}/{total}] ERROR {fpath.name}: {exc}")
+                if len(task["logs"]) > 200:
+                    task["logs"].pop(0)
+
+            task["logs"].append(
+                f"[RESAMPLE SELESAI] Dikonversi: {converted_count} | Dilewati: {skipped_count} | Error: {error_count}"
+            )
+            task["progress"] = 100
+            task["status"] = "SUCCESS" if error_count == 0 else "FAILED"
+            with queue_lock:
+                task_history.insert(0, task)
+                current_task = None
+            continue
+
         url = task["url"]
         auto_scan = task.get("auto_scan", True)
 
@@ -98,7 +305,10 @@ def run_worker():
                 current_task = None
             continue
 
-        audio_format = task.get("audio_format", "premium_aac")
+        audio_format = task.get("audio_format", "native")
+        if audio_format == "premium_aac":  # legacy alias
+            audio_format = "native"
+        keep_opus = bool(task.get("keep_opus", False))
         is_playlist = bool(task.get("is_playlist", False))
         use_cookies = bool(task.get("use_cookies", True))
         cookie_browser = str(task.get("cookie_browser", "chrome")).lower()
@@ -108,15 +318,28 @@ def run_worker():
         else:
             template = str(INBOX_DIR / "%(title).150B [%(id)s].%(ext)s")
 
+        removed_stale = audio_manager.sync_download_archive(INBOX_DIR, ARCHIVE_FILE, audio_format, keep_opus)
+        if removed_stale > 0:
+            task["logs"].append(
+                f"[ARCHIVE SYNC] Membersihkan {removed_stale} ID riwayat lama di downloaded_ids.txt yang file targetnya belum ada di inbox."
+            )
+
+        js_runtime, run_env = audio_manager.find_js_runtime()
+
         def build_cmd(with_cookies: bool):
             cmd = ["yt-dlp"]
-            if audio_format == "premium_aac":
-                cmd.extend(["-f", "ba[format_id=141]/ba[ext=m4a]/ba/b"])
+            if audio_format == "native":
+                # Audio-only stream, kept as-is. Prioritize Premium 256k (141 AAC / 774 Opus),
+                # then Public 160k 48kHz Opus (251), 128k AAC (140), and non-DRC streams.
+                cmd.extend(["-f", audio_manager.YOUTUBE_AUDIO_SELECTOR])
+            elif keep_opus:
+                cmd.extend(["-f", f"{audio_manager.YOUTUBE_OPUS_SELECTOR}/b"])
             else:
-                cmd.extend(["-f", "ba/b"])
+                cmd.extend(["-f", f"{audio_manager.YOUTUBE_AUDIO_SELECTOR}/b"])
 
-            if shutil.which("node"):
-                cmd.extend(["--js-runtimes", "node"])
+            if js_runtime:
+                cmd.extend(["--js-runtimes", js_runtime])
+            cmd.extend(["--remote-components", "ejs:github"])
 
             cmd.extend([
                 "--download-archive", str(ARCHIVE_FILE),
@@ -124,25 +347,26 @@ def run_worker():
                 "--yes-playlist" if is_playlist else "--no-playlist",
             ])
 
-            if with_cookies and cookie_browser:
-                cmd.extend(["--cookies-from-browser", cookie_browser])
+            auth_desc = "Public"
+            if with_cookies:
+                if COOKIES_FILE.is_file():
+                    cmd.extend(["--cookies", str(COOKIES_FILE)])
+                    auth_desc = "cookies.txt"
+                elif cookie_browser:
+                    cmd.extend(["--cookies-from-browser", cookie_browser])
+                    auth_desc = cookie_browser
 
-            if audio_format == "premium_aac":
-                cmd.extend([
-                    "--extract-audio",
-                    "--audio-format", "m4a",
-                    "--audio-quality", "0",
-                    "--embed-metadata",
-                ])
-                desc = f"Target: Premium AAC 256k (YouTube Music{' via ' + cookie_browser if with_cookies else ' - Public Fallback'})"
-            elif audio_format == "mp3_320k":
+            opus_note = " + Simpan File Asli Opus (.webm)" if keep_opus else ""
+            if audio_format == "mp3_320k":
                 cmd.extend([
                     "--extract-audio",
                     "--audio-format", "mp3",
                     "--audio-quality", "320K",
                     "--embed-metadata",
                 ])
-                desc = "Target: MP3 320 kbps CBR (LAME - Kualitas Tertinggi)"
+                if keep_opus:
+                    cmd.append("--keep-video")
+                desc = f"Target: MP3 320 kbps CBR{opus_note} (KONVERSI lossy, Auth: {auth_desc})"
             elif audio_format == "mp3_vbr0":
                 cmd.extend([
                     "--extract-audio",
@@ -150,15 +374,12 @@ def run_worker():
                     "--audio-quality", "0",
                     "--embed-metadata",
                 ])
-                desc = "Target: MP3 VBR 0 (LAME Extreme Dynamic Bitrate)"
+                if keep_opus:
+                    cmd.append("--keep-video")
+                desc = f"Target: MP3 VBR 0{opus_note} (KONVERSI lossy, Auth: {auth_desc})"
             else:
-                cmd.extend([
-                    "--extract-audio",
-                    "--audio-format", "best",
-                    "--audio-quality", "0",
-                    "--embed-metadata",
-                ])
-                desc = "Target: Native Stream (Opus 48kHz / AAC - Preservasi Bit Asli)"
+                # Native: no postprocessing at all (no extract/convert/remux/metadata embed).
+                desc = f"Target: Best Available - stream asli YouTube tanpa konversi (Auth: {auth_desc})"
 
             cmd.append(url)
             return cmd, desc
@@ -186,7 +407,8 @@ def run_worker():
                     stderr=subprocess.STDOUT,
                     text=True,
                     bufsize=1,
-                    universal_newlines=True
+                    universal_newlines=True,
+                    env=run_env,
                 )
 
                 if proc.stdout:
@@ -199,6 +421,10 @@ def run_worker():
 
                             if with_cookies and any(k in clean_line.lower() for k in ("could not copy", "cookie database", "database is locked", "failed to extract cookies")):
                                 cookie_err_detected = True
+
+                            fmt_match = re.search(r"Downloading \d+ format\(s\):\s*([^\s,]+)", clean_line)
+                            if fmt_match:
+                                task["logs"].append(audio_manager.describe_format_tier(fmt_match.group(1)))
 
                             # Parse percentage progress from yt-dlp output
                             match = re.search(r"\[download\]\s+([\d\.]+)%", clean_line)
@@ -278,6 +504,8 @@ class AudioServerHandler(BaseHTTPRequestHandler):
 
         if path in ("/", "/index.html"):
             self.serve_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
+        elif path in ("/converter", "/converter.html"):
+            self.serve_file(STATIC_DIR / "converter.html", "text/html; charset=utf-8")
         elif path.startswith("/static/"):
             rel_path = path[len("/static/"):]
             safe_file = (STATIC_DIR / rel_path).resolve()
@@ -299,8 +527,19 @@ class AudioServerHandler(BaseHTTPRequestHandler):
                 }
             self.send_json(200, data)
         elif path == "/api/library":
-            files_data = self.get_library_files()
-            self.send_json(200, {"files": files_data})
+            qs = parse_qs(parsed.query)
+            raw_src = qs.get("source_dir", [None])[0]
+            try:
+                src_dir = resolve_safe_dir(raw_src, INBOX_DIR, must_exist=True) if raw_src else INBOX_DIR.resolve()
+                files_data, playlists_data = self.get_library_files(src_dir)
+                self.send_json(200, {
+                    "files": files_data,
+                    "playlists": playlists_data,
+                    "source_dir": str(src_dir),
+                    "default_inbox": str(INBOX_DIR.resolve()),
+                })
+            except Exception as exc:
+                self.send_json(400, {"error": str(exc)})
         else:
             self.send_error(404, "Endpoint not found")
 
@@ -329,9 +568,12 @@ class AudioServerHandler(BaseHTTPRequestHandler):
             if cookie_browser not in ("chrome", "chromium", "firefox", "brave", "edge", "opera", "vivaldi"):
                 cookie_browser = "chrome"
 
-            audio_format = str(payload.get("audio_format", "premium_aac")).lower()
-            if audio_format not in ("premium_aac", "native", "mp3_320k", "mp3_vbr0"):
-                audio_format = "premium_aac"
+            audio_format = str(payload.get("audio_format", "native")).lower()
+            if audio_format == "premium_aac":  # legacy alias
+                audio_format = "native"
+            if audio_format not in ("native", "mp3_320k", "mp3_vbr0"):
+                audio_format = "native"
+            keep_opus = bool(payload.get("keep_opus", False))
 
             if isinstance(urls, str):
                 urls = [line.strip() for line in urls.splitlines() if line.strip()]
@@ -346,6 +588,7 @@ class AudioServerHandler(BaseHTTPRequestHandler):
                         "auto_scan": auto_scan,
                         "is_playlist": is_playlist,
                         "audio_format": audio_format,
+                        "keep_opus": keep_opus,
                         "use_cookies": use_cookies,
                         "cookie_browser": cookie_browser,
                         "progress": 0,
@@ -373,6 +616,183 @@ class AudioServerHandler(BaseHTTPRequestHandler):
                 self.send_json(200, {"message": "Audit selesai", "results": results})
             except Exception as exc:
                 self.send_json(500, {"error": str(exc)})
+        elif path == "/api/browse-dirs":
+            raw_path = payload.get("path")
+            create_sub = payload.get("create_subfolder")
+            try:
+                curr_dir = resolve_safe_dir(raw_path, INBOX_DIR, must_exist=True)
+                if isinstance(create_sub, str) and create_sub.strip():
+                    clean_sub = re.sub(r'[<>:"/\\|?*]', "", create_sub.strip())
+                    if clean_sub and not clean_sub.startswith("."):
+                        new_dir = (curr_dir / clean_sub).resolve()
+                        if new_dir.is_relative_to(curr_dir):
+                            new_dir.mkdir(parents=True, exist_ok=True)
+                            curr_dir = new_dir
+
+                allowed_roots = get_allowed_roots()
+                parent_path = None
+                if curr_dir.parent != curr_dir:
+                    if any(curr_dir.parent.is_relative_to(r) for r in allowed_roots):
+                        parent_path = str(curr_dir.parent)
+
+                subdirs = []
+                for d in sorted(curr_dir.iterdir()):
+                    if d.is_dir() and not d.name.startswith("."):
+                        subdirs.append({"name": d.name, "path": str(d)})
+
+                shortcuts = [
+                    {"label": "📥 Inbox Proyek", "path": str(INBOX_DIR.resolve())},
+                    {"label": "🏠 Home", "path": str(Path.home().resolve())},
+                ]
+                music_dir = Path.home() / "Music"
+                if music_dir.is_dir():
+                    shortcuts.append({"label": "🎵 Music", "path": str(music_dir.resolve())})
+                for m_root in ("/media", "/run/media", "/mnt"):
+                    mp = Path(m_root)
+                    if mp.is_dir():
+                        shortcuts.append({"label": f"💾 {m_root}", "path": str(mp.resolve())})
+
+                self.send_json(200, {
+                    "current": str(curr_dir),
+                    "parent": parent_path,
+                    "subdirs": subdirs,
+                    "shortcuts": shortcuts,
+                })
+            except Exception as exc:
+                self.send_json(400, {"error": str(exc)})
+
+        elif path == "/api/probe":
+            folder = payload.get("folder")
+            raw_src = payload.get("source_dir")
+            try:
+                source_resolved = resolve_safe_dir(raw_src, INBOX_DIR, must_exist=True) if raw_src else INBOX_DIR.resolve()
+            except Exception as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+
+            if not source_resolved.exists():
+                self.send_json(200, {"files": [], "playlists": [], "source_dir": str(source_resolved)})
+                return
+
+            if folder == "__ROOT__":
+                target_files = [
+                    p for p in source_resolved.iterdir()
+                    if p.is_file() and p.suffix.lower() in audio_manager.EXTENSIONS and not p.name.startswith(".")
+                ]
+            elif isinstance(folder, str) and folder.strip():
+                pl_dir = (source_resolved / folder.strip()).resolve()
+                if not pl_dir.is_relative_to(source_resolved) or not pl_dir.is_dir():
+                    self.send_json(400, {"error": "Folder playlist tidak ditemukan."})
+                    return
+                target_files = [
+                    p for p in pl_dir.rglob("*")
+                    if p.is_file() and p.suffix.lower() in audio_manager.EXTENSIONS and not p.name.startswith(".")
+                ]
+            else:
+                target_files = [
+                    p for p in source_resolved.rglob("*")
+                    if p.is_file() and p.suffix.lower() in audio_manager.EXTENSIONS and not p.name.startswith(".")
+                ]
+
+            probe_files_fast(target_files)
+            files_data, playlists_data = self.get_library_files(source_resolved)
+            self.send_json(200, {
+                "files": files_data,
+                "playlists": playlists_data,
+                "source_dir": str(source_resolved),
+            })
+
+        elif path == "/api/resample":
+            target_rate = int(payload.get("target_rate", 44100))
+            if target_rate not in (44100, 48000):
+                self.send_json(400, {"error": "Target sample rate hanya mendukung 44100 atau 48000 Hz."})
+                return
+
+            target_bitrate = int(payload.get("target_bitrate", 320))
+            if target_bitrate not in audio_manager.ALLOWED_BITRATES:
+                self.send_json(400, {"error": "Target bitrate hanya mendukung 320, 192, 128, atau 96 kbps."})
+                return
+
+            raw_source_dir = payload.get("source_dir")
+            raw_dest_dir = payload.get("dest_dir")
+            try:
+                source_resolved = resolve_safe_dir(raw_source_dir, INBOX_DIR, must_exist=True) if raw_source_dir else INBOX_DIR.resolve()
+                dest_resolved = (
+                    resolve_safe_dir(raw_dest_dir, INBOX_DIR, must_exist=False)
+                    if (isinstance(raw_dest_dir, str) and raw_dest_dir.strip())
+                    else None
+                )
+            except Exception as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+
+            rel_path = payload.get("rel_path")
+            rel_paths = payload.get("rel_paths")
+            playlist = payload.get("playlist")
+            only_mp3 = bool(payload.get("only_mp3", False))
+            overwrite = bool(payload.get("overwrite", False))
+            spec_str = f"{target_rate} Hz • {target_bitrate} kbps"
+
+            if isinstance(rel_paths, list) and rel_paths:
+                valid_rels = []
+                for rp in rel_paths:
+                    if isinstance(rp, str) and rp.strip():
+                        cand = (source_resolved / rp.strip()).resolve()
+                        if cand.is_relative_to(source_resolved) and cand.is_file():
+                            valid_rels.append(rp.strip())
+                if not valid_rels:
+                    self.send_json(400, {"error": "Tidak ada file valid yang dipilih."})
+                    return
+                label = f"Konversi {len(valid_rels)} Lagu Terpilih -> {spec_str}"
+                rel_paths = valid_rels
+            elif rel_path is not None:
+                if not isinstance(rel_path, str) or not rel_path.strip():
+                    self.send_json(400, {"error": "Path file tidak valid."})
+                    return
+                rel_path = rel_path.strip()
+                candidate = (source_resolved / rel_path).resolve()
+                if not candidate.is_relative_to(source_resolved) or not candidate.is_file():
+                    self.send_json(404, {"error": "File audio tidak ditemukan di folder sumber."})
+                    return
+                label = f"Konversi {candidate.name} -> {spec_str}"
+            elif isinstance(playlist, str) and playlist.strip():
+                playlist = playlist.strip()
+                if playlist != "__ROOT__":
+                    pl_dir = (source_resolved / playlist).resolve()
+                    if not pl_dir.is_relative_to(source_resolved) or not pl_dir.is_dir():
+                        self.send_json(404, {"error": "Folder playlist tidak ditemukan."})
+                        return
+                pl_name = "Root Folder" if playlist == "__ROOT__" else playlist
+                scope_label = "MP3" if only_mp3 else "Semua Lagu"
+                label = f"Konversi Playlist '{pl_name}' ({scope_label}) -> {spec_str}"
+            else:
+                scope_label = "Semua MP3" if only_mp3 else "Semua File"
+                label = f"Konversi Folder '{source_resolved.name}' ({scope_label}) -> {spec_str}"
+
+            job = {
+                "id": f"resample_{int(time.time() * 1000)}",
+                "type": "resample",
+                "url": label,
+                "source_dir": str(source_resolved),
+                "dest_dir": str(dest_resolved) if dest_resolved else None,
+                "rel_path": rel_path,
+                "rel_paths": rel_paths if isinstance(rel_paths, list) else None,
+                "playlist": playlist,
+                "target_rate": target_rate,
+                "target_bitrate": target_bitrate,
+                "only_mp3": only_mp3,
+                "overwrite": overwrite,
+                "status": "QUEUED",
+                "progress": 0,
+                "created_at": time.time(),
+            }
+            with queue_lock:
+                task_queue.append(job)
+
+            self.send_json(200, {
+                "message": f"Tugas konversi ({label}) ditambahkan ke antrian.",
+                "job_id": job["id"],
+            })
         else:
             self.send_error(404, "Endpoint not found")
 
@@ -396,27 +816,70 @@ class AudioServerHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def get_library_files(self) -> list[dict]:
-        """Returns list of audio files in inbox (recursive) with metadata and cached QC."""
-        if not INBOX_DIR.exists():
-            return []
+    def get_library_files(self, base_dir: Path | None = None) -> tuple[list[dict], list[dict]]:
+        """Returns (files, playlists) in base_dir (defaults to INBOX_DIR) with metadata and cached QC."""
+        target_dir = (base_dir or INBOX_DIR).resolve()
+        if not target_dir.exists() or not target_dir.is_dir():
+            return [], []
+
+        playlist_counts: dict[str, dict] = {}
+        for d in sorted(target_dir.iterdir()):
+            if d.is_dir() and not d.name.startswith("."):
+                playlist_counts[d.name] = {"name": d.name, "total": 0, "mp3_count": 0, "other_count": 0}
+
         items = []
-        for p in sorted(INBOX_DIR.rglob("*")):
-            if p.is_file() and p.suffix.lower() in audio_manager.EXTENSIONS:
+        root_total = 0
+        root_mp3 = 0
+        for p in sorted(target_dir.rglob("*")):
+            if p.is_file() and p.suffix.lower() in audio_manager.EXTENSIONS and not p.name.startswith("."):
                 qc = cached_qc_results.get(str(p))
+                meta = cached_meta_results.get(str(p))
+                merged_qc = None
+                if qc or meta:
+                    merged_qc = dict(meta or {})
+                    if qc:
+                        merged_qc.update(qc)
+
                 stat = p.stat()
-                rel = p.relative_to(INBOX_DIR)
+                rel = p.relative_to(target_dir)
                 folder_name = str(rel.parent) if rel.parent != Path(".") else ""
+                ext = p.suffix.lower()
+
+                if folder_name:
+                    top_folder = rel.parts[0]
+                    if top_folder not in playlist_counts:
+                        playlist_counts[top_folder] = {"name": top_folder, "total": 0, "mp3_count": 0, "other_count": 0}
+                    playlist_counts[top_folder]["total"] += 1
+                    if ext == ".mp3":
+                        playlist_counts[top_folder]["mp3_count"] += 1
+                    else:
+                        playlist_counts[top_folder]["other_count"] += 1
+                else:
+                    root_total += 1
+                    if ext == ".mp3":
+                        root_mp3 += 1
+
                 items.append({
                     "name": p.name,
+                    "ext": ext,
                     "folder": folder_name,
                     "rel_path": str(rel),
                     "path": str(p),
                     "size_mb": round(stat.st_size / (1024 * 1024), 2),
                     "modified": int(stat.st_mtime),
-                    "qc": qc
+                    "qc": merged_qc
                 })
-        return items
+
+        playlists = list(playlist_counts.values())
+        if root_total > 0:
+            playlists.insert(0, {
+                "name": "__ROOT__",
+                "label": f"File di Root ({target_dir.name})",
+                "total": root_total,
+                "mp3_count": root_mp3,
+                "other_count": root_total - root_mp3,
+            })
+        return items, playlists
 
     def scan_library(self) -> list[dict]:
         """Runs audit on all files in inbox directory recursively."""

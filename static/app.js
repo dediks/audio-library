@@ -10,6 +10,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const optAutoScan = document.getElementById('optAutoScan');
   const optPlaylist = document.getElementById('optPlaylist');
   const optUseCookies = document.getElementById('optUseCookies');
+  const optKeepOpus = document.getElementById('optKeepOpus');
   const btnStartIngest = document.getElementById('btnStartIngest');
 
   const ytdlpDot = document.getElementById('ytdlpDot');
@@ -32,6 +33,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnClearLogs = document.getElementById('btnClearLogs');
 
   const btnRefreshLibrary = document.getElementById('btnRefreshLibrary');
+  const btnResampleMp3 = document.getElementById('btnResampleMp3');
   const btnAuditAll = document.getElementById('btnAuditAll');
   const libraryTableBody = document.getElementById('libraryTableBody');
 
@@ -60,6 +62,18 @@ document.addEventListener('DOMContentLoaded', () => {
       } else {
         ffmpegDot.className = 'status-indicator error';
         ffmpegVal.textContent = 'Missing';
+      }
+
+      const cookiesDot = document.getElementById('cookiesDot');
+      const cookiesVal = document.getElementById('cookiesVal');
+      if (cookiesDot && cookiesVal) {
+        if (data.cookies_present) {
+          cookiesDot.className = 'status-indicator active';
+          cookiesVal.textContent = 'cookies.txt ditemukan';
+        } else {
+          cookiesDot.className = 'status-indicator';
+          cookiesVal.textContent = 'Browser Session';
+        }
       }
 
       // Show notice banner if missing
@@ -278,24 +292,29 @@ document.addEventListener('DOMContentLoaded', () => {
   const formatRadios = document.querySelectorAll('input[name="audioFormat"]');
   if (specDot) specDot.style.backgroundColor = '#10b981';
 
+  function updateFormatSpecBanner() {
+    const val = document.querySelector('input[name="audioFormat"]:checked')?.value || 'native';
+    const keepOpus = optKeepOpus ? optKeepOpus.checked : false;
+    const opusSuffix = keepOpus ? ' + Simpan File Asli Opus (.webm)' : '';
+    if (val === 'native') {
+      if (specText) specText.textContent = 'Target: Best Available - stream asli YouTube, tanpa konversi';
+      if (specDot) specDot.style.backgroundColor = '#10b981';
+    } else if (val === 'mp3_320k') {
+      if (specText) specText.textContent = 'Target: MP3 320 kbps CBR' + opusSuffix + ' (KONVERSI lossy)';
+      if (specDot) specDot.style.backgroundColor = 'var(--accent-amber)';
+    } else if (val === 'mp3_vbr0') {
+      if (specText) specText.textContent = 'Target: MP3 VBR 0' + opusSuffix + ' (KONVERSI lossy)';
+      if (specDot) specDot.style.backgroundColor = '#c084fc';
+    }
+  }
+
   formatRadios.forEach(radio => {
-    radio.addEventListener('change', () => {
-      const val = radio.value;
-      if (val === 'premium_aac') {
-        if (specText) specText.textContent = 'Target: Premium AAC 256k (YouTube Music via Chrome - Smart Fallback)';
-        if (specDot) specDot.style.backgroundColor = '#10b981';
-      } else if (val === 'native') {
-        if (specText) specText.textContent = 'Target: Native Stream Opus 48kHz (Bit-Preserved - Standar FOH)';
-        if (specDot) specDot.style.backgroundColor = 'var(--accent-cyan)';
-      } else if (val === 'mp3_320k') {
-        if (specText) specText.textContent = 'Target: MP3 320 kbps CBR (Kualitas Tertinggi LAME)';
-        if (specDot) specDot.style.backgroundColor = 'var(--accent-amber)';
-      } else if (val === 'mp3_vbr0') {
-        if (specText) specText.textContent = 'Target: MP3 VBR 0 (LAME Extreme Dynamic Bitrate)';
-        if (specDot) specDot.style.backgroundColor = '#c084fc';
-      }
-    });
+    radio.addEventListener('change', updateFormatSpecBanner);
   });
+
+  if (optKeepOpus) {
+    optKeepOpus.addEventListener('change', updateFormatSpecBanner);
+  }
 
   // 4. Submit Batch Ingestion Form
   form.addEventListener('submit', async (e) => {
@@ -307,10 +326,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const autoScan = optAutoScan ? optAutoScan.checked : true;
     const isPlaylist = optPlaylist ? optPlaylist.checked : false;
     const useCookies = optUseCookies ? optUseCookies.checked : true;
-    const audioFormat = document.querySelector('input[name="audioFormat"]:checked')?.value || 'premium_aac';
+    const keepOpus = optKeepOpus ? optKeepOpus.checked : false;
+    const audioFormat = document.querySelector('input[name="audioFormat"]:checked')?.value || 'native';
 
     btnStartIngest.disabled = true;
-    appendLog('info', `[DISPATCH] Mengirim ${urls.length} item ke antrian unduhan (${audioFormat})...`);
+    const opusLog = (audioFormat !== 'native' && keepOpus) ? ' + Opus (.webm)' : '';
+    appendLog('info', `[DISPATCH] Mengirim ${urls.length} item ke antrian unduhan (${audioFormat}${opusLog})...`);
 
     try {
       const res = await fetch('/api/download', {
@@ -321,6 +342,7 @@ document.addEventListener('DOMContentLoaded', () => {
           auto_scan: autoScan,
           is_playlist: isPlaylist,
           audio_format: audioFormat,
+          keep_opus: keepOpus,
           use_cookies: useCookies,
           cookie_browser: 'chrome'
         })
@@ -341,10 +363,39 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // 5. Actions: Refresh & Full Audit
+  // 5. Actions: Refresh, Resample & Full Audit
+  async function triggerResample(relPath, onlyMp3) {
+    try {
+      const res = await fetch('/api/resample', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rel_path: relPath || null,
+          target_rate: 44100,
+          only_mp3: Boolean(onlyMp3)
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        appendLog('info', '[RESAMPLE] ' + data.message);
+        fetchQueueState();
+      } else {
+        appendLog('error', '[RESAMPLE ERROR] ' + (data.error || 'Gagal menjadwalkan konversi sample rate.'));
+      }
+    } catch (err) {
+      appendLog('error', '[RESAMPLE NETWORK ERROR] ' + err.message);
+    }
+  }
+
   btnRefreshLibrary.addEventListener('click', () => {
     fetchLibraryFiles();
   });
+
+  if (btnResampleMp3) {
+    btnResampleMp3.addEventListener('click', () => {
+      triggerResample(null, true);
+    });
+  }
 
   btnAuditAll.addEventListener('click', async () => {
     btnAuditAll.disabled = true;

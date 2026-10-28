@@ -27,6 +27,27 @@
       </div>
     </div>
 
+    <!-- Top Navigation Tabs -->
+    <nav class="app-nav" aria-label="Main Navigation">
+      <a href="/" class="nav-tab active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+          <polyline points="7 10 12 15 17 10"></polyline>
+          <line x1="12" y1="15" x2="12" y2="3"></line>
+        </svg>
+        <span>Ingestion &amp; QC</span>
+      </a>
+      <a href="/converter" class="nav-tab">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="17 1 21 5 17 9"></polyline>
+          <path d="M3 11V9a4 4 0 0 1 4-4h14"></path>
+          <polyline points="7 23 3 19 7 15"></polyline>
+          <path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
+        </svg>
+        <span>Sample Rate Converter</span>
+      </a>
+    </nav>
+
     <!-- System Diagnostics Bar -->
     <div class="system-status-group" id="systemStatusGroup">
       <div class="status-pill" id="statusPython">
@@ -43,6 +64,11 @@
         <span class="status-indicator" id="ffmpegDot"></span>
         <span class="status-label">FFmpeg:</span>
         <span class="status-val" id="ffmpegVal">checking...</span>
+      </div>
+      <div class="status-pill" id="statusCookies">
+        <span class="status-indicator" id="cookiesDot"></span>
+        <span class="status-label">Premium:</span>
+        <span class="status-val" id="cookiesVal">checking...</span>
       </div>
     </div>
   </header>
@@ -100,28 +126,17 @@
           <div class="field-group">
             <label class="field-label">
               <span>Format &amp; Kualitas Output</span>
-              <span class="label-hint">Dianjurkan Native Opus untuk fidelitas soundsystem panggung &amp; FOH</span>
+              <span class="label-hint">Default: stream asli terbaik dari YouTube, tanpa konversi apa pun</span>
             </label>
             <div class="format-grid">
               <label class="format-card">
-                <input type="radio" name="audioFormat" value="premium_aac" checked>
+                <input type="radio" name="audioFormat" value="native" checked>
                 <div class="format-card-inner">
                   <div class="format-badge-row">
-                    <span class="format-badge emerald">PREMIUM AAC 256k</span>
-                    <span class="format-sub">YouTube Music Max</span>
+                    <span class="format-badge emerald">BEST AVAILABLE</span>
+                    <span class="format-sub">Tanpa konversi</span>
                   </div>
-                  <p class="format-desc">AAC 256 kbps dari akun YouTube Premium (format 141) dengan fallback otomatis ke Native Opus.</p>
-                </div>
-              </label>
-
-              <label class="format-card">
-                <input type="radio" name="audioFormat" value="native">
-                <div class="format-card-inner">
-                  <div class="format-badge-row">
-                    <span class="format-badge cyan">NATIVE OPUS 48kHz</span>
-                    <span class="format-sub">Default FOH</span>
-                  </div>
-                  <p class="format-desc">Opus (~160kbps 48kHz). Preservasi bit stream murni tanpa re-encoding (0% degradasi generasi &amp; transient utuh).</p>
+                  <p class="format-desc">Stream audio asli yang disediakan YouTube (umumnya Opus 48 kHz, atau AAC jika server menyediakannya). File disimpan apa adanya dalam container aslinya (.webm / .m4a).</p>
                 </div>
               </label>
 
@@ -130,9 +145,9 @@
                 <div class="format-card-inner">
                   <div class="format-badge-row">
                     <span class="format-badge gold">MP3 320 KBPS</span>
-                    <span class="format-sub">CBR Maksimum</span>
+                    <span class="format-sub">KONVERSI lossy</span>
                   </div>
-                  <p class="format-desc">Bitrate tertinggi MP3 (LAME 320k). Pilihan jika butuh kompatibilitas CDJ panggung lama atau flashdisk mobil.</p>
+                  <p class="format-desc">Mengonversi stream YouTube ke MP3 320k. Tidak menambah kualitas (justru satu generasi kompresi lagi); hanya untuk kompatibilitas perangkat lama.</p>
                 </div>
               </label>
 
@@ -141,21 +156,30 @@
                 <div class="format-card-inner">
                   <div class="format-badge-row">
                     <span class="format-badge purple">MP3 VBR 0</span>
-                    <span class="format-sub">LAME Extreme</span>
+                    <span class="format-sub">KONVERSI lossy</span>
                   </div>
-                  <p class="format-desc">Variable Bitrate profil tertinggi LAME (-q:a 0). Alokasi bit dinamis berdasarkan kompleksitas audio.</p>
+                  <p class="format-desc">Mengonversi stream YouTube ke MP3 VBR 0. Sama seperti di atas: tidak menambah kualitas, hanya kompatibilitas.</p>
                 </div>
               </label>
             </div>
           </div>
 
           <div class="options-row">
+            <label class="custom-toggle" id="keepOpusToggleWrap">
+              <input type="checkbox" id="optKeepOpus">
+              <span class="toggle-slider"></span>
+              <div class="toggle-text-wrap">
+                <span class="toggle-text">Simpan juga file asli Opus (.webm) saat download MP3</span>
+                <span class="toggle-hint">Default (Nonaktif): Saat memilih MP3 320 kbps / VBR 0, aktifkan ini agar file asli Opus 48 kHz tidak dihapus setelah konversi MP3</span>
+              </div>
+            </label>
+
             <label class="custom-toggle">
               <input type="checkbox" id="optUseCookies" checked>
               <span class="toggle-slider"></span>
               <div class="toggle-text-wrap">
-                <span class="toggle-text">Gunakan Sesi YouTube Premium (Google Chrome)</span>
-                <span class="toggle-hint">Baca cookies Chrome untuk akses AAC 256k &amp; katalog penuh (otomatis fallback publik jika terkunci)</span>
+                <span class="toggle-text">Gunakan file sesi YouTube (library/cookies.txt)</span>
+                <span class="toggle-hint">Mengirim cookies akun Anda ke YouTube. Belum terbukti membuka kualitas lebih tinggi; otomatis mencoba ulang tanpa cookies jika gagal</span>
               </div>
             </label>
 
@@ -180,7 +204,7 @@
           <div class="action-footer">
             <div class="format-spec-tag">
               <span class="spec-dot" id="specDot"></span>
-              <span id="specText">Target: Premium AAC 256k (YouTube Music via Chrome - Smart Fallback)</span>
+              <span id="specText">Target: Best Available - stream asli YouTube, tanpa konversi</span>
             </div>
             <button type="submit" id="btnStartIngest" class="btn-primary">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
@@ -268,6 +292,15 @@
             </svg>
             <span>Segarkan File</span>
           </button>
+          <a href="/converter" class="btn-secondary" style="text-decoration: none;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="17 1 21 5 17 9"></polyline>
+              <path d="M3 11V9a4 4 0 0 1 4-4h14"></path>
+              <polyline points="7 23 3 19 7 15"></polyline>
+              <path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
+            </svg>
+            <span>Sample Rate Converter</span>
+          </a>
           <button type="button" id="btnAuditAll" class="btn-accent">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>

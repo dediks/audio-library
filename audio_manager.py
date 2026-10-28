@@ -10,6 +10,7 @@ import argparse
 import csv
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -23,6 +24,169 @@ LOSSLESS = {"flac", "alac", "wavpack", "ape", "tta", "pcm_s16le", "pcm_s24le",
 FIELDNAMES = ["file", "codec", "source_class", "sample_rate_hz", "channels", "duration_s",
               "bitrate_kbps", "integrated_lufs", "lra_lu", "true_peak_dbtp", "status",
               "notes", "sha256"]
+
+# Priority order for YouTube / YouTube Music:
+# 141 = Premium AAC 256 kbps (44.1 kHz)
+# 774 = Premium Opus ~256 kbps (48 kHz)
+# 251 = Public High Opus ~160 kbps (48 kHz)
+# 140 = Standard AAC 128 kbps (44.1 kHz)
+# Excludes -drc ("Stable Volume" dynamic range compressed) streams before final fallback.
+YOUTUBE_AUDIO_SELECTOR = (
+    "ba[format_id=141]/ba[format_id=774]/ba[format_id=251]/"
+    "ba[format_id=140]/ba[format_id!*=-drc]/ba"
+)
+
+# Selector when specifically keeping Opus (.webm) alongside MP3 conversion:
+YOUTUBE_OPUS_SELECTOR = (
+    "ba[format_id=774]/ba[format_id=251]/"
+    "ba[acodec=opus][format_id!*=-drc]/"
+    + YOUTUBE_AUDIO_SELECTOR
+)
+
+STREAM_TIERS = {
+    "141": "PREMIUM TIER — AAC 256 kbps (44.1 kHz, .m4a)",
+    "774": "PREMIUM TIER — Opus ~256 kbps (48 kHz, .webm)",
+    "251": "PUBLIC HIGH TIER — Opus ~160 kbps (48 kHz, .webm)",
+    "140": "STANDARD TIER — AAC 128 kbps (44.1 kHz, .m4a)",
+    "250": "LOW TIER — Opus ~70 kbps (48 kHz, .webm)",
+    "249": "LOW TIER — Opus ~50 kbps (48 kHz, .webm)",
+    "139": "LOW TIER — HE-AAC ~48 kbps (.m4a)",
+}
+
+
+def describe_format_tier(format_id: str) -> str:
+    clean_id = format_id.strip()
+    if clean_id in STREAM_TIERS:
+        return f"[STREAM TIER] Format {clean_id}: {STREAM_TIERS[clean_id]}"
+    if clean_id.endswith("-drc"):
+        return f"[STREAM TIER] Format {clean_id}: WARNING — Dynamic Range Compressed (DRC) stream"
+    return f"[STREAM TIER] Format {clean_id}: Audio stream terpilih"
+
+
+def find_js_runtime() -> tuple[str | None, dict[str, str]]:
+    """Finds Node.js or Bun runtime (including NVM / ~/.bun) and returns (runtime_spec, env)."""
+    env = os.environ.copy()
+    extra_bins: list[str] = []
+    local_bin = Path.home() / ".local" / "bin"
+    if local_bin.is_dir():
+        extra_bins.append(str(local_bin))
+
+    node_bin = shutil.which("node")
+    if not node_bin:
+        nvm_nodes = sorted(Path.home().glob(".nvm/versions/node/*/bin/node"), reverse=True)
+        if nvm_nodes:
+            node_bin = str(nvm_nodes[0])
+
+    if node_bin:
+        node_dir = str(Path(node_bin).parent)
+        if node_dir not in extra_bins:
+            extra_bins.insert(0, node_dir)
+        if extra_bins:
+            env["PATH"] = os.pathsep.join(extra_bins) + os.pathsep + env.get("PATH", "")
+        return f"node:{node_bin}", env
+
+    bun_bin = shutil.which("bun")
+    if not bun_bin:
+        cand_bun = Path.home() / ".bun" / "bin" / "bun"
+        if cand_bun.is_file():
+            bun_bin = str(cand_bun)
+
+    if bun_bin:
+        bun_dir = str(Path(bun_bin).parent)
+        if bun_dir not in extra_bins:
+            extra_bins.insert(0, bun_dir)
+        if extra_bins:
+            env["PATH"] = os.pathsep.join(extra_bins) + os.pathsep + env.get("PATH", "")
+        return f"bun:{bun_bin}", env
+
+    if extra_bins:
+        env["PATH"] = os.pathsep.join(extra_bins) + os.pathsep + env.get("PATH", "")
+    return None, env
+
+
+def sync_download_archive(
+    inbox_dir: Path,
+    archive_file: Path,
+    audio_format: str = "native",
+    keep_opus: bool = False,
+) -> int:
+    """Prunes downloaded_ids.txt entries whose target file(s) do not exist in inbox_dir.
+
+    This ensures that:
+    1) If the user deleted a folder/song from inbox_dir, re-downloading works immediately.
+    2) If the user previously downloaded .webm (native) and now downloads MP3 (or vice versa),
+       yt-dlp is not blocked by the old archive entry.
+    """
+    if not archive_file.is_file():
+        return 0
+
+    mp3_ids: set[str] = set()
+    opus_ids: set[str] = set()
+    any_ids: set[str] = set()
+
+    if inbox_dir.is_dir():
+        for p in inbox_dir.rglob("*"):
+            if p.is_file() and p.suffix.lower() in EXTENSIONS and not p.name.startswith("."):
+                m = re.search(r"\[([A-Za-z0-9_-]{11})\]$", p.stem)
+                if not m:
+                    continue
+                vid = m.group(1)
+                ext = p.suffix.lower()
+                any_ids.add(vid)
+                if ext == ".mp3":
+                    mp3_ids.add(vid)
+                elif ext in (".webm", ".opus", ".ogg"):
+                    opus_ids.add(vid)
+
+    if audio_format in ("mp3", "mp3_320k", "mp3_vbr0"):
+        valid_ids = (mp3_ids & opus_ids) if keep_opus else mp3_ids
+    else:
+        valid_ids = any_ids
+
+    try:
+        lines = archive_file.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return 0
+
+    kept_lines: list[str] = []
+    removed_count = 0
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        parts = stripped.split()
+        vid = parts[-1] if parts else ""
+        if vid in valid_ids:
+            kept_lines.append(stripped)
+        else:
+            removed_count += 1
+
+    if removed_count > 0:
+        try:
+            content = ("\n".join(kept_lines) + "\n") if kept_lines else ""
+            archive_file.write_text(content, encoding="utf-8")
+        except OSError:
+            pass
+
+    return removed_count
+
+
+def _run_ytdlp_with_tier_log(cmd: list[str], env: dict[str, str] | None = None) -> int:
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        env=env,
+    )
+    if proc.stdout:
+        for line in proc.stdout:
+            print(line, end="", flush=True)
+            match = re.search(r"Downloading \d+ format\(s\):\s*([^\s,]+)", line)
+            if match:
+                print(describe_format_tier(match.group(1)), flush=True)
+    return proc.wait()
 
 
 def require(program: str) -> None:
@@ -167,60 +331,321 @@ def download(args) -> int:
         template = str(folder / "%(title).150B [%(id)s].%(ext)s")
     
     selected_format = getattr(args, "format", "native")
-    if selected_format == "premium":
-        cmd = ["yt-dlp", "-f", "ba[format_id=141]/ba[ext=m4a]/ba/b"]
-    else:
-        cmd = ["yt-dlp", "-f", "ba/b"]
+    keep_opus = bool(getattr(args, "keep_opus", False))
+    if selected_format == "premium":  # legacy alias
+        selected_format = "native"
 
-    if shutil.which("node"):
-        cmd.extend(["--js-runtimes", "node"])
+    removed_stale = sync_download_archive(folder, archive, selected_format, keep_opus)
+    if removed_stale > 0:
+        print(f"[ARCHIVE SYNC] Membersihkan {removed_stale} ID riwayat lama yang file targetnya belum ada di {folder.name}.", flush=True)
+
+    if selected_format == "native":
+        # Audio-only stream kept as-is; prioritize Premium 256k (141 AAC / 774 Opus),
+        # then Public 160k 48kHz Opus (251), 128k AAC (140), and non-DRC streams.
+        cmd = ["yt-dlp", "-f", YOUTUBE_AUDIO_SELECTOR]
+    elif keep_opus:
+        cmd = ["yt-dlp", "-f", f"{YOUTUBE_OPUS_SELECTOR}/b"]
+    else:
+        cmd = ["yt-dlp", "-f", f"{YOUTUBE_AUDIO_SELECTOR}/b"]
+
+    js_runtime, run_env = find_js_runtime()
+    if js_runtime:
+        cmd.extend(["--js-runtimes", js_runtime])
+    cmd.extend(["--remote-components", "ejs:github"])
+
     cmd.extend([
         "--download-archive", str(archive),
         "-o", template,
         "--yes-playlist" if args.playlist else "--no-playlist",
     ])
     
+    cookies_file = folder.parent / "cookies.txt"
+    if not cookies_file.is_file():
+        cookies_file = Path("library/cookies.txt").resolve()
+
     browser = getattr(args, "cookies_from_browser", None)
-    if browser:
+    if cookies_file.is_file():
+        cmd.extend(["--cookies", str(cookies_file)])
+        print(f"Menggunakan file sesi YouTube: {cookies_file}", flush=True)
+    elif browser:
         cmd.extend(["--cookies-from-browser", browser])
     
-    if selected_format == "premium":
-        cmd.extend([
-            "--extract-audio",
-            "--audio-format", "m4a",
-            "--audio-quality", "0",
-            "--embed-metadata",
-        ])
-        print("Mengambil stream YouTube Premium (AAC 256 kbps / fallback ke native terbaik).", flush=True)
-    elif selected_format == "mp3":
+    if selected_format == "mp3":
         cmd.extend([
             "--extract-audio",
             "--audio-format", "mp3",
             "--audio-quality", "320K",
             "--embed-metadata",
         ])
-        print("Mengambil audio stream dan mengonversi ke MP3 320 kbps CBR (LAME).", flush=True)
+        if keep_opus:
+            cmd.append("--keep-video")
+            print("Mengambil audio stream Opus terbaik (non-DRC), mengonversi ke MP3 320 kbps CBR, dan menyimpan file asli Opus (.webm).", flush=True)
+        else:
+            print("Mengambil audio stream terbaik (non-DRC) dan mengonversi ke MP3 320 kbps CBR (KONVERSI lossy).", flush=True)
     else:
-        cmd.extend([
-            "--extract-audio",
-            "--audio-format", "best",
-            "--audio-quality", "0",
-            "--embed-metadata",
-        ])
-        print("Mengambil format native terbaik (Opus 48kHz / AAC) tanpa re-encoding [Kualitas Panggung & FOH].", flush=True)
+        # Native: no postprocessing at all (no extract/convert/remux/metadata embed).
+        print("Mengambil stream audio terbaik apa adanya [Prioritas: 141 AAC 256k -> 774 Opus 256k -> 251 Opus 48kHz, non-DRC].", flush=True)
 
+    before_files = set(p for p in folder.rglob("*") if p.is_file())
     cmd.append(args.url)
-    proc = subprocess.run(cmd)
-    if proc.returncode != 0 and browser:
+    returncode = _run_ytdlp_with_tier_log(cmd, env=run_env)
+    if returncode != 0 and browser:
         print("[AUTH FALLBACK] Percobaan dengan cookies browser gagal. Mencoba ulang mode publik...", flush=True)
         fallback_cmd = [arg for i, arg in enumerate(cmd) if arg != "--cookies-from-browser" and (i == 0 or cmd[i-1] != "--cookies-from-browser")]
-        proc = subprocess.run(fallback_cmd)
+        returncode = _run_ytdlp_with_tier_log(fallback_cmd, env=run_env)
 
-    if proc.returncode != 0:
-        return proc.returncode
+    if returncode != 0:
+        return returncode
+
+    if shutil.which("ffprobe"):
+        new_files = sorted(
+            p for p in folder.rglob("*")
+            if p.is_file() and p not in before_files and p.suffix.lower() in EXTENSIONS
+        )
+        for nf in new_files:
+            try:
+                info = metadata(nf)
+                sr = f"{info['sample_rate_hz']} Hz" if info.get("sample_rate_hz") else "?"
+                br = f"{info['bitrate_kbps']} kbps" if info.get("bitrate_kbps") else "VBR"
+                print(
+                    f"[STREAM VERIFIED] {nf.name} | Codec: {info['codec']} | Sample Rate: {sr} | Bitrate: {br}",
+                    flush=True,
+                )
+            except Exception:
+                pass
+
     if args.scan:
         return scan(argparse.Namespace(folder=str(folder), out=str(folder / "quality_report.csv")))
     return 0
+
+
+ALLOWED_BITRATES = (320, 192, 128, 96)
+
+
+def resample_one(
+    path: Path,
+    target_rate: int = 44100,
+    target_bitrate: int = 320,
+    overwrite: bool = False,
+    out_dir: Path | None = None,
+) -> dict:
+    """Resamples an existing audio file to target_rate (44100/48000 Hz) and target_bitrate (320/192/128/96 kbps).
+
+    By default (overwrite=False), never overwrites the original file:
+    - If inside a playlist folder (e.g. 'Top songs/Lagu.mp3'), writes to
+      'Top songs [44.1kHz]/Lagu.mp3' or 'Top songs [44.1kHz 192k]/Lagu.mp3'.
+    - Otherwise writes to 'Converted [...]/Lagu.mp3' or 'Lagu [...].mp3'.
+    Uses FFmpeg SoXR 28-bit high-precision resampler (with standard fallback).
+    """
+    require("ffmpeg")
+    require("ffprobe")
+    if target_rate not in (44100, 48000):
+        raise ValueError("Target sample rate hanya mendukung 44100 atau 48000 Hz.")
+    if target_bitrate not in ALLOWED_BITRATES:
+        raise ValueError(f"Target bitrate hanya mendukung {ALLOWED_BITRATES} kbps.")
+
+    info = metadata(path)
+    current_rate = int(info.get("sample_rate_hz") or 0)
+    current_br = float(info.get("bitrate_kbps") or 0)
+    codec = info.get("codec", "")
+    ext = path.suffix.lower()
+    rate_label = "44.1kHz" if target_rate == 44100 else "48kHz"
+    tag_label = rate_label if target_bitrate == 320 else f"{rate_label} {target_bitrate}k"
+
+    rate_matches = (current_rate == target_rate)
+    br_matches = (ext == ".mp3" and abs(current_br - target_bitrate) <= 8)
+
+    if rate_matches and br_matches:
+        return {
+            "status": "SKIPPED",
+            "file": str(path),
+            "old_rate": current_rate,
+            "new_rate": current_rate,
+            "old_bitrate": round(current_br) if current_br else "",
+            "new_bitrate": target_bitrate,
+            "message": f"Sudah {target_rate} Hz • {target_bitrate} kbps (dilewati)",
+        }
+
+    br_str = f"{target_bitrate}k"
+    if ext in (".webm", ".opus", ".ogg") or codec == "opus":
+        if target_rate == 44100 or target_bitrate != 320:
+            # Convert to MP3 at target_bitrate & target_rate
+            target_ext = ".mp3"
+            codec_args = ["-c:a", "libmp3lame", "-b:a", br_str, "-id3v2_version", "3"]
+        else:
+            target_ext = ".opus" if ext != ".webm" else ".webm"
+            codec_args = ["-c:a", "libopus", "-b:a", "256k"]
+    elif ext == ".mp3" or codec == "mp3":
+        target_ext = ".mp3"
+        codec_args = ["-c:a", "libmp3lame", "-b:a", br_str, "-id3v2_version", "3"]
+    elif ext in (".m4a", ".aac"):
+        if target_bitrate != 320:
+            target_ext = ".mp3"
+            codec_args = ["-c:a", "libmp3lame", "-b:a", br_str, "-id3v2_version", "3"]
+        else:
+            target_ext = ext
+            codec_args = ["-c:a", "aac", "-b:a", "256k"]
+    elif ext == ".flac" or codec == "flac":
+        if target_bitrate != 320:
+            target_ext = ".mp3"
+            codec_args = ["-c:a", "libmp3lame", "-b:a", br_str, "-id3v2_version", "3"]
+        else:
+            target_ext = ".flac"
+            codec_args = ["-c:a", "flac"]
+    elif ext in (".wav", ".aif", ".aiff"):
+        if target_bitrate != 320:
+            target_ext = ".mp3"
+            codec_args = ["-c:a", "libmp3lame", "-b:a", br_str, "-id3v2_version", "3"]
+        else:
+            target_ext = ext
+            pcm_codec = codec if codec.startswith("pcm_") else "pcm_s16le"
+            codec_args = ["-c:a", pcm_codec]
+    else:
+        target_ext = ".mp3"
+        codec_args = ["-c:a", "libmp3lame", "-b:a", br_str, "-id3v2_version", "3"]
+
+    tag_pattern = r"\s*\[(44\.1kHz|48kHz)(?:\s+\d+k)?\]$"
+    if overwrite:
+        out_path = path.with_suffix(target_ext)
+    elif out_dir is not None:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"{path.stem}{target_ext}"
+    elif path.parent.name and path.parent.name != "inbox" and path.parent.parent.name == "inbox":
+        base_folder = re.sub(tag_pattern, "", path.parent.name)
+        dest_dir = path.parent.parent / f"{base_folder} [{tag_label}]"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        out_path = dest_dir / f"{path.stem}{target_ext}"
+    elif path.parent.name == "inbox":
+        dest_dir = path.parent / f"Converted [{tag_label}]"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        out_path = dest_dir / f"{path.stem}{target_ext}"
+    else:
+        clean_stem = re.sub(tag_pattern, "", path.stem)
+        out_path = path.with_name(f"{clean_stem} [{tag_label}]{target_ext}")
+
+    # Skip if non-overwrite target file already exists with target sample rate and bitrate
+    if not overwrite and out_path != path and out_path.is_file():
+        try:
+            existing_info = metadata(out_path)
+            ex_rate = int(existing_info.get("sample_rate_hz") or 0)
+            ex_br = float(existing_info.get("bitrate_kbps") or 0)
+            if ex_rate == target_rate and abs(ex_br - target_bitrate) <= 8:
+                return {
+                    "status": "SKIPPED",
+                    "file": str(out_path),
+                    "old_rate": current_rate,
+                    "new_rate": target_rate,
+                    "old_bitrate": round(current_br) if current_br else "",
+                    "new_bitrate": target_bitrate,
+                    "message": f"Hasil konversi sudah ada ({out_path.parent.name}/{out_path.name})",
+                }
+        except Exception:
+            pass
+
+    tmp_path = out_path.with_name(f".{out_path.stem}.resample_tmp{out_path.suffix}")
+    try:
+        base_cmd = [
+            "ffmpeg", "-y", "-hide_banner", "-nostats", "-xerror",
+            "-i", str(path),
+            "-map", "0:a:0",
+            "-map_metadata", "0",
+        ]
+        cmd_soxr = base_cmd + [
+            "-af", f"aresample=resampler=soxr:precision=28:osr={target_rate}",
+            "-ar", str(target_rate),
+            *codec_args,
+            str(tmp_path),
+        ]
+        proc = subprocess.run(cmd_soxr, capture_output=True, text=True)
+        if proc.returncode != 0:
+            cmd_std = base_cmd + [
+                "-ar", str(target_rate),
+                *codec_args,
+                str(tmp_path),
+            ]
+            proc = subprocess.run(cmd_std, capture_output=True, text=True)
+            if proc.returncode != 0:
+                raise RuntimeError("FFmpeg resample gagal: " + proc.stderr[-300:].replace("\n", " "))
+
+        new_info = metadata(tmp_path)
+        tmp_path.replace(out_path)
+        if overwrite and out_path != path and path.exists():
+            path.unlink()
+
+        dest_display = f"{out_path.parent.name}/{out_path.name}" if out_path.parent != path.parent else out_path.name
+        old_br_label = f"{round(current_br)}k" if current_br else codec
+        return {
+            "status": "CONVERTED",
+            "file": str(out_path),
+            "old_file": str(path),
+            "overwritten": overwrite,
+            "old_rate": current_rate,
+            "new_rate": int(new_info.get("sample_rate_hz") or target_rate),
+            "old_bitrate": round(current_br) if current_br else "",
+            "new_bitrate": target_bitrate,
+            "codec": new_info.get("codec", ""),
+            "message": f"{current_rate} Hz ({old_br_label}) -> {target_rate} Hz • {target_bitrate} kbps ({dest_display})",
+        }
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+
+
+def resample(args) -> int:
+    require("ffmpeg")
+    require("ffprobe")
+    target = Path(args.target).expanduser().resolve()
+    if not target.exists():
+        raise RuntimeError(f"Path tidak ditemukan: {target}")
+
+    out_dir = Path(args.out_dir).expanduser().resolve() if getattr(args, "out_dir", None) else None
+    target_bitrate = int(getattr(args, "bitrate", 320))
+
+    if target.is_file():
+        files = [target]
+    else:
+        allowed_exts = {".mp3"} if args.only_mp3 else EXTENSIONS
+        files = sorted(
+            p for p in target.rglob("*")
+            if p.is_file()
+            and p.suffix.lower() in allowed_exts
+            and not p.name.startswith(".")
+            and not re.search(r"\[(44\.1kHz|48kHz)(?:\s+\d+k)?\]$", p.parent.name)
+        )
+
+    if not files:
+        print("Tidak ada file audio yang cocok untuk dikonversi.")
+        return 0
+
+    converted = 0
+    skipped = 0
+    errors = 0
+    for idx, path in enumerate(files, 1):
+        try:
+            res = resample_one(
+                path,
+                target_rate=args.rate,
+                target_bitrate=target_bitrate,
+                overwrite=args.overwrite,
+                out_dir=out_dir,
+            )
+            if res["status"] == "CONVERTED":
+                converted += 1
+                print(f"[{idx}/{len(files)}] CONVERTED: {res['message']}", flush=True)
+            else:
+                skipped += 1
+                print(f"[{idx}/{len(files)}] SKIPPED: {path.name} ({res['message']})", flush=True)
+        except Exception as exc:
+            errors += 1
+            print(f"[{idx}/{len(files)}] ERROR {path.name}: {exc}", file=sys.stderr, flush=True)
+
+    print(f"Selesai. Dikonversi: {converted} | Dilewati: {skipped} | Error: {errors}")
+    if args.scan and target.is_dir():
+        return scan(argparse.Namespace(folder=str(target), out=str(target / "quality_report.csv")))
+    return 0 if errors == 0 else 1
 
 
 def main() -> int:
@@ -230,7 +655,9 @@ def main() -> int:
     d.add_argument("url")
     d.add_argument("--authorized", action="store_true", help="Saya memiliki izin sumber ini")
     d.add_argument("--format", choices=["native", "premium", "mp3"], default="native",
-                   help="Format output: 'native' (Opus/M4A), 'premium' (AAC 256k YouTube Music), atau 'mp3' (320 kbps CBR)")
+                   help="'native' (default): stream audio terbaik apa adanya, tanpa konversi. 'premium' = alias 'native'. 'mp3': konversi MP3 320 kbps CBR.")
+    d.add_argument("--keep-opus", action="store_true",
+                   help="Saat download --format mp3, tetap simpan juga file asli Opus (.webm) (default: tidak aktif)")
     d.add_argument("--playlist", action="store_true", help="Proses seluruh playlist (otomatis disimpan ke folder nama playlist)")
     d.add_argument("--cookies-from-browser", default=None,
                    help="Baca sesi login browser (contoh: chrome, firefox, brave) untuk akun YouTube Premium")
@@ -239,9 +666,26 @@ def main() -> int:
     s = sub.add_parser("scan", help="Audit file audio lokal tanpa download")
     s.add_argument("folder")
     s.add_argument("--out", default="quality_report.csv")
+    r = sub.add_parser("resample", help="Konversi sample rate & bitrate lagu yang sudah ada")
+    r.add_argument("target", help="Path ke file audio atau folder koleksi")
+    r.add_argument("--rate", type=int, choices=[44100, 48000], default=44100,
+                   help="Target sample rate dalam Hz (default: 44100 untuk 44.1 kHz)")
+    r.add_argument("--bitrate", type=int, choices=[320, 192, 128, 96], default=320,
+                   help="Target bitrate MP3 dalam kbps: 320, 192, 128, atau 96 (default: 320)")
+    r.add_argument("--only-mp3", action="store_true",
+                   help="Hanya konversi file .mp3 (biarkan file .webm/.opus tetap utuh)")
+    r.add_argument("--overwrite", action="store_true",
+                   help="Timpa file asli secara langsung (default: TIDAK menimpa file asli)")
+    r.add_argument("--out-dir", default=None,
+                   help="Folder tujuan khusus untuk menyimpan hasil konversi")
+    r.add_argument("--scan", action="store_true", help="Audit ulang folder setelah konversi selesai")
     args = parser.parse_args()
     try:
-        return download(args) if args.action == "download" else scan(args)
+        if args.action == "download":
+            return download(args)
+        if args.action == "resample":
+            return resample(args)
+        return scan(args)
     except RuntimeError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

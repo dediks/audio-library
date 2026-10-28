@@ -56,6 +56,8 @@ downloaded_ids.txt
 !*.env.example
 *.cookies
 cookies.txt
+library/cookies.txt*
+*:Zone.Identifier
 
 # Operating System files
 .DS_Store
