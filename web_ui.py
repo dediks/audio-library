@@ -38,6 +38,25 @@ cached_qc_results: dict[str, dict] = {}
 cached_meta_results: dict[str, dict] = {}
 
 
+SKIP_SYSTEM_DIRS = {
+    "$Recycle.Bin",
+    "$WinREAgent",
+    "System Volume Information",
+    "Documents and Settings",
+    "Recovery",
+    "PerfLogs",
+    "MSOCache",
+    "AppData",
+    "Application Data",
+    "Local Settings",
+    "Windows",
+    "Program Files",
+    "Program Files (x86)",
+    "ProgramData",
+    "node_modules",
+}
+
+
 def get_allowed_roots() -> list[Path]:
     """Returns allowed base directories for local folder browsing and conversion."""
     roots = [BASE_DIR.resolve(), Path.home().resolve(), Path("/tmp").resolve()]
@@ -48,11 +67,22 @@ def get_allowed_roots() -> list[Path]:
     return roots
 
 
+def normalize_windows_or_wsl_path(raw_path: str) -> str:
+    """Translates Windows paths like 'C:\\Users\\...' or 'D:/Music' to WSL '/mnt/c/...'."""
+    cleaned = raw_path.strip().strip('"').strip("'")
+    win_match = re.match(r"^([a-zA-Z]):(?:[\\/](.*))?$", cleaned)
+    if win_match:
+        drive = win_match.group(1).lower()
+        rest = (win_match.group(2) or "").replace("\\", "/").strip("/")
+        return f"/mnt/{drive}/{rest}" if rest else f"/mnt/{drive}"
+    return cleaned
+
+
 def resolve_safe_dir(raw_path: str | None, default_dir: Path, must_exist: bool = True) -> Path:
-    """Validates and resolves a directory path within allowed local roots."""
+    """Validates and resolves a directory path within allowed local roots (WSL + Windows /mnt/*)."""
     if not raw_path or not isinstance(raw_path, str) or not raw_path.strip():
         return default_dir.resolve()
-    cleaned = raw_path.strip()
+    cleaned = normalize_windows_or_wsl_path(raw_path)
     p = Path(cleaned).expanduser()
     if not p.is_absolute():
         p = BASE_DIR / p
@@ -61,7 +91,7 @@ def resolve_safe_dir(raw_path: str | None, default_dir: Path, must_exist: bool =
     allowed_roots = get_allowed_roots()
     matched_root = next((r for r in allowed_roots if resolved.is_relative_to(r)), None)
     if matched_root is None:
-        raise ValueError(f"Akses folder ditolak (di luar Home / Media / Project): {resolved}")
+        raise ValueError(f"Akses folder ditolak (di luar Home / Windows /mnt / Media / Project): {resolved}")
 
     rel_parts = resolved.relative_to(matched_root).parts
     if any(part.startswith(".") for part in rel_parts):
@@ -70,6 +100,84 @@ def resolve_safe_dir(raw_path: str | None, default_dir: Path, must_exist: bool =
     if must_exist and not resolved.is_dir():
         raise ValueError(f"Folder tidak ditemukan: {resolved}")
     return resolved
+
+
+def iter_audio_files_safe(root_dir: Path, allowed_exts: set[str] | None = None) -> list[Path]:
+    """Safely walks root_dir (including Windows /mnt/* drives), skipping inaccessible NTFS junctions."""
+    exts = allowed_exts if allowed_exts is not None else audio_manager.EXTENSIONS
+    results: list[Path] = []
+    if not root_dir.is_dir():
+        return results
+    for dirpath, dirnames, filenames in os.walk(root_dir, onerror=lambda _: None):
+        dirnames[:] = sorted(
+            d for d in dirnames
+            if not d.startswith(".") and not d.startswith("$") and d not in SKIP_SYSTEM_DIRS
+        )
+        for fname in sorted(filenames):
+            if fname.startswith("."):
+                continue
+            ext = os.path.splitext(fname)[1].lower()
+            if ext in exts:
+                results.append(Path(dirpath) / fname)
+    return results
+
+
+def get_windows_shortcuts() -> list[dict]:
+    """Builds quick-access shortcuts for WSL + Windows drives and user folders."""
+    shortcuts = [
+        {"label": "📥 Inbox Proyek", "path": str(INBOX_DIR.resolve())},
+        {"label": "🏠 WSL Home", "path": str(Path.home().resolve())},
+    ]
+    wsl_music = Path.home() / "Music"
+    if wsl_music.is_dir():
+        shortcuts.append({"label": "🎵 WSL Music", "path": str(wsl_music.resolve())})
+
+    mnt_root = Path("/mnt")
+    if mnt_root.is_dir():
+        # Detect Windows user profile directories under /mnt/c/Users
+        win_users_dir = mnt_root / "c" / "Users"
+        if win_users_dir.is_dir():
+            skip_users = {"Public", "Default", "Default User", "All Users"}
+            try:
+                for udir in sorted(win_users_dir.iterdir()):
+                    if udir.name.startswith(".") or udir.name in skip_users:
+                        continue
+                    try:
+                        if not udir.is_dir():
+                            continue
+                    except OSError:
+                        continue
+                    shortcuts.append({"label": f"🪟 Win User ({udir.name})", "path": str(udir)})
+                    for sub_label, sub_name in (("🎵 Win Music", "Music"), ("⬇️ Win Downloads", "Downloads"), ("🖥️ Win Desktop", "Desktop")):
+                        sub_p = udir / sub_name
+                        try:
+                            if sub_p.is_dir():
+                                shortcuts.append({"label": sub_label, "path": str(sub_p)})
+                        except OSError:
+                            pass
+            except OSError:
+                pass
+
+        # Detect mounted Windows drive letters (/mnt/c, /mnt/d, /mnt/e, ...)
+        try:
+            for d in sorted(mnt_root.iterdir()):
+                if len(d.name) == 1 and d.name.isalpha():
+                    try:
+                        if d.is_dir():
+                            shortcuts.append({
+                                "label": f"💽 Drive {d.name.upper()}: (/mnt/{d.name.lower()})",
+                                "path": str(d),
+                            })
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+
+    for m_root in ("/media", "/run/media"):
+        mp = Path(m_root)
+        if mp.is_dir():
+            shortcuts.append({"label": f"💾 {m_root}", "path": str(mp.resolve())})
+    return shortcuts
 
 
 def probe_files_fast(files: list[Path]) -> None:
@@ -207,20 +315,14 @@ def run_worker():
                 else:
                     pl_dir = (source_resolved / playlist).resolve()
                     if pl_dir.is_relative_to(source_resolved) and pl_dir.is_dir():
-                        files = sorted(
-                            p for p in pl_dir.rglob("*")
-                            if p.is_file() and p.suffix.lower() in allowed and not p.name.startswith(".")
-                        )
+                        files = iter_audio_files_safe(pl_dir, allowed)
                     else:
                         files = []
             else:
-                files = sorted(
-                    p for p in source_resolved.rglob("*")
-                    if p.is_file()
-                    and p.suffix.lower() in allowed
-                    and not p.name.startswith(".")
-                    and not re.search(r"\[(44\.1kHz|48kHz)(?:\s+\d+k)?\]$", p.parent.name)
-                )
+                files = [
+                    p for p in iter_audio_files_safe(source_resolved, allowed)
+                    if not re.search(r"\[(44\.1kHz|48kHz)(?:\s+\d+k)?\]$", p.parent.name)
+                ]
 
             total = len(files)
             if total == 0:
@@ -636,25 +738,31 @@ class AudioServerHandler(BaseHTTPRequestHandler):
                         parent_path = str(curr_dir.parent)
 
                 subdirs = []
-                for d in sorted(curr_dir.iterdir()):
-                    if d.is_dir() and not d.name.startswith("."):
-                        subdirs.append({"name": d.name, "path": str(d)})
+                try:
+                    entries = sorted(curr_dir.iterdir(), key=lambda x: x.name.lower())
+                except OSError:
+                    entries = []
+                for d in entries:
+                    if d.name.startswith(".") or d.name.startswith("$") or d.name in SKIP_SYSTEM_DIRS:
+                        continue
+                    try:
+                        if not d.is_dir():
+                            continue
+                        audio_cnt = sum(
+                            1 for f in d.iterdir()
+                            if not f.name.startswith(".") and f.suffix.lower() in audio_manager.EXTENSIONS and f.is_file()
+                        )
+                    except OSError:
+                        audio_cnt = 0
+                        continue
+                    subdirs.append({"name": d.name, "path": str(d), "audio_count": audio_cnt})
 
-                shortcuts = [
-                    {"label": "📥 Inbox Proyek", "path": str(INBOX_DIR.resolve())},
-                    {"label": "🏠 Home", "path": str(Path.home().resolve())},
-                ]
-                music_dir = Path.home() / "Music"
-                if music_dir.is_dir():
-                    shortcuts.append({"label": "🎵 Music", "path": str(music_dir.resolve())})
-                for m_root in ("/media", "/run/media", "/mnt"):
-                    mp = Path(m_root)
-                    if mp.is_dir():
-                        shortcuts.append({"label": f"💾 {m_root}", "path": str(mp.resolve())})
+                shortcuts = get_windows_shortcuts()
 
                 self.send_json(200, {
                     "current": str(curr_dir),
                     "parent": parent_path,
+                    "dirs": subdirs,
                     "subdirs": subdirs,
                     "shortcuts": shortcuts,
                 })
@@ -684,15 +792,9 @@ class AudioServerHandler(BaseHTTPRequestHandler):
                 if not pl_dir.is_relative_to(source_resolved) or not pl_dir.is_dir():
                     self.send_json(400, {"error": "Folder playlist tidak ditemukan."})
                     return
-                target_files = [
-                    p for p in pl_dir.rglob("*")
-                    if p.is_file() and p.suffix.lower() in audio_manager.EXTENSIONS and not p.name.startswith(".")
-                ]
+                target_files = iter_audio_files_safe(pl_dir)
             else:
-                target_files = [
-                    p for p in source_resolved.rglob("*")
-                    if p.is_file() and p.suffix.lower() in audio_manager.EXTENSIONS and not p.name.startswith(".")
-                ]
+                target_files = iter_audio_files_safe(source_resolved)
 
             probe_files_fast(target_files)
             files_data, playlists_data = self.get_library_files(source_resolved)
@@ -823,52 +925,63 @@ class AudioServerHandler(BaseHTTPRequestHandler):
             return [], []
 
         playlist_counts: dict[str, dict] = {}
-        for d in sorted(target_dir.iterdir()):
-            if d.is_dir() and not d.name.startswith("."):
-                playlist_counts[d.name] = {"name": d.name, "total": 0, "mp3_count": 0, "other_count": 0}
+        try:
+            top_entries = sorted(target_dir.iterdir(), key=lambda x: x.name.lower())
+        except OSError:
+            top_entries = []
+        for d in top_entries:
+            if d.name.startswith(".") or d.name.startswith("$") or d.name in SKIP_SYSTEM_DIRS:
+                continue
+            try:
+                if d.is_dir():
+                    playlist_counts[d.name] = {"name": d.name, "total": 0, "mp3_count": 0, "other_count": 0}
+            except OSError:
+                continue
 
         items = []
         root_total = 0
         root_mp3 = 0
-        for p in sorted(target_dir.rglob("*")):
-            if p.is_file() and p.suffix.lower() in audio_manager.EXTENSIONS and not p.name.startswith("."):
-                qc = cached_qc_results.get(str(p))
-                meta = cached_meta_results.get(str(p))
-                merged_qc = None
-                if qc or meta:
-                    merged_qc = dict(meta or {})
-                    if qc:
-                        merged_qc.update(qc)
-
+        for p in iter_audio_files_safe(target_dir):
+            try:
                 stat = p.stat()
-                rel = p.relative_to(target_dir)
-                folder_name = str(rel.parent) if rel.parent != Path(".") else ""
-                ext = p.suffix.lower()
+            except OSError:
+                continue
+            qc = cached_qc_results.get(str(p))
+            meta = cached_meta_results.get(str(p))
+            merged_qc = None
+            if qc or meta:
+                merged_qc = dict(meta or {})
+                if qc:
+                    merged_qc.update(qc)
 
-                if folder_name:
-                    top_folder = rel.parts[0]
-                    if top_folder not in playlist_counts:
-                        playlist_counts[top_folder] = {"name": top_folder, "total": 0, "mp3_count": 0, "other_count": 0}
-                    playlist_counts[top_folder]["total"] += 1
-                    if ext == ".mp3":
-                        playlist_counts[top_folder]["mp3_count"] += 1
-                    else:
-                        playlist_counts[top_folder]["other_count"] += 1
+            rel = p.relative_to(target_dir)
+            folder_name = str(rel.parent) if rel.parent != Path(".") else ""
+            ext = p.suffix.lower()
+
+            if folder_name:
+                top_folder = rel.parts[0]
+                if top_folder not in playlist_counts:
+                    playlist_counts[top_folder] = {"name": top_folder, "total": 0, "mp3_count": 0, "other_count": 0}
+                playlist_counts[top_folder]["total"] += 1
+                if ext == ".mp3":
+                    playlist_counts[top_folder]["mp3_count"] += 1
                 else:
-                    root_total += 1
-                    if ext == ".mp3":
-                        root_mp3 += 1
+                    playlist_counts[top_folder]["other_count"] += 1
+            else:
+                root_total += 1
+                if ext == ".mp3":
+                    root_mp3 += 1
 
-                items.append({
-                    "name": p.name,
-                    "ext": ext,
-                    "folder": folder_name,
-                    "rel_path": str(rel),
-                    "path": str(p),
-                    "size_mb": round(stat.st_size / (1024 * 1024), 2),
-                    "modified": int(stat.st_mtime),
-                    "qc": merged_qc
-                })
+            items.append({
+                "name": p.name,
+                "ext": ext,
+                "folder": folder_name,
+                "rel_path": str(rel),
+                "path": str(p),
+                "size_mb": round(stat.st_size / (1024 * 1024), 2),
+                "modified": int(stat.st_mtime),
+                "qc": merged_qc
+            })
 
         playlists = list(playlist_counts.values())
         if root_total > 0:

@@ -447,13 +447,22 @@ def resample_one(
     info = metadata(path)
     current_rate = int(info.get("sample_rate_hz") or 0)
     current_br = float(info.get("bitrate_kbps") or 0)
+    current_ch = int(info.get("channels") or 0)
     codec = info.get("codec", "")
     ext = path.suffix.lower()
     rate_label = "44.1kHz" if target_rate == 44100 else "48kHz"
     tag_label = rate_label if target_bitrate == 320 else f"{rate_label} {target_bitrate}k"
 
     rate_matches = (current_rate == target_rate)
-    br_matches = (ext == ".mp3" and abs(current_br - target_bitrate) <= 8)
+    has_xing = False
+    if ext == ".mp3":
+        try:
+            with path.open("rb") as fh:
+                head_bytes = fh.read(8192)
+                has_xing = (b"Xing" in head_bytes or b"Info" in head_bytes)
+        except OSError:
+            pass
+    br_matches = (ext == ".mp3" and abs(current_br - target_bitrate) <= 8 and current_ch == 2 and not has_xing)
 
     if rate_matches and br_matches:
         return {
@@ -467,42 +476,49 @@ def resample_one(
         }
 
     br_str = f"{target_bitrate}k"
+    mp3_codec_args = [
+        "-c:a", "libmp3lame",
+        "-b:a", br_str,
+        "-ac", "2",
+        "-write_xing", "0",
+        "-id3v2_version", "3",
+    ]
     if ext in (".webm", ".opus", ".ogg") or codec == "opus":
         if target_rate == 44100 or target_bitrate != 320:
             # Convert to MP3 at target_bitrate & target_rate
             target_ext = ".mp3"
-            codec_args = ["-c:a", "libmp3lame", "-b:a", br_str, "-id3v2_version", "3"]
+            codec_args = mp3_codec_args
         else:
             target_ext = ".opus" if ext != ".webm" else ".webm"
-            codec_args = ["-c:a", "libopus", "-b:a", "256k"]
+            codec_args = ["-c:a", "libopus", "-b:a", "256k", "-ac", "2"]
     elif ext == ".mp3" or codec == "mp3":
         target_ext = ".mp3"
-        codec_args = ["-c:a", "libmp3lame", "-b:a", br_str, "-id3v2_version", "3"]
+        codec_args = mp3_codec_args
     elif ext in (".m4a", ".aac"):
         if target_bitrate != 320:
             target_ext = ".mp3"
-            codec_args = ["-c:a", "libmp3lame", "-b:a", br_str, "-id3v2_version", "3"]
+            codec_args = mp3_codec_args
         else:
             target_ext = ext
-            codec_args = ["-c:a", "aac", "-b:a", "256k"]
+            codec_args = ["-c:a", "aac", "-b:a", "256k", "-ac", "2"]
     elif ext == ".flac" or codec == "flac":
         if target_bitrate != 320:
             target_ext = ".mp3"
-            codec_args = ["-c:a", "libmp3lame", "-b:a", br_str, "-id3v2_version", "3"]
+            codec_args = mp3_codec_args
         else:
             target_ext = ".flac"
-            codec_args = ["-c:a", "flac"]
+            codec_args = ["-c:a", "flac", "-ac", "2"]
     elif ext in (".wav", ".aif", ".aiff"):
         if target_bitrate != 320:
             target_ext = ".mp3"
-            codec_args = ["-c:a", "libmp3lame", "-b:a", br_str, "-id3v2_version", "3"]
+            codec_args = mp3_codec_args
         else:
             target_ext = ext
             pcm_codec = codec if codec.startswith("pcm_") else "pcm_s16le"
-            codec_args = ["-c:a", pcm_codec]
+            codec_args = ["-c:a", pcm_codec, "-ac", "2"]
     else:
         target_ext = ".mp3"
-        codec_args = ["-c:a", "libmp3lame", "-b:a", br_str, "-id3v2_version", "3"]
+        codec_args = mp3_codec_args
 
     tag_pattern = r"\s*\[(44\.1kHz|48kHz)(?:\s+\d+k)?\]$"
     if overwrite:
