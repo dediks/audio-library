@@ -3,6 +3,8 @@
  * Strict DOM Manipulation (No innerHTML, strictly textContent & createElement)
  */
 
+import { notify } from './ui-shared.js';
+
 /**
  * Initializes the folder browser modal for selecting Source or Destination directories.
  * @param {{
@@ -62,8 +64,24 @@ export function initFolderModal(opts) {
       });
       const data = await res.json();
       if (!res.ok) {
-        onLog('error', '[BROWSER] ' + (data.error || 'Gagal membuka direktori.'));
+        const errMsg = data.error || 'Gagal membuka direktori.';
+        onLog('error', '[BROWSER] ' + errMsg);
+        notify({
+          type: 'error',
+          title: 'Gagal Membuka Direktori',
+          message: errMsg,
+          playSound: true,
+        });
         return;
+      }
+
+      if (createSubfolder) {
+        notify({
+          type: 'success',
+          title: 'Folder Baru Dibuat',
+          message: 'Berhasil membuat dan membuka folder: ' + (data.current || createSubfolder),
+          duration: 3800,
+        });
       }
 
       modalBrowsingPath = data.current || '';

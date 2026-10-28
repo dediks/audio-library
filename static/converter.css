@@ -329,3 +329,59 @@
   border-top: 1px solid var(--border-subtle);
 }
 
+/* Mobile Responsive Adjustments for Converter & Folder Modal */
+@media (max-width: 768px) {
+  .folder-io-panel {
+    padding: 0.85rem;
+  }
+
+  .folder-io-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .folder-path-input {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .folder-io-controls .btn-secondary {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .modal-backdrop {
+    padding: 0.6rem;
+  }
+
+  .modal-header,
+  .modal-body,
+  .modal-footer {
+    padding: 0.85rem 1rem;
+  }
+
+  .modal-newfolder-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .modal-newfolder-bar .toolbar-input,
+  .modal-newfolder-bar .btn-secondary {
+    width: 100%;
+    min-width: 0;
+    justify-content: center;
+  }
+
+  .modal-footer {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .modal-footer .btn-secondary,
+  .modal-footer .btn-accent {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+

@@ -6,6 +6,8 @@
 import {
   initAppHeader,
   appendLog,
+  renderLogs,
+  notify,
   groupFilesByFolder,
   createGroupHeaderBar,
   createFileNameCell,
@@ -89,13 +91,18 @@ document.addEventListener('DOMContentLoaded', () => {
       btnStartIngest.disabled = true;
       btnStartIngest.classList.add('running');
     },
+    onTaskFinished: (task) => {
+      if (Array.isArray(task.logs) && task.logs.length > 0) {
+        renderLogs(terminalLogs, task.logs);
+      }
+      fetchLibraryFiles();
+    },
     onIdle: (justFinished) => {
-      jobUrlLabel.textContent = 'Belum ada tugas unduhan aktif';
-      progressFill.style.width = '0%';
-      progressText.textContent = '0% Complete';
       btnStartIngest.disabled = false;
       btnStartIngest.classList.remove('running');
       if (justFinished) {
+        progressFill.style.width = '100%';
+        progressText.textContent = '100% Complete';
         fetchLibraryFiles();
       }
     },
@@ -346,14 +353,33 @@ document.addEventListener('DOMContentLoaded', () => {
       const data = await res.json();
       if (res.ok) {
         log('info', '[DISPATCH] ' + data.message);
+        const hasSkippedUrls = (data.duplicate_count || 0) > 0 || (data.invalid_count || 0) > 0;
+        notify({
+          type: hasSkippedUrls ? 'warning' : 'info',
+          title: hasSkippedUrls ? 'Antrian Ditambahkan (Dengan Catatan)' : 'Masuk Antrian Unduhan',
+          message: data.message,
+        });
         urlInput.value = '';
         queueMonitor.poll();
       } else {
-        log('error', '[DISPATCH ERROR] ' + (data.error || 'Gagal menambahkan tugas.'));
+        const errMsg = data.error || 'Gagal menambahkan tugas.';
+        log('error', '[DISPATCH ERROR] ' + errMsg);
+        notify({
+          type: data.duplicate_count > 0 ? 'exists' : 'error',
+          title: data.duplicate_count > 0 ? 'URL Sudah Dalam Antrian' : 'Gagal Menambahkan Unduhan',
+          message: errMsg,
+          playSound: true,
+        });
         btnStartIngest.disabled = false;
       }
     } catch (err) {
       log('error', '[NETWORK ERROR] ' + err.message);
+      notify({
+        type: 'error',
+        title: 'Kesalahan Jaringan',
+        message: 'Tidak dapat menghubungi server lokal: ' + err.message,
+        playSound: true,
+      });
       btnStartIngest.disabled = false;
     }
   });
@@ -373,17 +399,42 @@ document.addEventListener('DOMContentLoaded', () => {
       const data = await res.json();
       if (res.ok) {
         log('info', '[RESAMPLE] ' + data.message);
+        notify({
+          type: 'info',
+          title: 'Konversi Dijadwalkan',
+          message: data.message,
+        });
         queueMonitor.poll();
       } else {
-        log('error', '[RESAMPLE ERROR] ' + (data.error || 'Gagal menjadwalkan konversi sample rate.'));
+        const errMsg = data.error || 'Gagal menjadwalkan konversi sample rate.';
+        log('error', '[RESAMPLE ERROR] ' + errMsg);
+        notify({
+          type: 'error',
+          title: 'Gagal Menjadwalkan Konversi',
+          message: errMsg,
+          playSound: true,
+        });
       }
     } catch (err) {
       log('error', '[RESAMPLE NETWORK ERROR] ' + err.message);
+      notify({
+        type: 'error',
+        title: 'Kesalahan Jaringan',
+        message: err.message,
+        playSound: true,
+      });
     }
   }
 
-  btnRefreshLibrary.addEventListener('click', () => {
-    fetchLibraryFiles();
+  btnRefreshLibrary.addEventListener('click', async () => {
+    await fetchLibraryFiles();
+    notify({
+      type: 'info',
+      title: 'Library Diperbarui',
+      message: `Memuat ${allLibraryFiles.length} lagu dari Inbox.`,
+      duration: 3000,
+      recordHistory: false,
+    });
   });
 
   if (btnResampleMp3) {
@@ -395,17 +446,68 @@ document.addEventListener('DOMContentLoaded', () => {
   btnAuditAll.addEventListener('click', async () => {
     btnAuditAll.disabled = true;
     log('info', '[AUDIT] Memulai audit audio QC menyeluruh (EBU R128 & True Peak)...');
+    notify({
+      type: 'info',
+      title: 'Memulai Full QC Audit',
+      message: 'Memindai EBU R128 LUFS & True Peak untuk seluruh lagu di Inbox...',
+      recordHistory: false,
+    });
     try {
       const res = await fetch('/api/scan', { method: 'POST' });
       const data = await res.json();
       if (res.ok) {
-        log('info', `[AUDIT] Selesai. ${(data.results || []).length} file berhasil diukur.`);
+        const results = data.results || [];
+        let clipCount = 0;
+        let trimCount = 0;
+        results.forEach(r => {
+          const tp = parseFloat(r.true_peak_dbtp);
+          if (!Number.isNaN(tp)) {
+            if (tp > 0) clipCount += 1;
+            else if (tp > -1.0) trimCount += 1;
+          }
+        });
+        log('info', `[AUDIT] Selesai. ${results.length} file berhasil diukur.`);
+        if (results.length === 0) {
+          notify({
+            type: 'warning',
+            title: 'Inbox Kosong',
+            message: 'Tidak ada file audio di Inbox untuk diaudit.',
+            playSound: true,
+          });
+        } else if (clipCount > 0) {
+          notify({
+            type: 'warning',
+            title: 'Audit QC Selesai (Clipping Hazard)',
+            message: `${results.length} lagu diaudit: ⚠️ ${clipCount} lagu berisiko Clipping (> 0 dBTP) dan ${trimCount} lagu perlu Trim Preamp.`,
+            playSound: true,
+          });
+        } else {
+          notify({
+            type: 'success',
+            title: 'Audit QC Selesai',
+            message: `${results.length} lagu berhasil diaudit (${trimCount > 0 ? trimCount + ' perlu Trim Preamp, ' : ''}0 Clipping Hazard).`,
+            playSound: true,
+          });
+        }
         fetchLibraryFiles();
       } else {
-        log('error', '[AUDIT ERROR] ' + (data.error || 'Audit gagal.'));
+        const errMsg = data.error || 'Audit gagal.';
+        log('error', '[AUDIT ERROR] ' + errMsg);
+        notify({
+          type: 'error',
+          title: 'Audit QC Gagal',
+          message: errMsg,
+          playSound: true,
+        });
       }
     } catch (err) {
       log('error', '[AUDIT NETWORK ERROR] ' + err.message);
+      notify({
+        type: 'error',
+        title: 'Audit QC Gagal',
+        message: err.message,
+        playSound: true,
+      });
     } finally {
       btnAuditAll.disabled = false;
     }

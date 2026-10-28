@@ -7,6 +7,7 @@ import {
   initAppHeader,
   appendLog,
   renderLogs,
+  notify,
   groupFilesByFolder,
   createGroupHeaderBar,
   createFileNameCell,
@@ -113,7 +114,14 @@ document.addEventListener('DOMContentLoaded', () => {
       const res = await fetch(url);
       const data = await res.json();
       if (!res.ok) {
-        log('error', '[LIBRARY] ' + (data.error || 'Gagal memuat folder sumber.'));
+        const errMsg = data.error || 'Gagal memuat folder sumber.';
+        log('error', '[LIBRARY] ' + errMsg);
+        notify({
+          type: 'error',
+          title: 'Gagal Memuat Folder Sumber',
+          message: errMsg,
+          playSound: true,
+        });
         return false;
       }
       if (data.source_dir) {
@@ -140,7 +148,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // 3. Fast ffprobe scan for a playlist folder
-  async function probeFolder(folderName) {
+  async function probeFolder(folderName, isManual = false) {
     if (probeStatusHint) {
       probeStatusHint.textContent = 'Memindai sample rate lagu dengan ffprobe...';
     }
@@ -161,9 +169,35 @@ document.addEventListener('DOMContentLoaded', () => {
         renderPlaylists();
         applyFiltersAndRenderTable();
         updateSelectionUI();
+        if (isManual) {
+          notify({
+            type: 'success',
+            title: 'Metadata Sample Rate Diperbarui',
+            message: `Berhasil membaca sample rate & bitrate pada ${visibleFiles.length} lagu.`,
+            duration: 3800,
+          });
+        }
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        if (isManual) {
+          notify({
+            type: 'error',
+            title: 'Gagal Memindai Sample Rate',
+            message: errData.error || 'Terjadi kesalahan saat menjalankan ffprobe.',
+            playSound: true,
+          });
+        }
       }
     } catch (err) {
       log('error', '[PROBE] Gagal membaca metadata: ' + err.message);
+      if (isManual) {
+        notify({
+          type: 'error',
+          title: 'Kesalahan Pemindaian',
+          message: err.message,
+          playSound: true,
+        });
+      }
     } finally {
       if (probeStatusHint) {
         probeStatusHint.textContent = 'Klik playlist untuk memfilter & membaca sample rate lagu';
@@ -561,6 +595,12 @@ document.addEventListener('DOMContentLoaded', () => {
     progressFill,
     progressText,
     terminalLogs,
+    onTaskFinished: (task) => {
+      if (Array.isArray(task.logs) && task.logs.length > 0) {
+        renderLogs(terminalLogs, task.logs);
+      }
+      fetchLibrary();
+    },
     onIdle: (justFinished, data) => {
       if (justFinished) {
         progressFill.style.width = '100%';
@@ -641,7 +681,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   btnProbeCurrent.addEventListener('click', () => {
-    probeFolder(activePlaylist);
+    probeFolder(activePlaylist, true);
   });
 
   // Source & Destination Folder Controls + Folder Browser Modal
@@ -653,6 +693,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const ok = await fetchLibrary(cleanPath);
     if (ok) {
       log('info', '[SOURCE] Memuat folder sumber: ' + currentSourceDir);
+      notify({
+        type: 'info',
+        title: 'Folder Sumber Dimuat',
+        message: `${allFiles.length} file audio ditemukan di ${currentSourceDir}`,
+        duration: 4000,
+      });
       const mp3Playlist = allPlaylists.find(p => p.mp3_count > 0);
       if (mp3Playlist) {
         activePlaylist = mp3Playlist.name;
@@ -714,6 +760,12 @@ document.addEventListener('DOMContentLoaded', () => {
     onSelectDest: (chosenPath) => {
       if (destDirInput) destDirInput.value = chosenPath;
       log('info', '[DESTINATION] Folder tujuan disetel ke: ' + chosenPath);
+      notify({
+        type: 'info',
+        title: 'Folder Tujuan Disetel',
+        message: 'Hasil konversi akan disimpan ke: ' + chosenPath,
+        duration: 4000,
+      });
     },
     onLog: log,
   });
@@ -747,13 +799,31 @@ document.addEventListener('DOMContentLoaded', () => {
       const data = await res.json();
       if (res.ok) {
         log('info', '[QUEUE] ' + data.message);
+        notify({
+          type: 'info',
+          title: 'Konversi Masuk Antrian',
+          message: data.message,
+        });
         queueMonitor.poll();
       } else {
-        log('error', '[ERROR] ' + (data.error || 'Gagal menjadwalkan konversi.'));
+        const errMsg = data.error || 'Gagal menjadwalkan konversi.';
+        log('error', '[ERROR] ' + errMsg);
+        notify({
+          type: 'error',
+          title: 'Gagal Menjadwalkan Konversi',
+          message: errMsg,
+          playSound: true,
+        });
         btnConvertSelected.disabled = false;
       }
     } catch (err) {
       log('error', '[NETWORK ERROR] ' + err.message);
+      notify({
+        type: 'error',
+        title: 'Kesalahan Jaringan',
+        message: err.message,
+        playSound: true,
+      });
       btnConvertSelected.disabled = false;
     }
   });
@@ -787,12 +857,30 @@ document.addEventListener('DOMContentLoaded', () => {
       const data = await res.json();
       if (res.ok) {
         log('info', '[QUEUE] ' + data.message);
+        notify({
+          type: 'info',
+          title: 'Konversi Playlist Dijadwalkan',
+          message: data.message,
+        });
         queueMonitor.poll();
       } else {
-        log('error', '[ERROR] ' + (data.error || 'Gagal menjadwalkan konversi playlist.'));
+        const errMsg = data.error || 'Gagal menjadwalkan konversi playlist.';
+        log('error', '[ERROR] ' + errMsg);
+        notify({
+          type: 'error',
+          title: 'Gagal Menjadwalkan Konversi',
+          message: errMsg,
+          playSound: true,
+        });
       }
     } catch (err) {
       log('error', '[NETWORK ERROR] ' + err.message);
+      notify({
+        type: 'error',
+        title: 'Kesalahan Jaringan',
+        message: err.message,
+        playSound: true,
+      });
     } finally {
       setTimeout(() => {
         btnConvertPlaylist.disabled = false;

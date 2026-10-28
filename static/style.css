@@ -667,6 +667,16 @@ body.dark-theme {
   color: var(--accent-green);
 }
 
+.job-status-tag.exists {
+  background: rgba(168, 85, 247, 0.2);
+  color: #c084fc;
+}
+
+.job-status-tag.error {
+  background: rgba(239, 68, 68, 0.2);
+  color: var(--accent-red);
+}
+
 .job-url-label {
   font-size: 0.82rem;
   color: var(--text-secondary);
@@ -1238,4 +1248,626 @@ body.dark-theme {
   background: var(--accent-cyan);
   box-shadow: 0 0 14px rgba(6, 182, 212, 0.35);
 }
+
+/* ==========================================================================
+   Toast Notifications & Header Notification Center
+   ========================================================================== */
+.notif-center-wrapper {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.notif-bell-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-full);
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.18s ease;
+  flex-shrink: 0;
+}
+
+.notif-bell-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-cyan);
+  background: rgba(6, 182, 212, 0.1);
+}
+
+.notif-bell-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.notif-bell-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--accent-cyan);
+  color: #041318;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 10px rgba(6, 182, 212, 0.6);
+}
+
+.notif-bell-badge.hidden {
+  display: none;
+}
+
+.notif-popover {
+  position: fixed;
+  top: 4.3rem;
+  right: 1.5rem;
+  width: 390px;
+  max-width: calc(100vw - 1.5rem);
+  background: rgba(17, 20, 28, 0.98);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.75);
+  z-index: 10002;
+  overflow: hidden;
+}
+
+.notif-popover.hidden {
+  display: none;
+}
+
+.notif-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: var(--bg-surface-elevated);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.notif-popover-title {
+  font-family: var(--font-heading);
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.notif-popover-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.btn-notif-action {
+  background: var(--bg-core);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 0.24rem 0.55rem;
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-notif-action:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-cyan);
+}
+
+.notif-popover-list {
+  max-height: 340px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.notif-empty {
+  padding: 2rem 1rem;
+  text-align: center;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.notif-history-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  padding: 0.7rem 0.95rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  transition: background 0.15s ease;
+}
+
+.notif-history-item:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.notif-item-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 0.1rem;
+}
+
+.notif-item-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.notif-history-item.type-success .notif-item-icon {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+}
+
+.notif-history-item.type-exists .notif-item-icon {
+  background: rgba(168, 85, 247, 0.18);
+  color: #c084fc;
+}
+
+.notif-history-item.type-warning .notif-item-icon {
+  background: rgba(245, 158, 11, 0.16);
+  color: #fbbf24;
+}
+
+.notif-history-item.type-error .notif-item-icon {
+  background: rgba(239, 68, 68, 0.16);
+  color: #f87171;
+}
+
+.notif-history-item.type-info .notif-item-icon {
+  background: rgba(6, 182, 212, 0.16);
+  color: #38bdf8;
+}
+
+.notif-item-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.notif-item-top {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: 0.22rem;
+  flex-wrap: wrap;
+}
+
+.notif-item-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.notif-item-time {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.notif-item-msg {
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.notif-type-tag {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-weight: 800;
+  padding: 0.1rem 0.42rem;
+  border-radius: 4px;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.notif-type-tag.success {
+  background: rgba(16, 185, 129, 0.18);
+  color: #34d399;
+}
+
+.notif-type-tag.exists {
+  background: rgba(168, 85, 247, 0.2);
+  color: #c084fc;
+}
+
+.notif-type-tag.warning {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
+}
+
+.notif-type-tag.error {
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+}
+
+.notif-type-tag.info {
+  background: rgba(6, 182, 212, 0.18);
+  color: #38bdf8;
+}
+
+/* Floating Toast Stack */
+.toast-container {
+  position: fixed;
+  bottom: 1.35rem;
+  right: 1.35rem;
+  z-index: 10005;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  width: 390px;
+  max-width: calc(100vw - 1.5rem);
+  pointer-events: none;
+}
+
+.toast-card {
+  pointer-events: auto;
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.85rem 1rem 1rem 0.95rem;
+  background: rgba(17, 20, 28, 0.97);
+  backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-left: 4px solid var(--accent-cyan);
+  border-radius: var(--radius-md);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.65);
+  overflow: hidden;
+  animation: toastSlideIn 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.toast-card.toast-leaving {
+  opacity: 0;
+  transform: translateX(24px) scale(0.97);
+}
+
+@keyframes toastSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.toast-card.toast-success {
+  border-left-color: var(--accent-green);
+}
+
+.toast-card.toast-exists {
+  border-left-color: var(--accent-purple);
+}
+
+.toast-card.toast-warning {
+  border-left-color: var(--accent-amber);
+}
+
+.toast-card.toast-error {
+  border-left-color: var(--accent-red);
+}
+
+.toast-card.toast-info {
+  border-left-color: var(--accent-cyan);
+}
+
+.toast-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 0.05rem;
+}
+
+.toast-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.toast-success .toast-icon {
+  background: rgba(16, 185, 129, 0.16);
+  color: #34d399;
+}
+
+.toast-exists .toast-icon {
+  background: rgba(168, 85, 247, 0.18);
+  color: #c084fc;
+}
+
+.toast-warning .toast-icon {
+  background: rgba(245, 158, 11, 0.16);
+  color: #fbbf24;
+}
+
+.toast-error .toast-icon {
+  background: rgba(239, 68, 68, 0.18);
+  color: #f87171;
+}
+
+.toast-info .toast-icon {
+  background: rgba(6, 182, 212, 0.16);
+  color: #38bdf8;
+}
+
+.toast-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.toast-header-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: 0.25rem;
+  flex-wrap: wrap;
+}
+
+.toast-title {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.toast-time {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.toast-message {
+  font-size: 0.77rem;
+  color: var(--text-secondary);
+  line-height: 1.42;
+  word-break: break-word;
+}
+
+.toast-close-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1.15rem;
+  line-height: 1;
+  padding: 0 0.15rem;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.toast-close-btn:hover {
+  color: var(--text-primary);
+}
+
+.toast-progress-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.toast-progress-bar {
+  height: 100%;
+  width: 100%;
+  transform-origin: left center;
+  animation-name: toastProgressShrink;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+.toast-success .toast-progress-bar { background: var(--accent-green); }
+.toast-exists .toast-progress-bar { background: var(--accent-purple); }
+.toast-warning .toast-progress-bar { background: var(--accent-amber); }
+.toast-error .toast-progress-bar { background: var(--accent-red); }
+.toast-info .toast-progress-bar { background: var(--accent-cyan); }
+
+@keyframes toastProgressShrink {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
+
+/* ==========================================================================
+   Mobile & Tablet Responsive Breakpoints
+   ========================================================================== */
+@media (max-width: 768px) {
+  .app-header {
+    position: relative;
+    padding: 0.9rem 1rem;
+    gap: 0.75rem;
+  }
+
+  .brand {
+    width: 100%;
+  }
+
+  .brand-subtitle {
+    white-space: normal;
+    line-height: 1.3;
+  }
+
+  .app-nav {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .nav-tab {
+    flex: 1;
+    justify-content: center;
+    padding: 0.5rem 0.65rem;
+    font-size: 0.78rem;
+  }
+
+  .system-status-group {
+    width: 100%;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    padding-bottom: 0.15rem;
+    gap: 0.45rem;
+    scrollbar-width: none;
+  }
+
+  .system-status-group::-webkit-scrollbar {
+    display: none;
+  }
+
+  .app-container {
+    padding: 1rem;
+  }
+
+  .dashboard-grid {
+    gap: 1.1rem;
+    margin-bottom: 1.1rem;
+  }
+
+  .console-card {
+    padding: 1.15rem;
+  }
+
+  .card-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.65rem;
+  }
+
+  .library-actions {
+    width: 100%;
+  }
+
+  .library-actions .btn-accent,
+  .library-actions .btn-secondary {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .action-footer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .action-footer .btn-primary,
+  .action-footer .btn-accent {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .converter-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 0.75rem;
+  }
+
+  .toolbar-filters {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+  }
+
+  .toolbar-input,
+  .toolbar-select {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .toolbar-selection-btns {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .file-name-cell {
+    max-width: 220px;
+  }
+
+  .group-toggle-hint {
+    display: none;
+  }
+
+  .system-notice-card {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 1rem;
+    gap: 0.75rem;
+  }
+
+  .audio-legend-card {
+    padding: 1rem;
+  }
+
+  .legend-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .toast-container {
+    left: 0.75rem;
+    right: 0.75rem;
+    bottom: 0.75rem;
+    width: auto;
+    max-width: none;
+  }
+
+  .notif-popover {
+    left: 0.75rem;
+    right: 0.75rem;
+    top: 4.5rem;
+    width: auto;
+    max-width: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .brand-title-row h1 {
+    font-size: 1.1rem;
+  }
+
+  .brand-subtitle {
+    font-size: 0.72rem;
+  }
+
+  .nav-tab {
+    font-size: 0.74rem;
+    padding: 0.45rem 0.4rem;
+    gap: 0.3rem;
+  }
+
+  .app-container {
+    padding: 0.75rem;
+  }
+
+  .console-card {
+    padding: 0.95rem;
+  }
+
+  .qc-table th,
+  .qc-table td {
+    padding: 0.48rem 0.65rem;
+  }
+
+  .file-name-cell {
+    max-width: 175px;
+  }
+}
+
 

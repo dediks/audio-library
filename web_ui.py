@@ -124,7 +124,7 @@ def iter_audio_files_safe(root_dir: Path, allowed_exts: set[str] | None = None) 
 
 
 def get_windows_shortcuts() -> list[dict]:
-    """Builds quick-access shortcuts for WSL + Windows drives and user folders."""
+    """Builds quick-access shortcuts for WSL + Windows drives and the active Windows user folders."""
     shortcuts = [
         {"label": "📥 Inbox Proyek", "path": str(INBOX_DIR.resolve())},
         {"label": "🏠 WSL Home", "path": str(Path.home().resolve())},
@@ -135,29 +135,64 @@ def get_windows_shortcuts() -> list[dict]:
 
     mnt_root = Path("/mnt")
     if mnt_root.is_dir():
-        # Detect Windows user profile directories under /mnt/c/Users
+        # Detect the active Windows user profile directory under /mnt/c/Users
         win_users_dir = mnt_root / "c" / "Users"
         if win_users_dir.is_dir():
-            skip_users = {"Public", "Default", "Default User", "All Users"}
+            skip_users = {
+                "public",
+                "default",
+                "default user",
+                "all users",
+                "wsiaccount",
+                "wdagutilityaccount",
+                "administrator",
+                "guest",
+            }
+            candidate_users: list[tuple[float, Path]] = []
             try:
                 for udir in sorted(win_users_dir.iterdir()):
-                    if udir.name.startswith(".") or udir.name in skip_users:
+                    name_low = udir.name.lower()
+                    if (
+                        udir.name.startswith(".")
+                        or name_low in skip_users
+                        or name_low.startswith("defaultuser")
+                        or name_low.startswith("temp")
+                    ):
                         continue
                     try:
                         if not udir.is_dir():
                             continue
+                        # Score by most recent activity in Downloads / Desktop / Music / profile root
+                        latest_mtime = udir.stat().st_mtime
+                        for probe_sub in ("Downloads", "Desktop", "Music", "NTUSER.DAT"):
+                            sp = udir / probe_sub
+                            try:
+                                if sp.exists():
+                                    latest_mtime = max(latest_mtime, sp.stat().st_mtime)
+                            except OSError:
+                                pass
+                        candidate_users.append((latest_mtime, udir))
                     except OSError:
                         continue
-                    shortcuts.append({"label": f"🪟 Win User ({udir.name})", "path": str(udir)})
-                    for sub_label, sub_name in (("🎵 Win Music", "Music"), ("⬇️ Win Downloads", "Downloads"), ("🖥️ Win Desktop", "Desktop")):
-                        sub_p = udir / sub_name
-                        try:
-                            if sub_p.is_dir():
-                                shortcuts.append({"label": sub_label, "path": str(sub_p)})
-                        except OSError:
-                            pass
             except OSError:
                 pass
+
+            if candidate_users:
+                # Pick the most recently active Windows user profile as primary
+                candidate_users.sort(key=lambda item: item[0], reverse=True)
+                primary_udir = candidate_users[0][1]
+                shortcuts.append({"label": f"🪟 Win User ({primary_udir.name})", "path": str(primary_udir)})
+                for sub_label, sub_name in (
+                    ("🎵 Win Music", "Music"),
+                    ("⬇️ Win Downloads", "Downloads"),
+                    ("🖥️ Win Desktop", "Desktop"),
+                ):
+                    sub_p = primary_udir / sub_name
+                    try:
+                        if sub_p.is_dir():
+                            shortcuts.append({"label": sub_label, "path": str(sub_p)})
+                    except OSError:
+                        pass
 
         # Detect mounted Windows drive letters (/mnt/c, /mnt/d, /mnt/e, ...)
         try:
@@ -250,10 +285,27 @@ def _append_task_log(task: dict, message: str) -> None:
         logs.pop(0)
 
 
-def _finish_task(task: dict, status: str, error: str | None = None, progress: float | None = None) -> None:
+def _finish_task(
+    task: dict,
+    status: str,
+    error: str | None = None,
+    progress: float | None = None,
+    outcome: str | None = None,
+    title: str | None = None,
+    summary: str | None = None,
+    stats: dict | None = None,
+) -> None:
     """Marks the active task completed/failed and moves it into task_history under queue_lock."""
     global current_task
     task["status"] = status
+    task["outcome"] = outcome or status
+    task["finished_at"] = time.time()
+    if title is not None:
+        task["title"] = title
+    if summary is not None:
+        task["summary"] = summary
+    if stats is not None:
+        task["stats"] = stats
     if error is not None:
         task["error"] = error
     if progress is not None:
@@ -312,9 +364,19 @@ def _execute_resample_task(task: dict) -> None:
     overwrite = bool(task.get("overwrite", False))
     raw_source_dir = task.get("source_dir")
     raw_dest_dir = task.get("dest_dir")
+    rate_label = "44.1 kHz" if target_rate == 44100 else f"{target_rate} Hz"
+    spec_label = f"{rate_label} • {target_bitrate} kbps"
 
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
-        _finish_task(task, "FAILED", error="FFmpeg / FFprobe belum terinstall di PATH.")
+        err_msg = "FFmpeg / FFprobe belum terinstall di PATH sistem."
+        _finish_task(
+            task,
+            "FAILED",
+            error=err_msg,
+            outcome="FAILED",
+            title="Konversi Gagal (FFmpeg Missing)",
+            summary=err_msg,
+        )
         return
 
     try:
@@ -326,15 +388,31 @@ def _execute_resample_task(task: dict) -> None:
         )
     except Exception as dir_exc:
         _append_task_log(task, f"[RESAMPLE ERROR] {dir_exc}")
-        _finish_task(task, "FAILED", error=str(dir_exc))
+        _finish_task(
+            task,
+            "FAILED",
+            error=str(dir_exc),
+            outcome="FAILED",
+            title="Konversi Gagal (Folder Tidak Valid)",
+            summary=str(dir_exc),
+        )
         return
 
     allowed = {".mp3"} if only_mp3 else audio_manager.EXTENSIONS
     files = _resolve_resample_files(source_resolved, allowed, rel_paths, rel_path, playlist)
     total = len(files)
     if total == 0:
-        _append_task_log(task, "[RESAMPLE] Tidak ada file audio yang cocok untuk dikonversi.")
-        _finish_task(task, "SUCCESS", progress=100)
+        msg = "Tidak ditemukan file audio yang cocok untuk dikonversi pada pilihan ini."
+        _append_task_log(task, f"[RESAMPLE] {msg}")
+        _finish_task(
+            task,
+            "SUCCESS",
+            progress=100,
+            outcome="WARNING",
+            title="Tidak Ada File untuk Dikonversi",
+            summary=msg,
+            stats={"converted": 0, "skipped": 0, "errors": 0},
+        )
         return
 
     mode_desc = "OVERWRITE" if overwrite else (f"TUJUAN: {dest_resolved}" if dest_resolved else "SALIN BARU OTOMATIS")
@@ -345,6 +423,7 @@ def _execute_resample_task(task: dict) -> None:
     converted_count = 0
     skipped_count = 0
     error_count = 0
+    last_converted_name = ""
 
     for idx, fpath in enumerate(files, 1):
         task["progress"] = min(99, round(((idx - 1) / total) * 100))
@@ -363,6 +442,7 @@ def _execute_resample_task(task: dict) -> None:
             )
             if res["status"] == "CONVERTED":
                 converted_count += 1
+                last_converted_name = fpath.name
                 _append_task_log(task, f"[{idx}/{total}] CONVERTED: {res['message']}")
                 out_p = Path(res["file"])
                 old_p_str = res.get("old_file", str(fpath))
@@ -390,7 +470,43 @@ def _execute_resample_task(task: dict) -> None:
         task,
         f"[RESAMPLE SELESAI] Dikonversi: {converted_count} | Dilewati: {skipped_count} | Error: {error_count}",
     )
-    _finish_task(task, "SUCCESS" if error_count == 0 else "FAILED", progress=100)
+
+    stats = {"converted": converted_count, "skipped": skipped_count, "errors": error_count}
+    if error_count == 0 and converted_count == 0 and skipped_count > 0:
+        outcome = "ALREADY_EXISTS"
+        title = "File Sudah Sesuai Target (Dilewati)"
+        summary = (
+            f"Lagu '{files[0].name}' sudah berformat {spec_label} atau sudah ada di folder tujuan."
+            if skipped_count == 1
+            else f"Seluruh {skipped_count} lagu yang dipilih sudah berformat {spec_label} (dilewati otomatis)."
+        )
+    elif error_count == 0 and converted_count > 0:
+        outcome = "SUCCESS"
+        title = "Konversi SoXR Selesai"
+        if converted_count == 1 and skipped_count == 0:
+            summary = f"Berhasil mengonversi '{last_converted_name}' ke {spec_label}."
+        elif skipped_count > 0:
+            summary = f"Berhasil mengonversi {converted_count} lagu ke {spec_label} ({skipped_count} dilewati karena sudah sesuai)."
+        else:
+            summary = f"Berhasil mengonversi {converted_count} lagu ke {spec_label}."
+    elif converted_count > 0 and error_count > 0:
+        outcome = "WARNING"
+        title = "Konversi Selesai Sebagian"
+        summary = f"{converted_count} lagu berhasil dikonversi ke {spec_label}, {error_count} gagal, {skipped_count} dilewati."
+    else:
+        outcome = "FAILED"
+        title = "Konversi Gagal"
+        summary = f"Gagal mengonversi {error_count} file audio. Periksa log terminal untuk detail."
+
+    _finish_task(
+        task,
+        "SUCCESS" if error_count == 0 else "FAILED",
+        progress=100,
+        outcome=outcome,
+        title=title,
+        summary=summary,
+        stats=stats,
+    )
 
 
 def _execute_download_task(task: dict) -> None:
@@ -402,11 +518,15 @@ def _execute_download_task(task: dict) -> None:
     ARCHIVE_FILE.parent.mkdir(parents=True, exist_ok=True)
 
     if not shutil.which("yt-dlp"):
+        err_msg = "yt-dlp belum terinstall di sistem. Jalankan: pip install yt-dlp"
         _finish_task(
             task,
             "FAILED",
-            error="yt-dlp belum terinstall di sistem. Jalankan: pip install yt-dlp",
+            error=err_msg,
             progress=0,
+            outcome="FAILED",
+            title="Unduhan Gagal (yt-dlp Missing)",
+            summary=err_msg,
         )
         return
 
@@ -432,12 +552,23 @@ def _execute_download_task(task: dict) -> None:
 
     js_runtime, run_env = audio_manager.find_js_runtime()
     downloaded_files_before = set(p for p in INBOX_DIR.rglob("*") if p.is_file())
+    existing_by_vid: dict[str, str] = {}
+    for p in downloaded_files_before:
+        if p.suffix.lower() in audio_manager.EXTENSIONS:
+            m_vid = re.search(r"\[([A-Za-z0-9_-]{11})\]$", p.stem)
+            if m_vid:
+                existing_by_vid[m_vid.group(1)] = p.name
+
     attempts = [True, False] if use_cookies else [False]
 
     success = False
     final_code = 0
+    skipped_files: list[str] = []
+    last_error_line = ""
 
     for try_idx, with_cookies in enumerate(attempts):
+        skipped_files = []
+        last_error_line = ""
         cmd, target_desc = audio_manager.build_ytdlp_command(
             url=url,
             output_template=template,
@@ -482,6 +613,27 @@ def _execute_download_task(task: dict) -> None:
                     ):
                         cookie_err_detected = True
 
+                    if "ERROR:" in clean_line:
+                        last_error_line = clean_line.split("ERROR:", 1)[-1].strip()
+
+                    arch_match = re.search(
+                        r"\[download\]\s+([A-Za-z0-9_-]{11}):\s+has already been recorded in the archive",
+                        clean_line,
+                    )
+                    if arch_match:
+                        vid = arch_match.group(1)
+                        fname = existing_by_vid.get(vid, f"Video ID [{vid}]")
+                        if fname not in skipped_files:
+                            skipped_files.append(fname)
+                        _append_task_log(task, f"[SKIPPED] File sudah ada di Library: {fname}")
+
+                    disk_match = re.search(r"\[download\]\s+(.+?)\s+has already been downloaded", clean_line)
+                    if disk_match:
+                        fname = Path(disk_match.group(1)).name
+                        if fname not in skipped_files:
+                            skipped_files.append(fname)
+                        _append_task_log(task, f"[SKIPPED] File sudah ada di Library: {fname}")
+
                     fmt_match = re.search(r"Downloading \d+ format\(s\):\s*([^\s,]+)", clean_line)
                     if fmt_match:
                         _append_task_log(task, audio_manager.describe_format_tier(fmt_match.group(1)))
@@ -503,31 +655,102 @@ def _execute_download_task(task: dict) -> None:
             break
         except Exception as proc_exc:
             _append_task_log(task, f"Execution error: {proc_exc}")
+            last_error_line = str(proc_exc)
             final_code = 1
             if with_cookies and len(attempts) > try_idx + 1:
                 continue
             break
 
+    downloaded_files_after = set(p for p in INBOX_DIR.rglob("*") if p.is_file())
+    new_files = sorted(
+        [
+            f for f in downloaded_files_after
+            if f not in downloaded_files_before and f.suffix.lower() in audio_manager.EXTENSIONS
+        ],
+        key=lambda x: x.name,
+    )
+    clipping_count = 0
+
+    if new_files and auto_scan and shutil.which("ffmpeg") and shutil.which("ffprobe"):
+        _append_task_log(task, "Initiating audio QC audit (EBU R128 & True Peak)...")
+        for nf in new_files:
+            try:
+                qc_data = audio_manager.audit_one(nf)
+                with cache_lock:
+                    cached_qc_results[str(nf)] = qc_data
+                tp_val = audio_manager.get_float(qc_data.get("true_peak_dbtp"))
+                if tp_val is not None and tp_val > 0:
+                    clipping_count += 1
+                _append_task_log(task, f"QC completed: {nf.name} [Status: {qc_data.get('status')}]")
+            except Exception as qc_err:
+                _append_task_log(task, f"QC error on {nf.name}: {qc_err}")
+
+    dl_count = len(new_files)
+    skip_count = len(skipped_files)
+    stats = {"downloaded": dl_count, "skipped": skip_count, "clipping": clipping_count}
+
     if success:
         _append_task_log(task, "Extraction finished successfully.")
-        if auto_scan and shutil.which("ffmpeg") and shutil.which("ffprobe"):
-            _append_task_log(task, "Initiating audio QC audit (EBU R128 & True Peak)...")
-            downloaded_files_after = set(p for p in INBOX_DIR.rglob("*") if p.is_file())
-            new_files = [
-                f for f in downloaded_files_after
-                if f not in downloaded_files_before and f.suffix.lower() in audio_manager.EXTENSIONS
-            ]
-            for nf in new_files:
-                try:
-                    qc_data = audio_manager.audit_one(nf)
-                    with cache_lock:
-                        cached_qc_results[str(nf)] = qc_data
-                    _append_task_log(task, f"QC completed: {nf.name} [Status: {qc_data.get('status')}]")
-                except Exception as qc_err:
-                    _append_task_log(task, f"QC error on {nf.name}: {qc_err}")
-        _finish_task(task, "SUCCESS", progress=100)
+        if dl_count == 0 and skip_count > 0:
+            outcome = "ALREADY_EXISTS"
+            title = "File Sudah Ada di Library"
+            if skip_count == 1:
+                summary = f"Lagu sudah ada di Library dan dilewati otomatis: {skipped_files[0]}"
+            else:
+                summary = f"Seluruh {skip_count} lagu pada URL ini sudah ada di Library (dilewati otomatis)."
+        elif dl_count == 0 and skip_count == 0:
+            outcome = "ALREADY_EXISTS"
+            title = "File Sudah Ada di Library"
+            summary = "Tidak ada file audio baru yang diunduh karena file sudah tersedia di Inbox."
+        elif dl_count > 0 and skip_count > 0:
+            outcome = "WARNING" if clipping_count > 0 else "PARTIAL"
+            title = "Unduhan Selesai (Sebagian Sudah Ada)"
+            qc_note = f" • ⚠️ {clipping_count} lagu terdeteksi Clipping Hazard (> 0 dBTP)!" if clipping_count > 0 else ""
+            summary = f"{dl_count} lagu baru berhasil diunduh, {skip_count} lagu dilewati karena sudah ada di Library.{qc_note}"
+        else:
+            outcome = "WARNING" if clipping_count > 0 else "SUCCESS"
+            title = "Unduhan & QC Selesai (Perhatian Headroom)" if clipping_count > 0 else "Unduhan Selesai"
+            base_msg = (
+                f"Berhasil mengunduh: {new_files[0].name}"
+                if dl_count == 1
+                else f"Berhasil mengunduh {dl_count} file audio baru ke Inbox."
+            )
+            qc_note = f" • ⚠️ {clipping_count} lagu memiliki True Peak > 0 dBTP (Clipping Hazard)." if clipping_count > 0 else ""
+            summary = base_msg + qc_note
+
+        _finish_task(
+            task,
+            "SUCCESS",
+            progress=100,
+            outcome=outcome,
+            title=title,
+            summary=summary,
+            stats=stats,
+        )
     else:
-        _finish_task(task, "FAILED", error=f"yt-dlp exited with code {final_code}")
+        err_short = last_error_line[:140] if last_error_line else f"yt-dlp exited with code {final_code}"
+        if dl_count > 0:
+            outcome = "WARNING"
+            title = "Unduhan Selesai Sebagian (Ada Error)"
+            summary = f"{dl_count} lagu berhasil diunduh, namun ada item yang gagal ({err_short})."
+        elif skip_count > 0 and not last_error_line:
+            outcome = "ALREADY_EXISTS"
+            title = "File Sudah Ada di Library"
+            summary = f"{skip_count} lagu dilewati karena sudah ada di Library."
+        else:
+            outcome = "FAILED"
+            title = "Unduhan Gagal"
+            summary = f"Gagal mengunduh dari URL: {err_short}"
+
+        _finish_task(
+            task,
+            "FAILED",
+            error=err_short,
+            outcome=outcome,
+            title=title,
+            summary=summary,
+            stats=stats,
+        )
 
 
 def run_worker():
@@ -679,34 +902,68 @@ class AudioServerHandler(BaseHTTPRequestHandler):
             urls = [line.strip() for line in urls.splitlines() if line.strip()]
 
         valid_tasks = []
+        invalid_count = 0
+        duplicate_count = 0
+        seen_batch: set[str] = set()
+        with queue_lock:
+            queued_urls = {t.get("url") for t in task_queue if t.get("type") != "resample"}
+            if current_task and current_task.get("type") != "resample":
+                queued_urls.add(current_task.get("url"))
+
         for u in urls:
-            if validate_url(u):
-                valid_tasks.append({
-                    "id": f"job_{int(time.time() * 1000)}_{len(valid_tasks)}",
-                    "url": u.strip(),
-                    "status": "QUEUED",
-                    "auto_scan": auto_scan,
-                    "is_playlist": is_playlist,
-                    "audio_format": audio_format,
-                    "keep_opus": keep_opus,
-                    "use_cookies": use_cookies,
-                    "cookie_browser": cookie_browser,
-                    "progress": 0,
-                    "created_at": time.time(),
-                })
+            clean_u = u.strip() if isinstance(u, str) else ""
+            if not clean_u:
+                continue
+            if not validate_url(clean_u):
+                invalid_count += 1
+                continue
+            if clean_u in seen_batch or clean_u in queued_urls:
+                duplicate_count += 1
+                continue
+            seen_batch.add(clean_u)
+            valid_tasks.append({
+                "id": f"job_{int(time.time() * 1000)}_{len(valid_tasks)}",
+                "type": "download",
+                "url": clean_u,
+                "status": "QUEUED",
+                "auto_scan": auto_scan,
+                "is_playlist": is_playlist,
+                "audio_format": audio_format,
+                "keep_opus": keep_opus,
+                "use_cookies": use_cookies,
+                "cookie_browser": cookie_browser,
+                "progress": 0,
+                "created_at": time.time(),
+            })
 
         if not valid_tasks:
+            if duplicate_count > 0 and invalid_count == 0:
+                self.send_json(400, {
+                    "error": "URL tersebut sudah berada di dalam antrian unduhan yang sedang berjalan.",
+                    "duplicate_count": duplicate_count,
+                })
+                return
             self.send_json(400, {
-                "error": "Tidak ada URL YouTube yang valid. Pastikan domain youtube.com / youtu.be."
+                "error": "Tidak ada URL YouTube yang valid. Pastikan domain youtube.com / youtu.be.",
+                "invalid_count": invalid_count,
             })
             return
 
         with queue_lock:
             task_queue.extend(valid_tasks)
 
+        extra_notes = []
+        if duplicate_count > 0:
+            extra_notes.append(f"{duplicate_count} URL duplikat diabaikan")
+        if invalid_count > 0:
+            extra_notes.append(f"{invalid_count} URL tidak valid dilewati")
+        suffix = f" ({', '.join(extra_notes)})" if extra_notes else ""
+
         self.send_json(200, {
-            "message": f"Berhasil menambahkan {len(valid_tasks)} item ke antrian.",
+            "message": f"Berhasil menambahkan {len(valid_tasks)} item ke antrian{suffix}.",
             "added_count": len(valid_tasks),
+            "duplicate_count": duplicate_count,
+            "invalid_count": invalid_count,
         })
 
     def _handle_post_scan(self) -> None:
