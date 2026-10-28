@@ -11,67 +11,8 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body class="dark-theme">
-  <!-- Top Navigation & System Status Bar -->
-  <header class="app-header">
-    <div class="brand">
-      <div class="brand-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M9 18V5l12-2v13"></path>
-          <circle cx="6" cy="18" r="3"></circle>
-          <circle cx="18" cy="16" r="3"></circle>
-        </svg>
-      </div>
-      <div class="brand-info">
-        <h1 class="brand-title">AUDIO LAB <span class="badge-studio">PRO FOH</span></h1>
-        <p class="brand-subtitle">High-Fidelity Ingestion &amp; Soundsystem QC Monitor</p>
-      </div>
-    </div>
-
-    <!-- Top Navigation Tabs -->
-    <nav class="app-nav" aria-label="Main Navigation">
-      <a href="/" class="nav-tab active">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-          <polyline points="7 10 12 15 17 10"></polyline>
-          <line x1="12" y1="15" x2="12" y2="3"></line>
-        </svg>
-        <span>Ingestion &amp; QC</span>
-      </a>
-      <a href="/converter" class="nav-tab">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polyline points="17 1 21 5 17 9"></polyline>
-          <path d="M3 11V9a4 4 0 0 1 4-4h14"></path>
-          <polyline points="7 23 3 19 7 15"></polyline>
-          <path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
-        </svg>
-        <span>Sample Rate Converter</span>
-      </a>
-    </nav>
-
-    <!-- System Diagnostics Bar -->
-    <div class="system-status-group" id="systemStatusGroup">
-      <div class="status-pill" id="statusPython">
-        <span class="status-indicator active"></span>
-        <span class="status-label">Python:</span>
-        <span class="status-val" id="pythonVal">3.12</span>
-      </div>
-      <div class="status-pill" id="statusYtdlp">
-        <span class="status-indicator" id="ytdlpDot"></span>
-        <span class="status-label">yt-dlp:</span>
-        <span class="status-val" id="ytdlpVal">checking...</span>
-      </div>
-      <div class="status-pill" id="statusFfmpeg">
-        <span class="status-indicator" id="ffmpegDot"></span>
-        <span class="status-label">FFmpeg:</span>
-        <span class="status-val" id="ffmpegVal">checking...</span>
-      </div>
-      <div class="status-pill" id="statusCookies">
-        <span class="status-indicator" id="cookiesDot"></span>
-        <span class="status-label">Premium:</span>
-        <span class="status-val" id="cookiesVal">checking...</span>
-      </div>
-    </div>
-  </header>
+  <!-- Top Navigation & System Status Bar (Shared Component mounted via ui-shared.js) -->
+  <header class="app-header" id="appHeader" data-page="ingest"></header>
 
   <main class="app-container">
     <!-- Notice Banner for Missing Binaries if any -->
@@ -310,6 +251,24 @@
         </div>
       </div>
 
+      <!-- Filter & Group Controls Toolbar -->
+      <div class="converter-toolbar">
+        <div class="toolbar-filters">
+          <input
+            type="search"
+            id="librarySearchInput"
+            class="toolbar-input"
+            placeholder="Cari judul lagu atau nama playlist..."
+            aria-label="Cari lagu atau playlist"
+          >
+        </div>
+        <div class="toolbar-selection-btns">
+          <span class="selection-counter-pill" id="librarySummaryPill">0 lagu</span>
+          <button type="button" id="btnCollapseAllGroups" class="btn-chip">Lipat Semua Folder</button>
+          <button type="button" id="btnExpandAllGroups" class="btn-chip">Buka Semua Folder</button>
+        </div>
+      </div>
+
       <!-- Table Container -->
       <div class="table-responsive">
         <table class="qc-table" id="qcTable">
@@ -358,6 +317,6 @@
     <p>Audio Lab Ingestion Engine &bull; Strictly running on <code>127.0.0.1:8765</code> &bull; Native Audio Preservation</p>
   </footer>
 
-  <script src="/static/app.js"></script>
+  <script type="module" src="/static/app.js"></script>
 </body>
 </html>

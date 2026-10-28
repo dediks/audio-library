@@ -3,10 +3,18 @@
  * Strict DOM Manipulation (No innerHTML, strictly textContent & createElement)
  */
 
-document.addEventListener('DOMContentLoaded', () => {
-  const ffmpegDot = document.getElementById('ffmpegDot');
-  const ffmpegVal = document.getElementById('ffmpegVal');
+import {
+  initAppHeader,
+  appendLog,
+  renderLogs,
+  groupFilesByFolder,
+  createGroupHeaderBar,
+  createFileNameCell,
+  createQueueMonitor,
+} from './modules/ui-shared.js';
+import { initFolderModal } from './modules/folder-modal.js';
 
+document.addEventListener('DOMContentLoaded', () => {
   const playlistGrid = document.getElementById('playlistGrid');
   const probeStatusHint = document.getElementById('probeStatusHint');
   const activePlaylistSummary = document.getElementById('activePlaylistSummary');
@@ -36,6 +44,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const filterBitrate = document.getElementById('filterBitrate');
 
   const selectionCounterPill = document.getElementById('selectionCounterPill');
+  const btnCollapseAllGroups = document.getElementById('btnCollapseAllGroups');
+  const btnExpandAllGroups = document.getElementById('btnExpandAllGroups');
   const btnSelectNeedConvert = document.getElementById('btnSelectNeedConvert');
   const btnSelectVisible = document.getElementById('btnSelectVisible');
   const btnClearSelection = document.getElementById('btnClearSelection');
@@ -51,19 +61,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnBrowseDest = document.getElementById('btnBrowseDest');
   const btnClearDest = document.getElementById('btnClearDest');
 
-  // Folder Browser Modal elements
-  const folderModal = document.getElementById('folderModal');
-  const folderModalTitle = document.getElementById('folderModalTitle');
-  const btnCloseModal = document.getElementById('btnCloseModal');
-  const modalShortcuts = document.getElementById('modalShortcuts');
-  const btnModalUp = document.getElementById('btnModalUp');
-  const modalCurrentPath = document.getElementById('modalCurrentPath');
-  const modalDirList = document.getElementById('modalDirList');
-  const newFolderNameInput = document.getElementById('newFolderNameInput');
-  const btnCreateSubfolder = document.getElementById('btnCreateSubfolder');
-  const btnCancelModal = document.getElementById('btnCancelModal');
-  const btnSelectModalDir = document.getElementById('btnSelectModalDir');
-
   // State
   let allFiles = [];
   let allPlaylists = [];
@@ -71,12 +68,18 @@ document.addEventListener('DOMContentLoaded', () => {
   const selectedPaths = new Set();
   let visibleFiles = [];
   let lastClickedIndex = null;
-  let wasJobRunning = false;
   const probedFolders = new Set();
   let currentSourceDir = '';
-  let modalTargetMode = 'source'; // 'source' | 'dest'
-  let modalBrowsingPath = '';
-  let modalParentPath = null;
+  const collapsedGroups = new Set();
+
+  // Map of rel_path -> { tr: HTMLTableRowElement, chk: HTMLInputElement } for O(1) DOM selection updates
+  const rowElementsByPath = new Map();
+  // Map of groupKey -> { childRows: HTMLTableRowElement[], chevron: HTMLElement, toggleHint: HTMLElement, groupChk: HTMLInputElement, filePaths: string[] }
+  const groupDomMap = new Map();
+
+  function log(level, message) {
+    appendLog(terminalLogs, level, message);
+  }
 
   function getTargetRate() {
     const checked = document.querySelector('input[name="targetRate"]:checked');
@@ -97,45 +100,8 @@ document.addEventListener('DOMContentLoaded', () => {
     return rateMatch && brMatch;
   }
 
-  function appendLog(level, message) {
-    const p = document.createElement('p');
-    p.className = 'log-line ' + level;
-    p.textContent = message;
-    terminalLogs.appendChild(p);
-    terminalLogs.scrollTop = terminalLogs.scrollHeight;
-  }
-
-  function renderLogs(logs) {
-    terminalLogs.replaceChildren();
-    logs.forEach(msg => {
-      const p = document.createElement('p');
-      let lvl = 'info';
-      if (msg.includes('ERROR') || msg.includes('Failed')) lvl = 'error';
-      else if (msg.includes('SKIPPED')) lvl = 'warn';
-      p.className = 'log-line ' + lvl;
-      p.textContent = msg;
-      terminalLogs.appendChild(p);
-    });
-    terminalLogs.scrollTop = terminalLogs.scrollHeight;
-  }
-
-  // 1. System status check
-  async function fetchSystemStatus() {
-    try {
-      const res = await fetch('/api/system');
-      if (!res.ok) return;
-      const data = await res.json();
-      if (data.ffmpeg && data.ffprobe) {
-        ffmpegDot.className = 'status-indicator active';
-        ffmpegVal.textContent = 'Ready';
-      } else {
-        ffmpegDot.className = 'status-indicator error';
-        ffmpegVal.textContent = 'Missing';
-      }
-    } catch (err) {
-      // Ignore transient error
-    }
-  }
+  // 1. Mount Shared Top Header & System status check
+  initAppHeader({ activePage: 'converter' });
 
   // 2. Fetch library and playlists
   async function fetchLibrary(customSource) {
@@ -147,7 +113,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const res = await fetch(url);
       const data = await res.json();
       if (!res.ok) {
-        appendLog('error', '[LIBRARY] ' + (data.error || 'Gagal memuat folder sumber.'));
+        log('error', '[LIBRARY] ' + (data.error || 'Gagal memuat folder sumber.'));
         return false;
       }
       if (data.source_dir) {
@@ -168,7 +134,7 @@ document.addEventListener('DOMContentLoaded', () => {
       updateSelectionUI();
       return true;
     } catch (err) {
-      appendLog('error', '[LIBRARY] Gagal memuat daftar lagu: ' + err.message);
+      log('error', '[LIBRARY] Gagal memuat daftar lagu: ' + err.message);
       return false;
     }
   }
@@ -185,7 +151,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const res = await fetch('/api/probe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
       });
       if (res.ok) {
         const data = await res.json();
@@ -197,7 +163,7 @@ document.addEventListener('DOMContentLoaded', () => {
         updateSelectionUI();
       }
     } catch (err) {
-      appendLog('error', '[PROBE] Gagal membaca metadata: ' + err.message);
+      log('error', '[PROBE] Gagal membaca metadata: ' + err.message);
     } finally {
       if (probeStatusHint) {
         probeStatusHint.textContent = 'Klik playlist untuk memfilter & membaca sample rate lagu';
@@ -213,23 +179,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const totalSongs = allFiles.length;
     const totalMp3 = allFiles.filter(f => f.ext === '.mp3').length;
 
-    // "Semua Koleksi" card
-    const allCard = createPlaylistCard(
-      'ALL',
-      'Semua Koleksi (Inbox)',
-      totalSongs + ' lagu total',
-      totalMp3 + ' MP3'
+    const fragment = document.createDocumentFragment();
+    fragment.appendChild(
+      createPlaylistCard('ALL', 'Semua Koleksi (Inbox)', totalSongs + ' lagu total', totalMp3 + ' MP3')
     );
-    playlistGrid.appendChild(allCard);
 
     allPlaylists.forEach(pl => {
       const displayLabel = pl.label || ('📁 ' + pl.name);
       const subText = pl.total + ' lagu';
       const badgeText = pl.mp3_count > 0 ? (pl.mp3_count + ' MP3') : (pl.other_count + ' Native');
-      const card = createPlaylistCard(pl.name, displayLabel, subText, badgeText);
-      playlistGrid.appendChild(card);
+      fragment.appendChild(createPlaylistCard(pl.name, displayLabel, subText, badgeText));
     });
 
+    playlistGrid.appendChild(fragment);
     updatePlaylistSummaryText();
   }
 
@@ -264,7 +226,6 @@ document.addEventListener('DOMContentLoaded', () => {
       lastClickedIndex = null;
       renderPlaylists();
       applyFiltersAndRenderTable();
-      // Auto-probe this playlist if not yet probed (and reasonably sized)
       if (id !== 'ALL' && !probedFolders.has(currentSourceDir + '::' + id)) {
         probeFolder(id);
       }
@@ -292,6 +253,19 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  function setGroupCollapsed(groupKey, collapse) {
+    if (collapse) collapsedGroups.add(groupKey);
+    else collapsedGroups.delete(groupKey);
+
+    const domEntry = groupDomMap.get(groupKey);
+    if (!domEntry) return;
+    domEntry.chevron.classList.toggle('collapsed', collapse);
+    domEntry.toggleHint.textContent = collapse ? 'Buka Daftar' : 'Lipat';
+    domEntry.childRows.forEach(tr => {
+      tr.classList.toggle('group-row-hidden', collapse);
+    });
+  }
+
   // 5. Filter and Render Song Table
   function applyFiltersAndRenderTable() {
     const query = (searchInput.value || '').trim().toLowerCase();
@@ -303,7 +277,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const targetRateStr = String(targetRate);
 
     visibleFiles = allFiles.filter(f => {
-      // Playlist filter
       if (activePlaylist === '__ROOT__') {
         if (f.folder !== '') return false;
       } else if (activePlaylist !== 'ALL') {
@@ -311,17 +284,14 @@ document.addEventListener('DOMContentLoaded', () => {
         if (topFolder !== activePlaylist && f.folder !== activePlaylist) return false;
       }
 
-      // Search filter
       if (query && !f.name.toLowerCase().includes(query) && !(f.folder || '').toLowerCase().includes(query)) {
         return false;
       }
 
-      // Format filter
       if (fmtFilter !== 'ALL' && f.ext !== fmtFilter) {
         return false;
       }
 
-      // Sample rate filter
       const qc = f.qc || {};
       const sr = qc.sample_rate_hz ? String(qc.sample_rate_hz) : '';
       if (rateFilter === 'NEEDS_CONVERT') {
@@ -330,7 +300,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (sr !== rateFilter) return false;
       }
 
-      // Bitrate filter
       if (brFilter !== 'ALL') {
         const brNum = qc.bitrate_kbps ? parseFloat(qc.bitrate_kbps) : 0;
         const filterBrNum = parseInt(brFilter, 10);
@@ -341,11 +310,13 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     renderTableRows(targetRateStr);
-    syncHeaderCheckbox();
+    syncRowSelectionDOM();
   }
 
   function renderTableRows(targetRateStr) {
     converterTableBody.replaceChildren();
+    rowElementsByPath.clear();
+    groupDomMap.clear();
 
     if (visibleFiles.length === 0) {
       const tr = document.createElement('tr');
@@ -358,118 +329,182 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    visibleFiles.forEach((f, idx) => {
-      const tr = document.createElement('tr');
-      const isSelected = selectedPaths.has(f.rel_path);
-      if (isSelected) tr.classList.add('row-selected');
+    const targetBr = getTargetBitrate();
+    const targetRateNum = getTargetRate();
+    const targetLabel = `${targetRateStr === '44100' ? '44.1 kHz' : '48 kHz'} • ${targetBr} kbps`;
+    const fragment = document.createDocumentFragment();
 
-      // 1. Checkbox cell
-      const tdCheck = document.createElement('td');
-      tdCheck.className = 'col-check';
-      const chk = document.createElement('input');
-      chk.type = 'checkbox';
-      chk.checked = isSelected;
-      chk.setAttribute('aria-label', 'Pilih ' + f.name);
+    const groups = groupFilesByFolder(visibleFiles);
+    let flatIdx = 0;
 
-      chk.addEventListener('click', (e) => {
+    groups.forEach(group => {
+      const isCollapsed = collapsedGroups.has(group.key);
+      const groupFilePaths = group.files.map(f => f.rel_path);
+
+      // Collapsible Group Header Row with Group Select Checkbox
+      const headerTr = document.createElement('tr');
+      headerTr.className = 'group-header-row';
+
+      const tdGroupCheck = document.createElement('td');
+      tdGroupCheck.className = 'col-check';
+      const groupChk = document.createElement('input');
+      groupChk.type = 'checkbox';
+      groupChk.title = `Pilih semua lagu di folder "${group.label}"`;
+      groupChk.setAttribute('aria-label', `Pilih semua lagu di folder ${group.label}`);
+      groupChk.addEventListener('click', (e) => {
         e.stopPropagation();
-        handleRowSelect(idx, f.rel_path, chk.checked, e.shiftKey);
+        const checkAll = groupChk.checked;
+        groupFilePaths.forEach(rp => {
+          if (checkAll) selectedPaths.add(rp);
+          else selectedPaths.delete(rp);
+        });
+        syncRowSelectionDOM();
+      });
+      tdGroupCheck.appendChild(groupChk);
+      headerTr.appendChild(tdGroupCheck);
+
+      const headerTd = document.createElement('td');
+      headerTd.setAttribute('colspan', '5');
+      const { bar, chevron, toggleHint } = createGroupHeaderBar(group, isCollapsed);
+      headerTd.appendChild(bar);
+      headerTr.appendChild(headerTd);
+
+      headerTr.addEventListener('click', () => {
+        const nextCollapsed = !collapsedGroups.has(group.key);
+        setGroupCollapsed(group.key, nextCollapsed);
       });
 
-      tdCheck.appendChild(chk);
-      tr.appendChild(tdCheck);
+      fragment.appendChild(headerTr);
 
-      // Allow clicking the row to toggle selection
-      tr.addEventListener('click', (e) => {
-        const newChecked = !selectedPaths.has(f.rel_path);
-        handleRowSelect(idx, f.rel_path, newChecked, e.shiftKey);
+      const childRows = [];
+
+      group.files.forEach((f, groupIdx) => {
+        const currentFlatIdx = flatIdx++;
+        const tr = document.createElement('tr');
+        const isSelected = selectedPaths.has(f.rel_path);
+        if (isSelected) tr.classList.add('row-selected');
+        if (isCollapsed) tr.classList.add('group-row-hidden');
+
+        // 1. Checkbox cell
+        const tdCheck = document.createElement('td');
+        tdCheck.className = 'col-check';
+        const chk = document.createElement('input');
+        chk.type = 'checkbox';
+        chk.checked = isSelected;
+        chk.setAttribute('aria-label', 'Pilih ' + f.name);
+
+        chk.addEventListener('click', (e) => {
+          e.stopPropagation();
+          handleRowSelect(currentFlatIdx, f.rel_path, chk.checked, e.shiftKey);
+        });
+
+        tdCheck.appendChild(chk);
+        tr.appendChild(tdCheck);
+
+        // Allow clicking the row to toggle selection
+        tr.addEventListener('click', (e) => {
+          const newChecked = !selectedPaths.has(f.rel_path);
+          handleRowSelect(currentFlatIdx, f.rel_path, newChecked, e.shiftKey);
+        });
+
+        rowElementsByPath.set(f.rel_path, { tr, chk });
+
+        // 2. Compact single-line song title + track number (folder is shown on group header)
+        tr.appendChild(createFileNameCell(f, { index: groupIdx + 1, showFolderBadge: false }));
+
+        const qc = f.qc || {};
+
+        // 3. Format / Codec
+        const tdFormat = document.createElement('td');
+        tdFormat.className = 'mono-cell';
+        const codecLabel = qc.codec ? `${f.ext.replace('.', '').toUpperCase()} (${qc.codec})` : f.ext.toUpperCase();
+        tdFormat.textContent = codecLabel;
+        tr.appendChild(tdFormat);
+
+        // 4. Bitrate & Size
+        const tdSize = document.createElement('td');
+        tdSize.className = 'mono-cell';
+        const brVal = qc.bitrate_kbps ? Math.round(parseFloat(qc.bitrate_kbps)) : 0;
+        if (brVal) {
+          const brSpan = document.createElement('span');
+          const brMatches = f.ext === '.mp3' && Math.abs(brVal - targetBr) <= 8;
+          brSpan.className = brMatches ? 'rate-tag match' : 'rate-tag diff';
+          brSpan.textContent = `${brVal} kbps`;
+          tdSize.appendChild(brSpan);
+
+          const sizeSpan = document.createElement('span');
+          sizeSpan.textContent = ` • ${f.size_mb} MB`;
+          tdSize.appendChild(sizeSpan);
+        } else {
+          tdSize.textContent = `${f.size_mb} MB`;
+        }
+        tr.appendChild(tdSize);
+
+        // 5. Current Sample Rate
+        const tdRate = document.createElement('td');
+        tdRate.className = 'mono-cell';
+        const sr = qc.sample_rate_hz ? String(qc.sample_rate_hz) : '';
+        if (sr) {
+          const srSpan = document.createElement('span');
+          srSpan.className = sr === targetRateStr ? 'rate-tag match' : 'rate-tag diff';
+          srSpan.textContent = sr + ' Hz';
+          tdRate.appendChild(srSpan);
+        } else {
+          tdRate.textContent = 'Belum dipindai';
+        }
+        tr.appendChild(tdRate);
+
+        // 6. Status Konversi
+        const tdStatus = document.createElement('td');
+        const badge = document.createElement('span');
+        if (!sr) {
+          badge.className = 'badge-untested';
+          badge.textContent = 'KLIK CEK SAMPLE RATE';
+        } else if (isAlreadyMatching(f, targetRateNum, targetBr)) {
+          badge.className = 'badge-safe';
+          badge.textContent = `SUDAH ${targetLabel}`;
+        } else {
+          badge.className = 'badge-warning';
+          badge.textContent = `SIAP → ${targetLabel}`;
+        }
+        tdStatus.appendChild(badge);
+        tr.appendChild(tdStatus);
+
+        fragment.appendChild(tr);
+        childRows.push(tr);
       });
 
-      // 2. File Name + Playlist badge
-      const tdName = document.createElement('td');
-      tdName.className = 'file-name-cell';
-      const wrapper = document.createElement('div');
-      wrapper.className = 'file-name-wrapper';
-
-      if (f.folder) {
-        const folderBadge = document.createElement('span');
-        folderBadge.className = 'playlist-folder-badge';
-        folderBadge.textContent = '📁 ' + f.folder;
-        wrapper.appendChild(folderBadge);
-      }
-
-      const titleSpan = document.createElement('span');
-      titleSpan.className = 'file-title-text';
-      titleSpan.textContent = f.name;
-      titleSpan.title = f.name;
-      wrapper.appendChild(titleSpan);
-
-      tdName.appendChild(wrapper);
-      tr.appendChild(tdName);
-
-      const qc = f.qc || {};
-
-      // 3. Format / Codec
-      const tdFormat = document.createElement('td');
-      tdFormat.className = 'mono-cell';
-      const codecLabel = qc.codec ? `${f.ext.replace('.', '').toUpperCase()} (${qc.codec})` : f.ext.toUpperCase();
-      tdFormat.textContent = codecLabel;
-      tr.appendChild(tdFormat);
-
-      // 4. Bitrate & Size
-      const tdSize = document.createElement('td');
-      tdSize.className = 'mono-cell';
-      const targetBr = getTargetBitrate();
-      const targetRateNum = getTargetRate();
-      const brVal = qc.bitrate_kbps ? Math.round(parseFloat(qc.bitrate_kbps)) : 0;
-      if (brVal) {
-        const brSpan = document.createElement('span');
-        const brMatches = f.ext === '.mp3' && Math.abs(brVal - targetBr) <= 8;
-        brSpan.className = brMatches ? 'rate-tag match' : 'rate-tag diff';
-        brSpan.textContent = `${brVal} kbps`;
-        tdSize.appendChild(brSpan);
-
-        const sizeSpan = document.createElement('span');
-        sizeSpan.textContent = ` • ${f.size_mb} MB`;
-        tdSize.appendChild(sizeSpan);
-      } else {
-        tdSize.textContent = `${f.size_mb} MB`;
-      }
-      tr.appendChild(tdSize);
-
-      // 5. Current Sample Rate
-      const tdRate = document.createElement('td');
-      tdRate.className = 'mono-cell';
-      const sr = qc.sample_rate_hz ? String(qc.sample_rate_hz) : '';
-      if (sr) {
-        const srSpan = document.createElement('span');
-        srSpan.className = sr === targetRateStr ? 'rate-tag match' : 'rate-tag diff';
-        srSpan.textContent = sr + ' Hz';
-        tdRate.appendChild(srSpan);
-      } else {
-        tdRate.textContent = 'Belum dipindai';
-      }
-      tr.appendChild(tdRate);
-
-      // 6. Status Konversi
-      const tdStatus = document.createElement('td');
-      const badge = document.createElement('span');
-      const targetLabel = `${targetRateStr === '44100' ? '44.1 kHz' : '48 kHz'} • ${targetBr} kbps`;
-      if (!sr) {
-        badge.className = 'badge-untested';
-        badge.textContent = 'KLIK CEK SAMPLE RATE';
-      } else if (isAlreadyMatching(f, targetRateNum, targetBr)) {
-        badge.className = 'badge-safe';
-        badge.textContent = `SUDAH ${targetLabel}`;
-      } else {
-        badge.className = 'badge-warning';
-        badge.textContent = `SIAP → ${targetLabel}`;
-      }
-      tdStatus.appendChild(badge);
-      tr.appendChild(tdStatus);
-
-      converterTableBody.appendChild(tr);
+      groupDomMap.set(group.key, {
+        childRows,
+        chevron,
+        toggleHint,
+        groupChk,
+        filePaths: groupFilePaths,
+      });
     });
+
+    converterTableBody.appendChild(fragment);
+  }
+
+  /**
+   * Updates existing row and group checkboxes' checked/selected state in-place without rebuilding the table.
+   */
+  function syncRowSelectionDOM() {
+    rowElementsByPath.forEach(({ tr, chk }, relPath) => {
+      const isSelected = selectedPaths.has(relPath);
+      chk.checked = isSelected;
+      tr.classList.toggle('row-selected', isSelected);
+    });
+
+    groupDomMap.forEach(({ groupChk, filePaths }) => {
+      if (!groupChk || filePaths.length === 0) return;
+      const selCount = filePaths.filter(rp => selectedPaths.has(rp)).length;
+      groupChk.checked = selCount === filePaths.length;
+      groupChk.indeterminate = selCount > 0 && selCount < filePaths.length;
+    });
+
+    syncHeaderCheckbox();
+    updateSelectionUI();
   }
 
   function handleRowSelect(idx, relPath, checked, isShift) {
@@ -488,9 +523,7 @@ document.addEventListener('DOMContentLoaded', () => {
       else selectedPaths.delete(relPath);
     }
     lastClickedIndex = idx;
-    renderTableRows(String(getTargetRate()));
-    syncHeaderCheckbox();
-    updateSelectionUI();
+    syncRowSelectionDOM();
   }
 
   function syncHeaderCheckbox() {
@@ -520,50 +553,25 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // 6. Queue polling
-  async function fetchQueueState() {
-    try {
-      const res = await fetch('/api/queue');
-      if (!res.ok) return;
-      const data = await res.json();
-
-      const queueLen = (data.queue || []).length;
-      queueCounter.textContent = 'Antrian: ' + queueLen;
-
-      const current = data.current;
-      if (current) {
-        wasJobRunning = true;
-        jobStatusTag.textContent = current.status || 'PROCESSING';
-        jobStatusTag.className = 'job-status-tag active';
-        jobUrlLabel.textContent = current.url;
-
-        const p = Math.round(current.progress || 0);
-        progressFill.style.width = p + '%';
-        progressText.textContent = p + '% Complete';
-
-        if (Array.isArray(current.logs) && current.logs.length > 0) {
-          renderLogs(current.logs);
+  // 6. Queue polling via shared monitor
+  const queueMonitor = createQueueMonitor({
+    queueCounter,
+    jobStatusTag,
+    jobUrlLabel,
+    progressFill,
+    progressText,
+    terminalLogs,
+    onIdle: (justFinished, data) => {
+      if (justFinished) {
+        progressFill.style.width = '100%';
+        progressText.textContent = '100% Complete';
+        if (Array.isArray(data.history) && data.history.length > 0 && Array.isArray(data.history[0].logs)) {
+          renderLogs(terminalLogs, data.history[0].logs);
         }
-      } else {
-        jobStatusTag.textContent = 'IDLE';
-        jobStatusTag.className = 'job-status-tag';
-        if (queueLen === 0) {
-          if (wasJobRunning) {
-            wasJobRunning = false;
-            progressFill.style.width = '100%';
-            progressText.textContent = '100% Complete';
-            // Show latest history logs if available
-            if (Array.isArray(data.history) && data.history.length > 0 && Array.isArray(data.history[0].logs)) {
-              renderLogs(data.history[0].logs);
-            }
-            fetchLibrary();
-          }
-        }
+        fetchLibrary();
       }
-    } catch (err) {
-      // Ignore background poll error
-    }
-  }
+    },
+  });
 
   // 7. Event Listeners
   targetRateRadios.forEach(radio => {
@@ -582,21 +590,22 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  searchInput.addEventListener('input', () => {
-    applyFiltersAndRenderTable();
-  });
-
-  filterFormat.addEventListener('change', () => {
-    applyFiltersAndRenderTable();
-  });
-
-  filterRate.addEventListener('change', () => {
-    applyFiltersAndRenderTable();
-  });
-
+  searchInput.addEventListener('input', applyFiltersAndRenderTable);
+  filterFormat.addEventListener('change', applyFiltersAndRenderTable);
+  filterRate.addEventListener('change', applyFiltersAndRenderTable);
   if (filterBitrate) {
-    filterBitrate.addEventListener('change', () => {
-      applyFiltersAndRenderTable();
+    filterBitrate.addEventListener('change', applyFiltersAndRenderTable);
+  }
+
+  if (btnCollapseAllGroups) {
+    btnCollapseAllGroups.addEventListener('click', () => {
+      groupDomMap.forEach((_, key) => setGroupCollapsed(key, true));
+    });
+  }
+
+  if (btnExpandAllGroups) {
+    btnExpandAllGroups.addEventListener('click', () => {
+      groupDomMap.forEach((_, key) => setGroupCollapsed(key, false));
     });
   }
 
@@ -606,16 +615,12 @@ document.addEventListener('DOMContentLoaded', () => {
       if (check) selectedPaths.add(f.rel_path);
       else selectedPaths.delete(f.rel_path);
     });
-    renderTableRows(String(getTargetRate()));
-    syncHeaderCheckbox();
-    updateSelectionUI();
+    syncRowSelectionDOM();
   });
 
   btnSelectVisible.addEventListener('click', () => {
     visibleFiles.forEach(f => selectedPaths.add(f.rel_path));
-    renderTableRows(String(getTargetRate()));
-    syncHeaderCheckbox();
-    updateSelectionUI();
+    syncRowSelectionDOM();
   });
 
   btnSelectNeedConvert.addEventListener('click', () => {
@@ -626,17 +631,13 @@ document.addEventListener('DOMContentLoaded', () => {
         selectedPaths.add(f.rel_path);
       }
     });
-    renderTableRows(String(targetRate));
-    syncHeaderCheckbox();
-    updateSelectionUI();
+    syncRowSelectionDOM();
   });
 
   btnClearSelection.addEventListener('click', () => {
     selectedPaths.clear();
     lastClickedIndex = null;
-    renderTableRows(String(getTargetRate()));
-    syncHeaderCheckbox();
-    updateSelectionUI();
+    syncRowSelectionDOM();
   });
 
   btnProbeCurrent.addEventListener('click', () => {
@@ -651,7 +652,7 @@ document.addEventListener('DOMContentLoaded', () => {
     activePlaylist = 'ALL';
     const ok = await fetchLibrary(cleanPath);
     if (ok) {
-      appendLog('info', '[SOURCE] Memuat folder sumber: ' + currentSourceDir);
+      log('info', '[SOURCE] Memuat folder sumber: ' + currentSourceDir);
       const mp3Playlist = allPlaylists.find(p => p.mp3_count > 0);
       if (mp3Playlist) {
         activePlaylist = mp3Playlist.name;
@@ -682,136 +683,40 @@ document.addEventListener('DOMContentLoaded', () => {
   if (btnClearDest && destDirInput) {
     btnClearDest.addEventListener('click', () => {
       destDirInput.value = '';
-      appendLog('info', '[DESTINATION] Mode tujuan dikembalikan ke otomatis (folder baru di samping sumber).');
+      log('info', '[DESTINATION] Mode tujuan dikembalikan ke otomatis (folder baru di samping sumber).');
     });
   }
 
-  async function browseTo(pathStr, createSubfolder) {
-    if (!modalDirList) return;
-    try {
-      const payload = { path: pathStr || '' };
-      if (createSubfolder) payload.create_subfolder = createSubfolder;
-      const res = await fetch('/api/browse-dirs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        appendLog('error', '[BROWSER] ' + (data.error || 'Gagal membuka direktori.'));
-        return;
+  initFolderModal({
+    folderModal: document.getElementById('folderModal'),
+    folderModalTitle: document.getElementById('folderModalTitle'),
+    btnCloseModal: document.getElementById('btnCloseModal'),
+    modalShortcuts: document.getElementById('modalShortcuts'),
+    btnModalUp: document.getElementById('btnModalUp'),
+    modalCurrentPath: document.getElementById('modalCurrentPath'),
+    modalDirList: document.getElementById('modalDirList'),
+    newFolderNameInput: document.getElementById('newFolderNameInput'),
+    btnCreateSubfolder: document.getElementById('btnCreateSubfolder'),
+    btnCancelModal: document.getElementById('btnCancelModal'),
+    btnSelectModalDir: document.getElementById('btnSelectModalDir'),
+    btnBrowseSource,
+    btnBrowseDest,
+    getStartPath: (mode) => {
+      if (mode === 'source') {
+        return (sourceDirInput && sourceDirInput.value.trim()) || currentSourceDir;
       }
-
-      modalBrowsingPath = data.current || '';
-      modalParentPath = data.parent || null;
-      if (modalCurrentPath) modalCurrentPath.textContent = modalBrowsingPath;
-      if (btnModalUp) btnModalUp.disabled = !modalParentPath;
-
-      // Render quick shortcuts
-      if (modalShortcuts && Array.isArray(data.shortcuts)) {
-        modalShortcuts.replaceChildren();
-        data.shortcuts.forEach(sc => {
-          const btn = document.createElement('button');
-          btn.type = 'button';
-          btn.className = 'btn-chip';
-          btn.textContent = sc.label;
-          btn.title = sc.path;
-          btn.addEventListener('click', () => browseTo(sc.path));
-          modalShortcuts.appendChild(btn);
-        });
-      }
-
-      // Render subdirectories
-      modalDirList.replaceChildren();
-      const dirs = data.dirs || [];
-      if (dirs.length === 0) {
-        const emptyMsg = document.createElement('div');
-        emptyMsg.className = 'modal-dir-empty';
-        emptyMsg.textContent = 'Tidak ada subfolder di dalam direktori ini.';
-        modalDirList.appendChild(emptyMsg);
-      } else {
-        dirs.forEach(d => {
-          const row = document.createElement('button');
-          row.type = 'button';
-          row.className = 'modal-dir-item';
-
-          const nameSpan = document.createElement('span');
-          nameSpan.className = 'modal-dir-name';
-          nameSpan.textContent = '📁 ' + d.name;
-
-          const countSpan = document.createElement('span');
-          countSpan.className = 'modal-dir-meta';
-          countSpan.textContent = d.audio_count > 0 ? (d.audio_count + ' file audio') : 'Buka →';
-
-          row.appendChild(nameSpan);
-          row.appendChild(countSpan);
-          row.addEventListener('click', () => browseTo(d.path));
-          modalDirList.appendChild(row);
-        });
-      }
-    } catch (err) {
-      appendLog('error', '[BROWSER] Gagal memuat daftar folder: ' + err.message);
-    }
-  }
-
-  function openFolderModal(mode) {
-    modalTargetMode = mode;
-    if (folderModalTitle) {
-      folderModalTitle.textContent = mode === 'source'
-        ? 'Pilih Folder Sumber (Source Audio)'
-        : 'Pilih Folder Tujuan (Destination Hasil Konversi)';
-    }
-    if (newFolderNameInput) newFolderNameInput.value = '';
-    const startPath = mode === 'source'
-      ? (sourceDirInput && sourceDirInput.value.trim() ? sourceDirInput.value.trim() : currentSourceDir)
-      : (destDirInput && destDirInput.value.trim() ? destDirInput.value.trim() : currentSourceDir);
-    if (folderModal) folderModal.classList.remove('hidden');
-    browseTo(startPath || '');
-  }
-
-  function closeFolderModal() {
-    if (folderModal) folderModal.classList.add('hidden');
-  }
-
-  if (btnBrowseSource) {
-    btnBrowseSource.addEventListener('click', () => openFolderModal('source'));
-  }
-  if (btnBrowseDest) {
-    btnBrowseDest.addEventListener('click', () => openFolderModal('dest'));
-  }
-  if (btnCloseModal) {
-    btnCloseModal.addEventListener('click', closeFolderModal);
-  }
-  if (btnCancelModal) {
-    btnCancelModal.addEventListener('click', closeFolderModal);
-  }
-  if (btnModalUp) {
-    btnModalUp.addEventListener('click', () => {
-      if (modalParentPath) browseTo(modalParentPath);
-    });
-  }
-  if (btnCreateSubfolder && newFolderNameInput) {
-    btnCreateSubfolder.addEventListener('click', () => {
-      const subName = newFolderNameInput.value.trim();
-      if (!subName) return;
-      newFolderNameInput.value = '';
-      browseTo(modalBrowsingPath, subName);
-    });
-  }
-  if (btnSelectModalDir) {
-    btnSelectModalDir.addEventListener('click', () => {
-      if (!modalBrowsingPath) return;
-      if (modalTargetMode === 'source') {
-        if (sourceDirInput) sourceDirInput.value = modalBrowsingPath;
-        closeFolderModal();
-        loadCustomSourceFolder(modalBrowsingPath);
-      } else {
-        if (destDirInput) destDirInput.value = modalBrowsingPath;
-        closeFolderModal();
-        appendLog('info', '[DESTINATION] Folder tujuan disetel ke: ' + modalBrowsingPath);
-      }
-    });
-  }
+      return (destDirInput && destDirInput.value.trim()) || currentSourceDir;
+    },
+    onSelectSource: (chosenPath) => {
+      if (sourceDirInput) sourceDirInput.value = chosenPath;
+      loadCustomSourceFolder(chosenPath);
+    },
+    onSelectDest: (chosenPath) => {
+      if (destDirInput) destDirInput.value = chosenPath;
+      log('info', '[DESTINATION] Folder tujuan disetel ke: ' + chosenPath);
+    },
+    onLog: log,
+  });
 
   // Convert Selected Songs (Batch Checkboxes)
   btnConvertSelected.addEventListener('click', async () => {
@@ -823,7 +728,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const destDirVal = destDirInput && destDirInput.value.trim() ? destDirInput.value.trim() : null;
 
     btnConvertSelected.disabled = true;
-    appendLog('info', `[DISPATCH] Menjadwalkan konversi ${relPaths.length} lagu terpilih ke ${targetRate} Hz • ${targetBitrate} kbps...`);
+    log('info', `[DISPATCH] Menjadwalkan konversi ${relPaths.length} lagu terpilih ke ${targetRate} Hz • ${targetBitrate} kbps...`);
 
     try {
       const res = await fetch('/api/resample', {
@@ -836,19 +741,19 @@ document.addEventListener('DOMContentLoaded', () => {
           target_rate: targetRate,
           target_bitrate: targetBitrate,
           only_mp3: false,
-          overwrite: overwrite
-        })
+          overwrite,
+        }),
       });
       const data = await res.json();
       if (res.ok) {
-        appendLog('info', '[QUEUE] ' + data.message);
-        fetchQueueState();
+        log('info', '[QUEUE] ' + data.message);
+        queueMonitor.poll();
       } else {
-        appendLog('error', '[ERROR] ' + (data.error || 'Gagal menjadwalkan konversi.'));
+        log('error', '[ERROR] ' + (data.error || 'Gagal menjadwalkan konversi.'));
         btnConvertSelected.disabled = false;
       }
     } catch (err) {
-      appendLog('error', '[NETWORK ERROR] ' + err.message);
+      log('error', '[NETWORK ERROR] ' + err.message);
       btnConvertSelected.disabled = false;
     }
   });
@@ -863,7 +768,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const destDirVal = destDirInput && destDirInput.value.trim() ? destDirInput.value.trim() : null;
 
     btnConvertPlaylist.disabled = true;
-    appendLog('info', `[DISPATCH] Menjadwalkan konversi playlist (${activePlaylist}) ke ${targetRate} Hz • ${targetBitrate} kbps...`);
+    log('info', `[DISPATCH] Menjadwalkan konversi playlist (${activePlaylist}) ke ${targetRate} Hz • ${targetBitrate} kbps...`);
 
     try {
       const res = await fetch('/api/resample', {
@@ -876,18 +781,18 @@ document.addEventListener('DOMContentLoaded', () => {
           target_rate: targetRate,
           target_bitrate: targetBitrate,
           only_mp3: onlyMp3,
-          overwrite: overwrite
-        })
+          overwrite,
+        }),
       });
       const data = await res.json();
       if (res.ok) {
-        appendLog('info', '[QUEUE] ' + data.message);
-        fetchQueueState();
+        log('info', '[QUEUE] ' + data.message);
+        queueMonitor.poll();
       } else {
-        appendLog('error', '[ERROR] ' + (data.error || 'Gagal menjadwalkan konversi playlist.'));
+        log('error', '[ERROR] ' + (data.error || 'Gagal menjadwalkan konversi playlist.'));
       }
     } catch (err) {
-      appendLog('error', '[NETWORK ERROR] ' + err.message);
+      log('error', '[NETWORK ERROR] ' + err.message);
     } finally {
       setTimeout(() => {
         btnConvertPlaylist.disabled = false;
@@ -900,9 +805,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Initialize
-  fetchSystemStatus();
   fetchLibrary().then(() => {
-    // Auto-select first playlist with MP3 files if available, and probe it
     const mp3Playlist = allPlaylists.find(p => p.mp3_count > 0);
     if (mp3Playlist) {
       activePlaylist = mp3Playlist.name;
@@ -911,10 +814,9 @@ document.addEventListener('DOMContentLoaded', () => {
       probeFolder(mp3Playlist.name);
     }
   });
-  fetchQueueState();
+  queueMonitor.poll();
 
   setInterval(() => {
-    fetchQueueState();
+    queueMonitor.poll();
   }, 1500);
 });
-

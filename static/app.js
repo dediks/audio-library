@@ -3,6 +3,15 @@
  * Strict DOM Manipulation (No innerHTML, strictly textContent & createElement)
  */
 
+import {
+  initAppHeader,
+  appendLog,
+  groupFilesByFolder,
+  createGroupHeaderBar,
+  createFileNameCell,
+  createQueueMonitor,
+} from './modules/ui-shared.js';
+
 document.addEventListener('DOMContentLoaded', () => {
   // DOM Element References
   const form = document.getElementById('ingestForm');
@@ -12,12 +21,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const optUseCookies = document.getElementById('optUseCookies');
   const optKeepOpus = document.getElementById('optKeepOpus');
   const btnStartIngest = document.getElementById('btnStartIngest');
-
-  const ytdlpDot = document.getElementById('ytdlpDot');
-  const ytdlpVal = document.getElementById('ytdlpVal');
-  const ffmpegDot = document.getElementById('ffmpegDot');
-  const ffmpegVal = document.getElementById('ffmpegVal');
-  const pythonVal = document.getElementById('pythonVal');
 
   const systemNoticeCard = document.getElementById('systemNoticeCard');
   const noticeTitle = document.getElementById('noticeTitle');
@@ -36,47 +39,24 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnResampleMp3 = document.getElementById('btnResampleMp3');
   const btnAuditAll = document.getElementById('btnAuditAll');
   const libraryTableBody = document.getElementById('libraryTableBody');
+  const librarySearchInput = document.getElementById('librarySearchInput');
+  const librarySummaryPill = document.getElementById('librarySummaryPill');
+  const btnCollapseAllGroups = document.getElementById('btnCollapseAllGroups');
+  const btnExpandAllGroups = document.getElementById('btnExpandAllGroups');
 
-  let pollingInterval = null;
+  let allLibraryFiles = [];
+  const collapsedGroups = new Set();
+  // Map of groupKey -> { childRows: HTMLTableRowElement[], chevron: HTMLElement, toggleHint: HTMLElement }
+  const groupDomMap = new Map();
 
-  // 1. Check System Dependencies
-  async function fetchSystemStatus() {
-    try {
-      const res = await fetch('/api/system');
-      if (!res.ok) return;
-      const data = await res.json();
+  function log(level, message) {
+    appendLog(terminalLogs, level, message);
+  }
 
-      pythonVal.textContent = data.python || '3.12';
-
-      if (data.yt_dlp) {
-        ytdlpDot.className = 'status-indicator active';
-        ytdlpVal.textContent = 'Installed';
-      } else {
-        ytdlpDot.className = 'status-indicator error';
-        ytdlpVal.textContent = 'Missing';
-      }
-
-      if (data.ffmpeg) {
-        ffmpegDot.className = 'status-indicator active';
-        ffmpegVal.textContent = 'Installed';
-      } else {
-        ffmpegDot.className = 'status-indicator error';
-        ffmpegVal.textContent = 'Missing';
-      }
-
-      const cookiesDot = document.getElementById('cookiesDot');
-      const cookiesVal = document.getElementById('cookiesVal');
-      if (cookiesDot && cookiesVal) {
-        if (data.cookies_present) {
-          cookiesDot.className = 'status-indicator active';
-          cookiesVal.textContent = 'cookies.txt ditemukan';
-        } else {
-          cookiesDot.className = 'status-indicator';
-          cookiesVal.textContent = 'Browser Session';
-        }
-      }
-
-      // Show notice banner if missing
+  // 1. Mount Shared Top Header & Check System Dependencies
+  initAppHeader({
+    activePage: 'ingest',
+    onSystemData: (data) => {
       if (!data.yt_dlp || !data.ffmpeg) {
         systemNoticeCard.classList.remove('hidden');
         if (!data.yt_dlp) {
@@ -91,124 +71,121 @@ document.addEventListener('DOMContentLoaded', () => {
       } else {
         systemNoticeCard.classList.add('hidden');
       }
-    } catch (err) {
-      appendLog('error', '[SYSTEM] Gagal memverifikasi status backend: ' + err.message);
-    }
-  }
+    },
+    onSystemError: (err) => {
+      log('error', '[SYSTEM] Gagal memverifikasi status backend: ' + err.message);
+    },
+  });
 
   // 2. Fetch Queue and Live Logs
-  async function fetchQueueState() {
-    try {
-      const res = await fetch('/api/queue');
-      if (!res.ok) return;
-      const data = await res.json();
-
-      const queueLen = (data.queue || []).length;
-      queueCounter.textContent = 'Antrian: ' + queueLen;
-
-      const current = data.current;
-      if (current) {
-        jobStatusTag.textContent = current.status || 'PROCESSING';
-        jobStatusTag.className = 'job-status-tag active';
-        jobUrlLabel.textContent = current.url;
-
-        const p = Math.round(current.progress || 0);
-        progressFill.style.width = p + '%';
-        progressText.textContent = p + '% Complete';
-        btnStartIngest.disabled = true;
-        btnStartIngest.classList.add('running');
-
-        // Update logs if available
-        if (Array.isArray(current.logs) && current.logs.length > 0) {
-          renderLogs(current.logs);
-        }
-      } else {
-        jobStatusTag.textContent = 'IDLE';
-        jobStatusTag.className = 'job-status-tag';
-        if (queueLen === 0) {
-          jobUrlLabel.textContent = 'Belum ada tugas unduhan aktif';
-          progressFill.style.width = '0%';
-          progressText.textContent = '0% Complete';
-          btnStartIngest.disabled = false;
-          btnStartIngest.classList.remove('running');
-        }
+  const queueMonitor = createQueueMonitor({
+    queueCounter,
+    jobStatusTag,
+    jobUrlLabel,
+    progressFill,
+    progressText,
+    terminalLogs,
+    onActive: () => {
+      btnStartIngest.disabled = true;
+      btnStartIngest.classList.add('running');
+    },
+    onIdle: (justFinished) => {
+      jobUrlLabel.textContent = 'Belum ada tugas unduhan aktif';
+      progressFill.style.width = '0%';
+      progressText.textContent = '0% Complete';
+      btnStartIngest.disabled = false;
+      btnStartIngest.classList.remove('running');
+      if (justFinished) {
+        fetchLibraryFiles();
       }
-    } catch (err) {
-      // Background poll failure
-    }
-  }
+    },
+  });
 
-  // Helper: Append a single log safely
-  function appendLog(level, message) {
-    const p = document.createElement('p');
-    p.className = 'log-line ' + level;
-    p.textContent = message;
-    terminalLogs.appendChild(p);
-    terminalLogs.scrollTop = terminalLogs.scrollHeight;
-  }
-
-  // Helper: Render array of logs safely
-  function renderLogs(logs) {
-    terminalLogs.replaceChildren();
-    logs.forEach(msg => {
-      const p = document.createElement('p');
-      let lvl = 'info';
-      if (msg.includes('ERROR') || msg.includes('Failed')) lvl = 'error';
-      else if (msg.includes('WARNING') || msg.includes('caution')) lvl = 'warn';
-      p.className = 'log-line ' + lvl;
-      p.textContent = msg;
-      terminalLogs.appendChild(p);
-    });
-    terminalLogs.scrollTop = terminalLogs.scrollHeight;
-  }
-
-  // 3. Fetch Library Files and QC Data
+  // 3. Fetch Library Files and Render Grouped QC Table
   async function fetchLibraryFiles() {
     try {
       const res = await fetch('/api/library');
       if (!res.ok) return;
       const data = await res.json();
-      const files = data.files || [];
+      allLibraryFiles = data.files || [];
+      renderLibraryTable();
+    } catch (err) {
+      log('error', '[LIBRARY] Gagal memuat daftar file: ' + err.message);
+    }
+  }
 
-      libraryTableBody.replaceChildren();
+  function setGroupCollapsed(groupKey, collapse) {
+    if (collapse) collapsedGroups.add(groupKey);
+    else collapsedGroups.delete(groupKey);
 
-      if (files.length === 0) {
+    const domEntry = groupDomMap.get(groupKey);
+    if (!domEntry) return;
+    domEntry.chevron.classList.toggle('collapsed', collapse);
+    domEntry.toggleHint.textContent = collapse ? 'Buka Daftar' : 'Lipat';
+    domEntry.childRows.forEach(tr => {
+      tr.classList.toggle('group-row-hidden', collapse);
+    });
+  }
+
+  function renderLibraryTable() {
+    libraryTableBody.replaceChildren();
+    groupDomMap.clear();
+
+    const query = (librarySearchInput ? librarySearchInput.value : '').trim().toLowerCase();
+    const filtered = query
+      ? allLibraryFiles.filter(f =>
+          f.name.toLowerCase().includes(query) ||
+          (f.folder || '').toLowerCase().includes(query)
+        )
+      : allLibraryFiles;
+
+    const groups = groupFilesByFolder(filtered);
+    if (librarySummaryPill) {
+      librarySummaryPill.textContent = `${filtered.length} lagu • ${groups.length} folder`;
+    }
+
+    if (filtered.length === 0) {
+      const tr = document.createElement('tr');
+      tr.className = 'empty-row';
+      const td = document.createElement('td');
+      td.setAttribute('colspan', '8');
+      td.textContent = allLibraryFiles.length === 0
+        ? 'Belum ada file audio di library/inbox. Masukkan URL YouTube di atas untuk memulai.'
+        : 'Tidak ada lagu atau playlist yang cocok dengan kata kunci pencarian.';
+      tr.appendChild(td);
+      libraryTableBody.appendChild(tr);
+      return;
+    }
+
+    const fragment = document.createDocumentFragment();
+
+    groups.forEach(group => {
+      const isCollapsed = collapsedGroups.has(group.key);
+
+      // Group Header Row
+      const headerTr = document.createElement('tr');
+      headerTr.className = 'group-header-row';
+      const headerTd = document.createElement('td');
+      headerTd.setAttribute('colspan', '8');
+
+      const { bar, chevron, toggleHint } = createGroupHeaderBar(group, isCollapsed);
+      headerTd.appendChild(bar);
+      headerTr.appendChild(headerTd);
+
+      headerTr.addEventListener('click', () => {
+        const nextCollapsed = !collapsedGroups.has(group.key);
+        setGroupCollapsed(group.key, nextCollapsed);
+      });
+
+      fragment.appendChild(headerTr);
+
+      const childRows = [];
+      group.files.forEach((f, idx) => {
         const tr = document.createElement('tr');
-        tr.className = 'empty-row';
-        const td = document.createElement('td');
-        td.setAttribute('colspan', '8');
-        td.textContent = 'Belum ada file audio di library/inbox. Masukkan URL YouTube di atas untuk memulai.';
-        tr.appendChild(td);
-        libraryTableBody.appendChild(tr);
-        return;
-      }
+        if (isCollapsed) tr.classList.add('group-row-hidden');
 
-      files.forEach(f => {
-        const tr = document.createElement('tr');
-
-        // File name with optional Playlist Folder tag
-        const tdName = document.createElement('td');
-        tdName.className = 'file-name-cell';
-
-        const wrapper = document.createElement('div');
-        wrapper.className = 'file-name-wrapper';
-
-        if (f.folder) {
-          const folderBadge = document.createElement('span');
-          folderBadge.className = 'playlist-folder-badge';
-          folderBadge.textContent = '📁 ' + f.folder;
-          folderBadge.title = 'Playlist: ' + f.folder;
-          wrapper.appendChild(folderBadge);
-        }
-
-        const titleSpan = document.createElement('span');
-        titleSpan.className = 'file-title-text';
-        titleSpan.textContent = f.name;
-        titleSpan.title = f.name;
-        wrapper.appendChild(titleSpan);
-
-        tdName.appendChild(wrapper);
-        tr.appendChild(tdName);
+        // Compact single-line song title with track index (folder is already shown on the group header)
+        tr.appendChild(createFileNameCell(f, { index: idx + 1, showFolderBadge: false }));
 
         // Size
         const tdSize = document.createElement('td');
@@ -278,12 +255,30 @@ document.addEventListener('DOMContentLoaded', () => {
 
         tdStatus.appendChild(badge);
         tr.appendChild(tdStatus);
-
-        libraryTableBody.appendChild(tr);
+        fragment.appendChild(tr);
+        childRows.push(tr);
       });
-    } catch (err) {
-      appendLog('error', '[LIBRARY] Gagal memuat daftar file: ' + err.message);
-    }
+
+      groupDomMap.set(group.key, { childRows, chevron, toggleHint });
+    });
+
+    libraryTableBody.appendChild(fragment);
+  }
+
+  if (librarySearchInput) {
+    librarySearchInput.addEventListener('input', renderLibraryTable);
+  }
+
+  if (btnCollapseAllGroups) {
+    btnCollapseAllGroups.addEventListener('click', () => {
+      groupDomMap.forEach((_, key) => setGroupCollapsed(key, true));
+    });
+  }
+
+  if (btnExpandAllGroups) {
+    btnExpandAllGroups.addEventListener('click', () => {
+      groupDomMap.forEach((_, key) => setGroupCollapsed(key, false));
+    });
   }
 
   // Format radio change listeners
@@ -331,7 +326,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     btnStartIngest.disabled = true;
     const opusLog = (audioFormat !== 'native' && keepOpus) ? ' + Opus (.webm)' : '';
-    appendLog('info', `[DISPATCH] Mengirim ${urls.length} item ke antrian unduhan (${audioFormat}${opusLog})...`);
+    log('info', `[DISPATCH] Mengirim ${urls.length} item ke antrian unduhan (${audioFormat}${opusLog})...`);
 
     try {
       const res = await fetch('/api/download', {
@@ -344,21 +339,21 @@ document.addEventListener('DOMContentLoaded', () => {
           audio_format: audioFormat,
           keep_opus: keepOpus,
           use_cookies: useCookies,
-          cookie_browser: 'chrome'
-        })
+          cookie_browser: 'chrome',
+        }),
       });
 
       const data = await res.json();
       if (res.ok) {
-        appendLog('info', '[DISPATCH] ' + data.message);
+        log('info', '[DISPATCH] ' + data.message);
         urlInput.value = '';
-        fetchQueueState();
+        queueMonitor.poll();
       } else {
-        appendLog('error', '[DISPATCH ERROR] ' + (data.error || 'Gagal menambahkan tugas.'));
+        log('error', '[DISPATCH ERROR] ' + (data.error || 'Gagal menambahkan tugas.'));
         btnStartIngest.disabled = false;
       }
     } catch (err) {
-      appendLog('error', '[NETWORK ERROR] ' + err.message);
+      log('error', '[NETWORK ERROR] ' + err.message);
       btnStartIngest.disabled = false;
     }
   });
@@ -372,18 +367,18 @@ document.addEventListener('DOMContentLoaded', () => {
         body: JSON.stringify({
           rel_path: relPath || null,
           target_rate: 44100,
-          only_mp3: Boolean(onlyMp3)
-        })
+          only_mp3: Boolean(onlyMp3),
+        }),
       });
       const data = await res.json();
       if (res.ok) {
-        appendLog('info', '[RESAMPLE] ' + data.message);
-        fetchQueueState();
+        log('info', '[RESAMPLE] ' + data.message);
+        queueMonitor.poll();
       } else {
-        appendLog('error', '[RESAMPLE ERROR] ' + (data.error || 'Gagal menjadwalkan konversi sample rate.'));
+        log('error', '[RESAMPLE ERROR] ' + (data.error || 'Gagal menjadwalkan konversi sample rate.'));
       }
     } catch (err) {
-      appendLog('error', '[RESAMPLE NETWORK ERROR] ' + err.message);
+      log('error', '[RESAMPLE NETWORK ERROR] ' + err.message);
     }
   }
 
@@ -399,18 +394,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
   btnAuditAll.addEventListener('click', async () => {
     btnAuditAll.disabled = true;
-    appendLog('info', '[AUDIT] Memulai audit audio QC menyeluruh (EBU R128 & True Peak)...');
+    log('info', '[AUDIT] Memulai audit audio QC menyeluruh (EBU R128 & True Peak)...');
     try {
       const res = await fetch('/api/scan', { method: 'POST' });
       const data = await res.json();
       if (res.ok) {
-        appendLog('info', `[AUDIT] Selesai. ${(data.results || []).length} file berhasil diukur.`);
+        log('info', `[AUDIT] Selesai. ${(data.results || []).length} file berhasil diukur.`);
         fetchLibraryFiles();
       } else {
-        appendLog('error', '[AUDIT ERROR] ' + (data.error || 'Audit gagal.'));
+        log('error', '[AUDIT ERROR] ' + (data.error || 'Audit gagal.'));
       }
     } catch (err) {
-      appendLog('error', '[AUDIT NETWORK ERROR] ' + err.message);
+      log('error', '[AUDIT NETWORK ERROR] ' + err.message);
     } finally {
       btnAuditAll.disabled = false;
     }
@@ -421,12 +416,10 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Start polling
-  fetchSystemStatus();
-  fetchQueueState();
+  queueMonitor.poll();
   fetchLibraryFiles();
 
-  pollingInterval = setInterval(() => {
-    fetchQueueState();
-    fetchLibraryFiles();
+  setInterval(() => {
+    queueMonitor.poll();
   }, 2000);
 });

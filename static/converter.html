@@ -9,59 +9,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/converter.css">
 </head>
 <body class="dark-theme">
-  <!-- Top Navigation & System Status Bar -->
-  <header class="app-header">
-    <div class="brand">
-      <div class="brand-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M9 18V5l12-2v13"></path>
-          <circle cx="6" cy="18" r="3"></circle>
-          <circle cx="18" cy="16" r="3"></circle>
-        </svg>
-      </div>
-      <div class="brand-info">
-        <h1 class="brand-title">AUDIO LAB <span class="badge-studio">PRO FOH</span></h1>
-        <p class="brand-subtitle">SoXR 28-Bit Sample Rate &amp; Batch Playlist Converter</p>
-      </div>
-    </div>
-
-    <!-- Top Navigation Tabs -->
-    <nav class="app-nav" aria-label="Main Navigation">
-      <a href="/" class="nav-tab">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-          <polyline points="7 10 12 15 17 10"></polyline>
-          <line x1="12" y1="15" x2="12" y2="3"></line>
-        </svg>
-        <span>Ingestion &amp; QC</span>
-      </a>
-      <a href="/converter" class="nav-tab active">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polyline points="17 1 21 5 17 9"></polyline>
-          <path d="M3 11V9a4 4 0 0 1 4-4h14"></path>
-          <polyline points="7 23 3 19 7 15"></polyline>
-          <path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
-        </svg>
-        <span>Sample Rate Converter</span>
-      </a>
-    </nav>
-
-    <!-- System Diagnostics Bar -->
-    <div class="system-status-group" id="systemStatusGroup">
-      <div class="status-pill">
-        <span class="status-indicator active"></span>
-        <span class="status-label">Resampler:</span>
-        <span class="status-val">SoXR 28-bit</span>
-      </div>
-      <div class="status-pill">
-        <span class="status-indicator" id="ffmpegDot"></span>
-        <span class="status-label">FFmpeg:</span>
-        <span class="status-val" id="ffmpegVal">checking...</span>
-      </div>
-    </div>
-  </header>
+  <!-- Top Navigation & System Status Bar (Shared Component mounted via ui-shared.js) -->
+  <header class="app-header" id="appHeader" data-page="converter"></header>
 
   <main class="app-container">
     <!-- Top Grid: Playlist & Conversion Config + Live Monitor -->
@@ -364,6 +316,8 @@
 
         <div class="toolbar-selection-btns">
           <span class="selection-counter-pill" id="selectionCounterPill">0 dipilih</span>
+          <button type="button" id="btnCollapseAllGroups" class="btn-chip" title="Lipat semua grup folder">Lipat Semua</button>
+          <button type="button" id="btnExpandAllGroups" class="btn-chip" title="Buka semua grup folder">Buka Semua</button>
           <button type="button" id="btnSelectNeedConvert" class="btn-chip">Pilih Semua yg Perlu Konversi</button>
           <button type="button" id="btnSelectVisible" class="btn-chip">Pilih Semua Tampil</button>
           <button type="button" id="btnClearSelection" class="btn-chip">Batal Pilih</button>
@@ -435,7 +389,7 @@
     </div>
   </div>
 
-  <script src="/static/converter.js"></script>
+  <script type="module" src="/static/converter.js"></script>
 </body>
 </html>
 

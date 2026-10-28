@@ -318,6 +318,79 @@ def scan(args) -> int:
     return 0
 
 
+def build_ytdlp_command(
+    url: str,
+    output_template: str,
+    archive_file: Path,
+    audio_format: str = "native",
+    keep_opus: bool = False,
+    is_playlist: bool = False,
+    cookies_file: Path | None = None,
+    cookie_browser: str | None = None,
+    js_runtime: str | None = None,
+) -> tuple[list[str], str]:
+    """Builds the yt-dlp command list and a human-readable target description."""
+    norm_format = "native" if audio_format in ("native", "premium", "premium_aac") else audio_format
+    if norm_format == "mp3":
+        norm_format = "mp3_320k"
+
+    cmd = ["yt-dlp"]
+    if norm_format == "native":
+        # Audio-only stream, kept as-is. Prioritize Premium 256k (141 AAC / 774 Opus),
+        # then Public 160k 48kHz Opus (251), 128k AAC (140), and non-DRC streams.
+        cmd.extend(["-f", YOUTUBE_AUDIO_SELECTOR])
+    elif keep_opus:
+        cmd.extend(["-f", f"{YOUTUBE_OPUS_SELECTOR}/b"])
+    else:
+        cmd.extend(["-f", f"{YOUTUBE_AUDIO_SELECTOR}/b"])
+
+    if js_runtime:
+        cmd.extend(["--js-runtimes", js_runtime])
+    cmd.extend(["--remote-components", "ejs:github"])
+
+    cmd.extend([
+        "--download-archive", str(archive_file),
+        "-o", output_template,
+        "--yes-playlist" if is_playlist else "--no-playlist",
+    ])
+
+    auth_desc = "Public"
+    if cookies_file and cookies_file.is_file():
+        cmd.extend(["--cookies", str(cookies_file)])
+        auth_desc = "cookies.txt"
+    elif cookie_browser:
+        cmd.extend(["--cookies-from-browser", cookie_browser])
+        auth_desc = cookie_browser
+
+    opus_note = " + Simpan File Asli Opus (.webm)" if keep_opus else ""
+    if norm_format == "mp3_320k":
+        cmd.extend([
+            "--extract-audio",
+            "--audio-format", "mp3",
+            "--audio-quality", "320K",
+            "--embed-metadata",
+        ])
+        if keep_opus:
+            cmd.append("--keep-video")
+        desc = f"Target: MP3 320 kbps CBR{opus_note} (KONVERSI lossy, Auth: {auth_desc})"
+    elif norm_format == "mp3_vbr0":
+        cmd.extend([
+            "--extract-audio",
+            "--audio-format", "mp3",
+            "--audio-quality", "0",
+            "--embed-metadata",
+        ])
+        if keep_opus:
+            cmd.append("--keep-video")
+        desc = f"Target: MP3 VBR 0{opus_note} (KONVERSI lossy, Auth: {auth_desc})"
+    else:
+        # Native: no postprocessing at all (no extract/convert/remux/metadata embed).
+        desc = f"Target: Best Available - stream asli YouTube tanpa konversi (Auth: {auth_desc})"
+
+    cmd.append(url)
+    return cmd, desc
+
+
 def download(args) -> int:
     if not args.authorized:
         raise RuntimeError("Hanya untuk sumber yang kamu miliki / diizinkan. Tambahkan --authorized jika sudah pasti.")
@@ -329,7 +402,7 @@ def download(args) -> int:
         template = str(folder / "%(playlist_title,playlist|Playlist)s" / "%(title).150B [%(id)s].%(ext)s")
     else:
         template = str(folder / "%(title).150B [%(id)s].%(ext)s")
-    
+
     selected_format = getattr(args, "format", "native")
     keep_opus = bool(getattr(args, "keep_opus", False))
     if selected_format == "premium":  # legacy alias
@@ -339,59 +412,43 @@ def download(args) -> int:
     if removed_stale > 0:
         print(f"[ARCHIVE SYNC] Membersihkan {removed_stale} ID riwayat lama yang file targetnya belum ada di {folder.name}.", flush=True)
 
-    if selected_format == "native":
-        # Audio-only stream kept as-is; prioritize Premium 256k (141 AAC / 774 Opus),
-        # then Public 160k 48kHz Opus (251), 128k AAC (140), and non-DRC streams.
-        cmd = ["yt-dlp", "-f", YOUTUBE_AUDIO_SELECTOR]
-    elif keep_opus:
-        cmd = ["yt-dlp", "-f", f"{YOUTUBE_OPUS_SELECTOR}/b"]
-    else:
-        cmd = ["yt-dlp", "-f", f"{YOUTUBE_AUDIO_SELECTOR}/b"]
-
     js_runtime, run_env = find_js_runtime()
-    if js_runtime:
-        cmd.extend(["--js-runtimes", js_runtime])
-    cmd.extend(["--remote-components", "ejs:github"])
-
-    cmd.extend([
-        "--download-archive", str(archive),
-        "-o", template,
-        "--yes-playlist" if args.playlist else "--no-playlist",
-    ])
-    
     cookies_file = folder.parent / "cookies.txt"
     if not cookies_file.is_file():
         cookies_file = Path("library/cookies.txt").resolve()
 
     browser = getattr(args, "cookies_from_browser", None)
     if cookies_file.is_file():
-        cmd.extend(["--cookies", str(cookies_file)])
         print(f"Menggunakan file sesi YouTube: {cookies_file}", flush=True)
-    elif browser:
-        cmd.extend(["--cookies-from-browser", browser])
-    
-    if selected_format == "mp3":
-        cmd.extend([
-            "--extract-audio",
-            "--audio-format", "mp3",
-            "--audio-quality", "320K",
-            "--embed-metadata",
-        ])
-        if keep_opus:
-            cmd.append("--keep-video")
-            print("Mengambil audio stream Opus terbaik (non-DRC), mengonversi ke MP3 320 kbps CBR, dan menyimpan file asli Opus (.webm).", flush=True)
-        else:
-            print("Mengambil audio stream terbaik (non-DRC) dan mengonversi ke MP3 320 kbps CBR (KONVERSI lossy).", flush=True)
-    else:
-        # Native: no postprocessing at all (no extract/convert/remux/metadata embed).
-        print("Mengambil stream audio terbaik apa adanya [Prioritas: 141 AAC 256k -> 774 Opus 256k -> 251 Opus 48kHz, non-DRC].", flush=True)
+
+    cmd, target_desc = build_ytdlp_command(
+        url=args.url,
+        output_template=template,
+        archive_file=archive,
+        audio_format=selected_format,
+        keep_opus=keep_opus,
+        is_playlist=bool(args.playlist),
+        cookies_file=cookies_file if cookies_file.is_file() else None,
+        cookie_browser=browser,
+        js_runtime=js_runtime,
+    )
+    print(target_desc, flush=True)
 
     before_files = set(p for p in folder.rglob("*") if p.is_file())
-    cmd.append(args.url)
     returncode = _run_ytdlp_with_tier_log(cmd, env=run_env)
     if returncode != 0 and browser:
         print("[AUTH FALLBACK] Percobaan dengan cookies browser gagal. Mencoba ulang mode publik...", flush=True)
-        fallback_cmd = [arg for i, arg in enumerate(cmd) if arg != "--cookies-from-browser" and (i == 0 or cmd[i-1] != "--cookies-from-browser")]
+        fallback_cmd, _ = build_ytdlp_command(
+            url=args.url,
+            output_template=template,
+            archive_file=archive,
+            audio_format=selected_format,
+            keep_opus=keep_opus,
+            is_playlist=bool(args.playlist),
+            cookies_file=None,
+            cookie_browser=None,
+            js_runtime=js_runtime,
+        )
         returncode = _run_ytdlp_with_tier_log(fallback_cmd, env=run_env)
 
     if returncode != 0:
