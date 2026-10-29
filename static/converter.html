@@ -80,8 +80,39 @@
             </div>
           </div>
 
-          <!-- Step 2: Target Sample Rate -->
+          <!-- Step 2: Conversion Mode -->
           <div class="field-group">
+            <div class="field-label">
+              <span>Mode Konversi Audio</span>
+              <span class="label-hint">Pilih antara Resampling MP3 atau Lossless Remux (.webm &rarr; .opus)</span>
+            </div>
+            <div class="format-grid two-cols">
+              <label class="format-card">
+                <input type="radio" name="convertMode" value="resample" checked>
+                <div class="format-card-inner">
+                  <div class="format-badge-row">
+                    <span class="format-badge cyan">SoXR Sample Rate &amp; MP3</span>
+                    <span class="format-sub">Transcode / Resample</span>
+                  </div>
+                  <p class="format-desc">Konversi sample rate (44.1 / 48 kHz) dan bitrate MP3 CBR (320 / 192 / 128 / 96 kbps) untuk kompatibilitas perangkat.</p>
+                </div>
+              </label>
+
+              <label class="format-card">
+                <input type="radio" name="convertMode" value="remux_opus">
+                <div class="format-card-inner">
+                  <div class="format-badge-row">
+                    <span class="format-badge emerald">Lossless Remux (.webm &rarr; .opus)</span>
+                    <span class="format-sub">0% Degradasi (-c:a copy)</span>
+                  </div>
+                  <p class="format-desc">Pindahkan stream Opus asli dari wadah <b>.webm</b> ke <b>.opus</b> secara instan tanpa re-encode (kualitas 100% identik).</p>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <!-- Step 3: Target Sample Rate -->
+          <div class="field-group" id="resampleRateGroup">
             <div class="field-label">
               <span>Target Sample Rate Output</span>
               <span class="label-hint">Lagu yang sudah sesuai target sample rate &amp; bitrate akan dilewati</span>
@@ -111,8 +142,8 @@
             </div>
           </div>
 
-          <!-- Step 3: Target Bitrate -->
-          <div class="field-group">
+          <!-- Step 4: Target Bitrate -->
+          <div class="field-group" id="resampleBitrateGroup">
             <div class="field-label">
               <span>Target Bitrate Output (MP3 CBR)</span>
               <span class="label-hint">Ubah dari 320 kbps ke 192 / 128 / 96 kbps untuk menghemat ukuran file</span>
@@ -164,9 +195,9 @@
             </div>
           </div>
 
-          <!-- Step 3: Options -->
+          <!-- Step 5: Options -->
           <div class="options-row">
-            <label class="custom-toggle">
+            <label class="custom-toggle" id="onlyMp3ToggleWrap">
               <input type="checkbox" id="optOnlyMp3" checked>
               <span class="toggle-slider"></span>
               <div class="toggle-text-wrap">
@@ -180,7 +211,7 @@
               <span class="toggle-slider"></span>
               <div class="toggle-text-wrap">
                 <span class="toggle-text">Timpa file asli secara langsung (Overwrite)</span>
-                <span class="toggle-hint">Default (Nonaktif): File asli TIDAK ditimpa. Hasil konversi disimpan ke folder baru "[Nama Playlist] [44.1kHz]"</span>
+                <span class="toggle-hint" id="overwriteHintText">Default (Nonaktif): File asli TIDAK ditimpa. Hasil konversi disimpan ke folder baru "[Nama Playlist] [44.1kHz]"</span>
               </div>
             </label>
           </div>
@@ -303,8 +334,9 @@
           >
           <select id="filterFormat" class="toolbar-select" aria-label="Filter Format">
             <option value="ALL">Semua Format</option>
+            <option value=".opus">Hanya Opus (.opus)</option>
+            <option value=".webm">Hanya WebM (.webm)</option>
             <option value=".mp3">Hanya MP3 (.mp3)</option>
-            <option value=".webm">Hanya Opus (.webm)</option>
             <option value=".m4a">Hanya AAC (.m4a)</option>
           </select>
           <select id="filterRate" class="toolbar-select" aria-label="Filter Sample Rate">

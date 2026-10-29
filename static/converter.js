@@ -29,8 +29,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const optOnlyMp3 = document.getElementById('optOnlyMp3');
   const optOverwrite = document.getElementById('optOverwrite');
+  const convertModeRadios = document.querySelectorAll('input[name="convertMode"]');
   const targetRateRadios = document.querySelectorAll('input[name="targetRate"]');
   const targetBitrateRadios = document.querySelectorAll('input[name="targetBitrate"]');
+  const resampleRateGroup = document.getElementById('resampleRateGroup');
+  const resampleBitrateGroup = document.getElementById('resampleBitrateGroup');
+  const onlyMp3ToggleWrap = document.getElementById('onlyMp3ToggleWrap');
+  const overwriteHintText = document.getElementById('overwriteHintText');
 
   const queueCounter = document.getElementById('queueCounter');
   const jobStatusTag = document.getElementById('jobStatusTag');
@@ -95,6 +100,11 @@ document.addEventListener('DOMContentLoaded', () => {
     btnExpandAll: btnExpandAllGroups,
   });
 
+  function getConvertMode() {
+    const checked = document.querySelector('input[name="convertMode"]:checked');
+    return checked ? checked.value : 'resample';
+  }
+
   function getTargetRate() {
     const checked = document.querySelector('input[name="targetRate"]:checked');
     return checked ? parseInt(checked.value, 10) : 44100;
@@ -106,12 +116,27 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function isAlreadyMatching(fileObj, targetRate, targetBitrate) {
+    if (getConvertMode() === 'remux_opus') {
+      return fileObj.ext !== '.webm' && fileObj.ext !== '.ogg';
+    }
     const qc = fileObj.qc || {};
     const sr = qc.sample_rate_hz ? parseInt(qc.sample_rate_hz, 10) : 0;
     const br = qc.bitrate_kbps ? parseFloat(qc.bitrate_kbps) : 0;
     const rateMatch = sr === targetRate;
     const brMatch = fileObj.ext === '.mp3' && br > 0 && Math.abs(br - targetBitrate) <= 8;
     return rateMatch && brMatch;
+  }
+
+  function syncConvertModeUI() {
+    const isRemux = getConvertMode() === 'remux_opus';
+    if (resampleRateGroup) resampleRateGroup.style.display = isRemux ? 'none' : '';
+    if (resampleBitrateGroup) resampleBitrateGroup.style.display = isRemux ? 'none' : '';
+    if (onlyMp3ToggleWrap) onlyMp3ToggleWrap.style.display = isRemux ? 'none' : '';
+    if (overwriteHintText) {
+      overwriteHintText.textContent = isRemux
+        ? 'Jika aktif: file .webm asli langsung diganti menjadi .opus di folder yang sama. Jika nonaktif: disimpan ke folder baru "[Nama Playlist] [Opus]".'
+        : 'Default (Nonaktif): File asli TIDAK ditimpa. Hasil konversi disimpan ke folder baru "[Nama Playlist] [44.1kHz]"';
+    }
   }
 
   // 1. Mount Shared Top Header & System status check
@@ -317,10 +342,12 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function updatePlaylistSummaryText() {
+    const isRemux = getConvertMode() === 'remux_opus';
     const targetHz = getTargetRate();
     const targetBr = getTargetBitrate();
     const rateLabel = targetHz === 44100 ? '44.1 kHz' : '48 kHz';
-    const specLabel = `${rateLabel} • ${targetBr} kbps`;
+    const specLabel = isRemux ? '.opus (Lossless Remux)' : `${rateLabel} • ${targetBr} kbps`;
+    const verb = isRemux ? 'Remux' : 'Konversi';
     const plLabel = activePlaylist === 'ALL'
       ? 'Semua Koleksi'
       : (activePlaylist === '__ROOT__' ? 'Root Inbox' : activePlaylist);
@@ -330,8 +357,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (btnConvertPlaylistText) {
       btnConvertPlaylistText.textContent = activePlaylist === 'ALL'
-        ? `Konversi Seluruh Koleksi → ${specLabel}`
-        : `Konversi Playlist "${plLabel}" → ${specLabel}`;
+        ? `${verb} Seluruh Koleksi → ${specLabel}`
+        : `${verb} Playlist "${plLabel}" → ${specLabel}`;
     }
   }
 
@@ -398,6 +425,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
+    const isRemux = getConvertMode() === 'remux_opus';
     const targetBr = getTargetBitrate();
     const targetRateNum = getTargetRate();
     const targetLabel = `${targetRateStr === '44100' ? '44.1 kHz' : '48 kHz'} • ${targetBr} kbps`;
@@ -540,7 +568,18 @@ document.addEventListener('DOMContentLoaded', () => {
         // 6. Status Konversi
         const tdStatus = document.createElement('td');
         const badge = document.createElement('span');
-        if (!sr) {
+        if (isRemux) {
+          if (f.ext === '.opus') {
+            badge.className = 'badge-safe';
+            badge.textContent = 'SUDAH .OPUS';
+          } else if (f.ext === '.webm' || f.ext === '.ogg') {
+            badge.className = 'badge-warning';
+            badge.textContent = 'SIAP REMUX → .OPUS';
+          } else {
+            badge.className = 'badge-untested';
+            badge.textContent = 'BUKAN .WEBM (LEWATI)';
+          }
+        } else if (!sr) {
           badge.className = 'badge-untested';
           badge.textContent = 'KLIK CEK SAMPLE RATE';
         } else if (isAlreadyMatching(f, targetRateNum, targetBr)) {
@@ -623,13 +662,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function updateSelectionUI() {
     const count = selectedPaths.size;
+    const isRemux = getConvertMode() === 'remux_opus';
     const rateLabel = getTargetRate() === 44100 ? '44.1 kHz' : '48 kHz';
     const brLabel = getTargetBitrate() + ' kbps';
+    const specText = isRemux ? '.opus (Lossless)' : `${rateLabel} • ${brLabel}`;
+    const verb = isRemux ? 'Remux' : 'Konversi';
     if (selectionCounterPill) {
       selectionCounterPill.textContent = `${count} lagu dipilih`;
     }
     if (btnConvertSelectedText) {
-      btnConvertSelectedText.textContent = `Konversi Lagu Terpilih (${count}) → ${rateLabel} • ${brLabel}`;
+      btnConvertSelectedText.textContent = `${verb} Lagu Terpilih (${count}) → ${specText}`;
     }
     if (btnConvertSelected) {
       btnConvertSelected.disabled = count === 0;
@@ -663,6 +705,15 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // 7. Event Listeners
+  convertModeRadios.forEach(radio => {
+    radio.addEventListener('change', () => {
+      syncConvertModeUI();
+      updatePlaylistSummaryText();
+      applyFiltersAndRenderTable();
+      updateSelectionUI();
+    });
+  });
+
   targetRateRadios.forEach(radio => {
     radio.addEventListener('change', () => {
       updatePlaylistSummaryText();
@@ -835,16 +886,19 @@ document.addEventListener('DOMContentLoaded', () => {
   btnConvertSelected.addEventListener('click', async () => {
     if (selectedPaths.size === 0) return;
     const relPaths = Array.from(selectedPaths);
+    const mode = getConvertMode();
     const targetRate = getTargetRate();
     const targetBitrate = getTargetBitrate();
     const overwrite = optOverwrite ? optOverwrite.checked : false;
     const destDirVal = destDirInput && destDirInput.value.trim() ? destDirInput.value.trim() : null;
 
     btnConvertSelected.disabled = true;
-    log('info', `[DISPATCH] Menjadwalkan konversi ${relPaths.length} lagu terpilih ke ${targetRate} Hz • ${targetBitrate} kbps...`);
+    const descTarget = mode === 'remux_opus' ? '.opus (Lossless Remux)' : `${targetRate} Hz • ${targetBitrate} kbps`;
+    log('info', `[DISPATCH] Menjadwalkan proses ${relPaths.length} lagu terpilih ke ${descTarget}...`);
 
     const ok = await dispatchResampleJob(
       {
+        mode,
         source_dir: currentSourceDir || null,
         dest_dir: destDirVal,
         rel_paths: relPaths,
@@ -853,7 +907,7 @@ document.addEventListener('DOMContentLoaded', () => {
         only_mp3: false,
         overwrite,
       },
-      'Konversi Masuk Antrian'
+      mode === 'remux_opus' ? 'Remux .opus Masuk Antrian' : 'Konversi Masuk Antrian'
     );
     if (!ok) {
       btnConvertSelected.disabled = false;
@@ -862,6 +916,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Convert Entire Active Playlist
   btnConvertPlaylist.addEventListener('click', async () => {
+    const mode = getConvertMode();
     const targetRate = getTargetRate();
     const targetBitrate = getTargetBitrate();
     const onlyMp3 = optOnlyMp3 ? optOnlyMp3.checked : true;
@@ -870,11 +925,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const destDirVal = destDirInput && destDirInput.value.trim() ? destDirInput.value.trim() : null;
 
     btnConvertPlaylist.disabled = true;
-    log('info', `[DISPATCH] Menjadwalkan konversi playlist (${activePlaylist}) ke ${targetRate} Hz • ${targetBitrate} kbps...`);
+    const descTarget = mode === 'remux_opus' ? '.opus (Lossless Remux)' : `${targetRate} Hz • ${targetBitrate} kbps`;
+    log('info', `[DISPATCH] Menjadwalkan proses playlist (${activePlaylist}) ke ${descTarget}...`);
 
     try {
       await dispatchResampleJob(
         {
+          mode,
           source_dir: currentSourceDir || null,
           dest_dir: destDirVal,
           playlist: playlistArg,
@@ -883,7 +940,7 @@ document.addEventListener('DOMContentLoaded', () => {
           only_mp3: onlyMp3,
           overwrite,
         },
-        'Konversi Playlist Dijadwalkan'
+        mode === 'remux_opus' ? 'Remux Playlist Dijadwalkan' : 'Konversi Playlist Dijadwalkan'
       );
     } finally {
       setTimeout(() => {

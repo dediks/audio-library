@@ -26,7 +26,7 @@ FIELDNAMES = ["file", "codec", "source_class", "sample_rate_hz", "channels", "du
               "bitrate_kbps", "integrated_lufs", "lra_lu", "true_peak_dbtp", "status",
               "notes", "sha256"]
 ALLOWED_BITRATES = (320, 192, 128, 96)
-TAG_FOLDER_PATTERN = r"\s*\[(44\.1kHz|48kHz)(?:\s+\d+k)?\]$"
+TAG_FOLDER_PATTERN = r"\s*\[(44\.1kHz|48kHz|Opus)(?:\s+\d+k)?\]$"
 
 # Priority order for YouTube / YouTube Music:
 # 141 = Premium AAC 256 kbps (44.1 kHz)
@@ -628,6 +628,101 @@ def _resolve_resample_output_path(
     return path.with_name(f"{clean_stem} [{tag_label}]{target_ext}")
 
 
+def remux_to_opus_one(
+    path: Path,
+    overwrite: bool = False,
+    out_dir: Path | None = None,
+) -> dict:
+    """Losslessly remuxes an Opus stream (e.g. from .webm or .ogg) into a standard .opus container (-c:a copy).
+
+    Does NOT re-encode audio data (0% quality degradation, bit-exact stream copy).
+    If the input file is already .opus or does not contain an Opus audio stream, it is safely skipped.
+    """
+    require("ffmpeg")
+    require("ffprobe")
+
+    ext = path.suffix.lower()
+    info = metadata(path)
+    codec = info.get("codec", "")
+    current_rate = int(info.get("sample_rate_hz") or 48000)
+    current_br = float(info.get("bitrate_kbps") or 0)
+
+    if ext == ".opus":
+        return {
+            "status": "SKIPPED",
+            "file": str(path),
+            "old_rate": current_rate,
+            "new_rate": current_rate,
+            "old_bitrate": round(current_br) if current_br else "",
+            "new_bitrate": round(current_br) if current_br else "",
+            "message": "Sudah berformat .opus (dilewati)",
+        }
+
+    if codec != "opus":
+        return {
+            "status": "SKIPPED",
+            "file": str(path),
+            "old_rate": current_rate,
+            "new_rate": current_rate,
+            "old_bitrate": round(current_br) if current_br else "",
+            "new_bitrate": round(current_br) if current_br else "",
+            "message": f"Bukan stream Opus (codec: {codec or ext}), dilewati agar tidak terjadi re-encode",
+        }
+
+    out_path = _resolve_resample_output_path(path, ".opus", "Opus", overwrite, out_dir)
+
+    if not overwrite and out_path != path and out_path.is_file():
+        return {
+            "status": "SKIPPED",
+            "file": str(out_path),
+            "old_rate": current_rate,
+            "new_rate": current_rate,
+            "old_bitrate": round(current_br) if current_br else "",
+            "new_bitrate": round(current_br) if current_br else "",
+            "message": f"Hasil .opus sudah ada ({out_path.parent.name}/{out_path.name})",
+        }
+
+    tmp_path = out_path.with_name(f".{out_path.stem}.remux_tmp.opus")
+    try:
+        cmd = [
+            "ffmpeg", "-y", "-hide_banner", "-nostats", "-xerror",
+            "-i", str(path),
+            "-map", "0:a:0",
+            "-map_metadata", "0",
+            "-c:a", "copy",
+            str(tmp_path),
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise RuntimeError("FFmpeg lossless remux gagal: " + proc.stderr[-300:].replace("\n", " "))
+
+        new_info = metadata(tmp_path)
+        tmp_path.replace(out_path)
+        if overwrite and out_path != path and path.exists():
+            path.unlink()
+
+        dest_display = f"{out_path.parent.name}/{out_path.name}" if out_path.parent != path.parent else out_path.name
+        new_br = float(new_info.get("bitrate_kbps") or current_br)
+        return {
+            "status": "CONVERTED",
+            "file": str(out_path),
+            "old_file": str(path),
+            "overwritten": overwrite,
+            "old_rate": current_rate,
+            "new_rate": int(new_info.get("sample_rate_hz") or current_rate),
+            "old_bitrate": round(current_br) if current_br else "",
+            "new_bitrate": round(new_br) if new_br else "",
+            "codec": "opus",
+            "message": f"Lossless Remux {ext} -> .opus ({current_rate} Hz, -c:a copy) -> {dest_display}",
+        }
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+
+
 def resample_one(
     path: Path,
     target_rate: int = 44100,
@@ -757,11 +852,17 @@ def resample(args) -> int:
 
     out_dir = Path(args.out_dir).expanduser().resolve() if getattr(args, "out_dir", None) else None
     target_bitrate = int(getattr(args, "bitrate", 320))
+    remux_opus = bool(getattr(args, "remux_opus", False))
 
     if target.is_file():
         files = [target]
     else:
-        allowed_exts = {".mp3"} if args.only_mp3 else EXTENSIONS
+        if remux_opus:
+            allowed_exts = {".webm", ".ogg"}
+        elif args.only_mp3:
+            allowed_exts = {".mp3"}
+        else:
+            allowed_exts = EXTENSIONS
         files = sorted(
             p for p in target.rglob("*")
             if p.is_file()
@@ -779,13 +880,20 @@ def resample(args) -> int:
     errors = 0
     for idx, path in enumerate(files, 1):
         try:
-            res = resample_one(
-                path,
-                target_rate=args.rate,
-                target_bitrate=target_bitrate,
-                overwrite=args.overwrite,
-                out_dir=out_dir,
-            )
+            if remux_opus:
+                res = remux_to_opus_one(
+                    path,
+                    overwrite=args.overwrite,
+                    out_dir=out_dir,
+                )
+            else:
+                res = resample_one(
+                    path,
+                    target_rate=args.rate,
+                    target_bitrate=target_bitrate,
+                    overwrite=args.overwrite,
+                    out_dir=out_dir,
+                )
             if res["status"] == "CONVERTED":
                 converted += 1
                 print(f"[{idx}/{len(files)}] CONVERTED: {res['message']}", flush=True)
@@ -828,6 +936,8 @@ def main() -> int:
                    help="Target bitrate MP3 dalam kbps: 320, 192, 128, atau 96 (default: 320)")
     r.add_argument("--only-mp3", action="store_true",
                    help="Hanya konversi file .mp3 (biarkan file .webm/.opus tetap utuh)")
+    r.add_argument("--remux-opus", action="store_true",
+                   help="Lossless remux file .webm/.ogg (Opus) menjadi wadah .opus (-c:a copy) tanpa re-encode")
     r.add_argument("--overwrite", action="store_true",
                    help="Timpa file asli secara langsung (default: TIDAK menimpa file asli)")
     r.add_argument("--out-dir", default=None,

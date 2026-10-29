@@ -377,13 +377,18 @@ class TaskQueueManager:
         }
 
     def enqueue_resample(self, payload: dict) -> tuple[int, dict]:
-        """Validates parameters and enqueues a resample job. Returns (http_status, response_dict)."""
+        """Validates parameters and enqueues a resample or lossless remux job. Returns (http_status, response_dict)."""
+        mode = str(payload.get("mode", "resample")).strip().lower()
+        if mode not in ("resample", "remux_opus"):
+            mode = "resample"
+        is_remux = (mode == "remux_opus")
+
         target_rate = int(payload.get("target_rate", 44100))
-        if target_rate not in (44100, 48000):
+        if not is_remux and target_rate not in (44100, 48000):
             return 400, {"error": "Target sample rate hanya mendukung 44100 atau 48000 Hz."}
 
         target_bitrate = int(payload.get("target_bitrate", 320))
-        if target_bitrate not in audio_manager.ALLOWED_BITRATES:
+        if not is_remux and target_bitrate not in audio_manager.ALLOWED_BITRATES:
             return 400, {"error": "Target bitrate hanya mendukung 320, 192, 128, atau 96 kbps."}
 
         raw_source_dir = payload.get("source_dir")
@@ -407,7 +412,8 @@ class TaskQueueManager:
         playlist = payload.get("playlist")
         only_mp3 = bool(payload.get("only_mp3", False))
         overwrite = bool(payload.get("overwrite", False))
-        spec_str = f"{target_rate} Hz • {target_bitrate} kbps"
+        spec_str = ".opus (Lossless Remux)" if is_remux else f"{target_rate} Hz • {target_bitrate} kbps"
+        verb = "Remux" if is_remux else "Konversi"
 
         if isinstance(rel_paths, list) and rel_paths:
             valid_rels = []
@@ -418,7 +424,7 @@ class TaskQueueManager:
                         valid_rels.append(rp.strip())
             if not valid_rels:
                 return 400, {"error": "Tidak ada file valid yang dipilih."}
-            label = f"Konversi {len(valid_rels)} Lagu Terpilih -> {spec_str}"
+            label = f"{verb} {len(valid_rels)} Lagu Terpilih -> {spec_str}"
             rel_paths = valid_rels
         elif rel_path is not None:
             if not isinstance(rel_path, str) or not rel_path.strip():
@@ -427,7 +433,7 @@ class TaskQueueManager:
             candidate = (source_resolved / rel_path).resolve()
             if not candidate.is_relative_to(source_resolved) or not candidate.is_file():
                 return 404, {"error": "File audio tidak ditemukan di folder sumber."}
-            label = f"Konversi {candidate.name} -> {spec_str}"
+            label = f"{verb} {candidate.name} -> {spec_str}"
         elif isinstance(playlist, str) and playlist.strip():
             playlist = playlist.strip()
             if playlist != "__ROOT__":
@@ -435,15 +441,16 @@ class TaskQueueManager:
                 if not pl_dir.is_relative_to(source_resolved) or not pl_dir.is_dir():
                     return 404, {"error": "Folder playlist tidak ditemukan."}
             pl_name = "Root Folder" if playlist == "__ROOT__" else playlist
-            scope_label = "MP3" if only_mp3 else "Semua Lagu"
-            label = f"Konversi Playlist '{pl_name}' ({scope_label}) -> {spec_str}"
+            scope_label = "WebM/Opus" if is_remux else ("MP3" if only_mp3 else "Semua Lagu")
+            label = f"{verb} Playlist '{pl_name}' ({scope_label}) -> {spec_str}"
         else:
-            scope_label = "Semua MP3" if only_mp3 else "Semua File"
-            label = f"Konversi Folder '{source_resolved.name}' ({scope_label}) -> {spec_str}"
+            scope_label = "Semua WebM/Opus" if is_remux else ("Semua MP3" if only_mp3 else "Semua File")
+            label = f"{verb} Folder '{source_resolved.name}' ({scope_label}) -> {spec_str}"
 
         job = {
             "id": f"resample_{int(time.time() * 1000)}",
             "type": "resample",
+            "mode": mode,
             "url": label,
             "source_dir": str(source_resolved),
             "dest_dir": str(dest_resolved) if dest_resolved else None,
@@ -462,12 +469,14 @@ class TaskQueueManager:
             self.queue.append(job)
 
         return 200, {
-            "message": f"Tugas konversi ({label}) ditambahkan ke antrian.",
+            "message": f"Tugas ({label}) ditambahkan ke antrian.",
             "job_id": job["id"],
         }
 
     def execute_resample_task(self, task: dict) -> None:
-        """Executes a batch or single-file SoXR sample-rate & bitrate conversion task."""
+        """Executes a batch or single-file SoXR sample-rate conversion or Lossless Opus Remux task."""
+        mode = str(task.get("mode", "resample")).lower()
+        is_remux = (mode == "remux_opus")
         target_rate = int(task.get("target_rate", 44100))
         target_bitrate = int(task.get("target_bitrate", 320))
         rel_path = task.get("rel_path")
@@ -478,7 +487,7 @@ class TaskQueueManager:
         raw_source_dir = task.get("source_dir")
         raw_dest_dir = task.get("dest_dir")
         rate_label = "44.1 kHz" if target_rate == 44100 else f"{target_rate} Hz"
-        spec_label = f"{rate_label} • {target_bitrate} kbps"
+        spec_label = ".opus (Lossless Remux)" if is_remux else f"{rate_label} • {target_bitrate} kbps"
 
         if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
             err_msg = "FFmpeg / FFprobe belum terinstall di PATH sistem."
@@ -511,28 +520,38 @@ class TaskQueueManager:
             )
             return
 
-        allowed = {".mp3"} if only_mp3 else audio_manager.EXTENSIONS
+        allowed = {".webm", ".ogg"} if is_remux else ({".mp3"} if only_mp3 else audio_manager.EXTENSIONS)
         files = resolve_resample_files(source_resolved, allowed, rel_paths, rel_path, playlist)
         total = len(files)
         if total == 0:
-            msg = "Tidak ditemukan file audio yang cocok untuk dikonversi pada pilihan ini."
-            self.append_log(task, f"[RESAMPLE] {msg}")
+            msg = (
+                "Tidak ditemukan file .webm/.ogg yang cocok untuk di-remux ke .opus pada pilihan ini."
+                if is_remux
+                else "Tidak ditemukan file audio yang cocok untuk dikonversi pada pilihan ini."
+            )
+            self.append_log(task, f"[{'REMUX' if is_remux else 'RESAMPLE'}] {msg}")
             self.finish_task(
                 task,
                 "SUCCESS",
                 progress=100,
                 outcome="WARNING",
-                title="Tidak Ada File untuk Dikonversi",
+                title="Tidak Ada File yang Cocok",
                 summary=msg,
                 stats={"converted": 0, "skipped": 0, "errors": 0},
             )
             return
 
         mode_desc = "OVERWRITE" if overwrite else (f"TUJUAN: {dest_resolved}" if dest_resolved else "SALIN BARU OTOMATIS")
-        self.append_log(
-            task,
-            f"[RESAMPLE] Memulai konversi ke {target_rate} Hz • {target_bitrate} kbps [{mode_desc}] ({total} file)...",
-        )
+        if is_remux:
+            self.append_log(
+                task,
+                f"[REMUX OPUS] Memulai Lossless Remux (.webm -> .opus, -c:a copy) [{mode_desc}] ({total} file)...",
+            )
+        else:
+            self.append_log(
+                task,
+                f"[RESAMPLE] Memulai konversi ke {target_rate} Hz • {target_bitrate} kbps [{mode_desc}] ({total} file)...",
+            )
         converted_count = 0
         skipped_count = 0
         error_count = 0
@@ -546,13 +565,20 @@ class TaskQueueManager:
                     rel_parent = fpath.parent.relative_to(source_resolved)
                     file_out_dir = dest_resolved / rel_parent if rel_parent != Path(".") else dest_resolved
 
-                res = audio_manager.resample_one(
-                    fpath,
-                    target_rate=target_rate,
-                    target_bitrate=target_bitrate,
-                    overwrite=overwrite,
-                    out_dir=file_out_dir,
-                )
+                if is_remux:
+                    res = audio_manager.remux_to_opus_one(
+                        fpath,
+                        overwrite=overwrite,
+                        out_dir=file_out_dir,
+                    )
+                else:
+                    res = audio_manager.resample_one(
+                        fpath,
+                        target_rate=target_rate,
+                        target_bitrate=target_bitrate,
+                        overwrite=overwrite,
+                        out_dir=file_out_dir,
+                    )
                 if res["status"] == "CONVERTED":
                     converted_count += 1
                     last_converted_name = fpath.name
@@ -567,9 +593,10 @@ class TaskQueueManager:
                 error_count += 1
                 self.append_log(task, f"[{idx}/{total}] ERROR {fpath.name}: {exc}")
 
+        tag_done = "REMUX SELESAI" if is_remux else "RESAMPLE SELESAI"
         self.append_log(
             task,
-            f"[RESAMPLE SELESAI] Dikonversi: {converted_count} | Dilewati: {skipped_count} | Error: {error_count}",
+            f"[{tag_done}] Dikonversi: {converted_count} | Dilewati: {skipped_count} | Error: {error_count}",
         )
 
         stats = {"converted": converted_count, "skipped": skipped_count, "errors": error_count}
@@ -583,16 +610,16 @@ class TaskQueueManager:
             )
         elif error_count == 0 and converted_count > 0:
             outcome = "SUCCESS"
-            title = "Konversi SoXR Selesai"
+            title = "Lossless Remux .opus Selesai" if is_remux else "Konversi SoXR Selesai"
             if converted_count == 1 and skipped_count == 0:
-                summary = f"Berhasil mengonversi '{last_converted_name}' ke {spec_label}."
+                summary = f"Berhasil mengubah '{last_converted_name}' ke {spec_label}."
             elif skipped_count > 0:
-                summary = f"Berhasil mengonversi {converted_count} lagu ke {spec_label} ({skipped_count} dilewati karena sudah sesuai)."
+                summary = f"Berhasil mengubah {converted_count} lagu ke {spec_label} ({skipped_count} dilewati karena sudah sesuai)."
             else:
-                summary = f"Berhasil mengonversi {converted_count} lagu ke {spec_label}."
+                summary = f"Berhasil mengubah {converted_count} lagu ke {spec_label}."
         elif converted_count > 0 and error_count > 0:
             outcome = "WARNING"
-            title = "Konversi Selesai Sebagian"
+            title = "Proses Selesai Sebagian"
             summary = f"{converted_count} lagu berhasil dikonversi ke {spec_label}, {error_count} gagal, {skipped_count} dilewati."
         else:
             outcome = "FAILED"
