@@ -27,3 +27,34 @@ export function createSvgIcon(shapes, rootAttrs = {}) {
   return svg;
 }
 
+/**
+ * Creates an icon representing opening in Windows Explorer / external folder.
+ * @param {Record<string, string>} rootAttrs
+ * @returns {SVGSVGElement}
+ */
+export function createExplorerIcon(rootAttrs = {}) {
+  return createSvgIcon(
+    [
+      { tag: 'path', attrs: { d: 'M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z' } },
+      { tag: 'line', attrs: { x1: '12', y1: '11', x2: '12', y2: '17' } },
+      { tag: 'polyline', attrs: { points: '9 14 12 11 15 14' } },
+    ],
+    { ...rootAttrs, class: (rootAttrs.class ? rootAttrs.class + ' ' : '') + 'icon-svg' }
+  );
+}
+
+/**
+ * Creates an edit/rename pencil icon.
+ * @param {Record<string, string>} rootAttrs
+ * @returns {SVGSVGElement}
+ */
+export function createEditIcon(rootAttrs = {}) {
+  return createSvgIcon(
+    [
+      { tag: 'path', attrs: { d: 'M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7' } },
+      { tag: 'path', attrs: { d: 'M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z' } },
+    ],
+    { ...rootAttrs, class: (rootAttrs.class ? rootAttrs.class + ' ' : '') + 'icon-svg' }
+  );
+}
+

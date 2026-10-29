@@ -3,7 +3,7 @@
  * Strict DOM Manipulation (No innerHTML, strictly textContent, createElement & createElementNS)
  */
 
-import { createSvgIcon } from './dom-icons.js';
+import { createSvgIcon, createExplorerIcon, createEditIcon } from './dom-icons.js';
 import { apiGet, apiPost } from './api-client.js';
 import {
   notify,
@@ -17,9 +17,12 @@ import {
   createGroupCollapseController,
 } from './table-groups.js';
 import { renderLogs, createQueueMonitor } from './queue-monitor.js';
+import { openRenameModal } from './rename-modal.js';
 
 export {
   createSvgIcon,
+  createExplorerIcon,
+  createEditIcon,
   apiGet,
   apiPost,
   notify,
@@ -30,6 +33,7 @@ export {
   createGroupCollapseController,
   renderLogs,
   createQueueMonitor,
+  openRenameModal,
 };
 
 /**
@@ -267,5 +271,44 @@ export async function checkSystemStatus(opts = {}) {
 
   if (typeof opts.onData === 'function') {
     opts.onData(data);
+  }
+}
+
+/**
+ * Sends a request to open a folder in Windows File Explorer (or host file manager).
+ * @param {string} [folderPath] - Relative subfolder or full path.
+ * @param {string} [sourceDir] - Base source directory.
+ * @returns {Promise<boolean>}
+ */
+export async function openFolderInExplorer(folderPath = '', sourceDir = '') {
+  notify({
+    type: 'info',
+    title: 'Membuka File Explorer...',
+    message: 'Mengirim perintah buka direktori ke Windows Explorer...',
+    duration: 2500,
+  });
+
+  const { ok, data, error } = await apiPost('/api/open-folder', {
+    source_dir: sourceDir || '',
+    folder: folderPath || '',
+  });
+
+  if (ok) {
+    notify({
+      type: 'success',
+      title: 'Windows Explorer Dibuka',
+      message: data?.message || 'Folder berhasil dibuka di File Explorer.',
+      duration: 3800,
+    });
+    return true;
+  } else {
+    notify({
+      type: 'error',
+      title: 'Gagal Membuka Explorer',
+      message: error || 'Gagal membuka folder di Windows Explorer.',
+      duration: 5000,
+      playSound: true,
+    });
+    return false;
   }
 }

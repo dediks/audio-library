@@ -397,10 +397,16 @@ body.dark-theme {
   box-shadow: 0 0 0 1px var(--accent-cyan), 0 4px 15px rgba(6, 182, 212, 0.15);
 }
 
-.format-card input[value="native"]:checked + .format-card-inner {
+.format-card input[value="opus"]:checked + .format-card-inner {
   border-color: #10b981;
   background: rgba(16, 185, 129, 0.06);
   box-shadow: 0 0 0 1px #10b981, 0 4px 15px rgba(16, 185, 129, 0.2);
+}
+
+.format-card input[value="native"]:checked + .format-card-inner {
+  border-color: var(--accent-cyan);
+  background: rgba(6, 182, 212, 0.06);
+  box-shadow: 0 0 0 1px var(--accent-cyan), 0 4px 15px rgba(6, 182, 212, 0.2);
 }
 
 .format-card input[value="mp3_320k"]:checked + .format-card-inner {
@@ -1868,6 +1874,209 @@ body.dark-theme {
   .file-name-cell {
     max-width: 175px;
   }
+}
+
+/* ==========================================================================
+   Shared Modal Backdrop, Dialog & Rename System
+   ========================================================================== */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 8, 15, 0.78);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  padding: 1rem;
+}
+
+.modal-backdrop.hidden {
+  display: none !important;
+}
+
+.modal-card {
+  width: 100%;
+  max-width: 600px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: modalFadeIn 0.18s ease-out;
+}
+
+.modal-card.modal-rename-card {
+  max-width: 480px;
+}
+
+@keyframes modalFadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.95rem 1.25rem;
+  background: var(--bg-surface-elevated);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.modal-header h3 {
+  font-family: var(--font-heading);
+  font-size: 0.96rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.modal-body {
+  padding: 1.15rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.65rem;
+  padding: 0.85rem 1.25rem;
+  background: var(--bg-surface-elevated);
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* Rename Field Styles */
+.rename-desc-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.02);
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+}
+
+.rename-desc-label {
+  font-family: var(--font-sans);
+  color: var(--text-muted);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.rename-target-badge {
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  color: var(--accent-cyan);
+  word-break: break-all;
+}
+
+.rename-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+}
+
+.rename-input {
+  flex: 1;
+}
+
+.rename-ext-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.48rem 0.65rem;
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--accent-green);
+  user-select: none;
+  white-space: nowrap;
+}
+
+.rename-error-msg {
+  color: var(--accent-red);
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  border-radius: var(--radius-sm);
+  padding: 0.45rem 0.75rem;
+  font-size: 0.76rem;
+  font-family: var(--font-sans);
+}
+
+/* Table Group Header Quick Action Buttons */
+.btn-group-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  padding: 0.22rem 0.55rem;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-sans);
+  font-size: 0.72rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.btn-group-action:hover {
+  background: rgba(6, 182, 212, 0.12);
+  border-color: rgba(6, 182, 212, 0.35);
+  color: var(--accent-cyan);
+}
+
+.btn-group-action .icon-svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* File Name Row Quick Action (Pencil) */
+.btn-file-rename {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.15rem 0.25rem;
+  border-radius: 4px;
+  opacity: 0.45;
+  transition: all var(--transition-fast);
+  margin-left: 0.25rem;
+  flex-shrink: 0;
+}
+
+.file-name-inline:hover .btn-file-rename,
+.file-name-wrapper:hover .btn-file-rename,
+.btn-file-rename:focus,
+.btn-file-rename:hover {
+  opacity: 1;
+  color: var(--accent-cyan);
+  background: rgba(6, 182, 212, 0.12);
+}
+
+.btn-file-rename .icon-svg {
+  width: 13px;
+  height: 13px;
 }
 
 

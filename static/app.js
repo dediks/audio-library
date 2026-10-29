@@ -15,6 +15,8 @@ import {
   createFileNameCell,
   createGroupCollapseController,
   createQueueMonitor,
+  openRenameModal,
+  openFolderInExplorer,
 } from './modules/ui-shared.js';
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -25,6 +27,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const optPlaylist = document.getElementById('optPlaylist');
   const optUseCookies = document.getElementById('optUseCookies');
   const optKeepOpus = document.getElementById('optKeepOpus');
+  const optRawWebm = document.getElementById('optRawWebm');
+  const rawWebmToggleWrap = document.getElementById('rawWebmToggleWrap');
+  const keepOpusToggleWrap = document.getElementById('keepOpusToggleWrap');
   const btnStartIngest = document.getElementById('btnStartIngest');
 
   const systemNoticeCard = document.getElementById('systemNoticeCard');
@@ -41,6 +46,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnClearLogs = document.getElementById('btnClearLogs');
 
   const btnRefreshLibrary = document.getElementById('btnRefreshLibrary');
+  const btnOpenInboxExplorer = document.getElementById('btnOpenInboxExplorer');
   const btnResampleMp3 = document.getElementById('btnResampleMp3');
   const btnAuditAll = document.getElementById('btnAuditAll');
   const libraryTableBody = document.getElementById('libraryTableBody');
@@ -50,6 +56,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnExpandAllGroups = document.getElementById('btnExpandAllGroups');
 
   let allLibraryFiles = [];
+  let currentSourceDir = '';
   const collapsedGroups = new Set();
   const groupDomMap = new Map();
 
@@ -125,7 +132,60 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     allLibraryFiles = data.files || [];
+    currentSourceDir = data.source_dir || '';
     renderLibraryTable();
+  }
+
+  function handleRenameFile(fileObj) {
+    openRenameModal({
+      title: 'Ubah Nama File Audio',
+      oldName: fileObj.name,
+      isFolder: false,
+      onSave: async (newName) => {
+        const { ok, data, error } = await apiPost('/api/rename', {
+          source_dir: currentSourceDir,
+          rel_path: fileObj.rel_path,
+          new_name: newName,
+          is_folder: false,
+        });
+        if (!ok) {
+          throw new Error(error || 'Gagal mengubah nama file.');
+        }
+        notify({
+          type: 'success',
+          title: 'File Berhasil Diubah',
+          message: `Nama file diubah menjadi: ${data?.new_name || newName}`,
+          duration: 3500,
+        });
+        await fetchLibraryFiles();
+      },
+    });
+  }
+
+  function handleRenameFolder(group) {
+    openRenameModal({
+      title: 'Ubah Nama Folder Playlist',
+      oldName: group.key.split('/').pop(),
+      isFolder: true,
+      onSave: async (newName) => {
+        const { ok, data, error } = await apiPost('/api/rename', {
+          source_dir: currentSourceDir,
+          rel_path: group.key,
+          new_name: newName,
+          is_folder: true,
+        });
+        if (!ok) {
+          throw new Error(error || 'Gagal mengubah nama folder.');
+        }
+        notify({
+          type: 'success',
+          title: 'Folder Berhasil Diubah',
+          message: `Nama folder diubah menjadi: ${data?.new_name || newName}`,
+          duration: 3500,
+        });
+        await fetchLibraryFiles();
+      },
+    });
   }
 
   function renderLibraryTable() {
@@ -169,7 +229,14 @@ document.addEventListener('DOMContentLoaded', () => {
       const headerTd = document.createElement('td');
       headerTd.setAttribute('colspan', '8');
 
-      const { bar, chevron, toggleHint } = createGroupHeaderBar(group, isCollapsed);
+      const { bar, chevron, toggleHint } = createGroupHeaderBar(group, isCollapsed, {
+        onOpenExplorer: (g) => {
+          openFolderInExplorer(g.isRoot ? '' : g.key, currentSourceDir);
+        },
+        onRenameFolder: (g) => {
+          handleRenameFolder(g);
+        },
+      });
       headerTd.appendChild(bar);
       headerTr.appendChild(headerTd);
 
@@ -185,7 +252,15 @@ document.addEventListener('DOMContentLoaded', () => {
         if (isCollapsed) tr.classList.add('group-row-hidden');
 
         // Compact single-line song title with track index (folder is already shown on the group header)
-        tr.appendChild(createFileNameCell(f, { index: idx + 1, showFolderBadge: false }));
+        tr.appendChild(
+          createFileNameCell(f, {
+            index: idx + 1,
+            showFolderBadge: false,
+            onRename: (fileObj) => {
+              handleRenameFile(fileObj);
+            },
+          })
+        );
 
         // Size
         const tdSize = document.createElement('td');
@@ -276,16 +351,31 @@ document.addEventListener('DOMContentLoaded', () => {
   if (specDot) specDot.style.backgroundColor = '#10b981';
 
   function updateFormatSpecBanner() {
-    const val = document.querySelector('input[name="audioFormat"]:checked')?.value || 'native';
+    const val = document.querySelector('input[name="audioFormat"]:checked')?.value || 'opus';
     const keepOpus = optKeepOpus ? optKeepOpus.checked : false;
-    const opusSuffix = keepOpus ? ' + Simpan File Asli Opus (.webm)' : '';
-    if (val === 'native') {
-      if (specText) specText.textContent = 'Target: Best Available - stream asli YouTube, tanpa konversi';
-      if (specDot) specDot.style.backgroundColor = '#10b981';
+    const isRawWebm = optRawWebm ? optRawWebm.checked : false;
+
+    if (rawWebmToggleWrap) {
+      rawWebmToggleWrap.style.display = val === 'opus' ? 'flex' : 'none';
+    }
+    if (keepOpusToggleWrap) {
+      keepOpusToggleWrap.style.display = val.startsWith('mp3') ? 'flex' : 'none';
+    }
+
+    if (val === 'opus') {
+      if (isRawWebm) {
+        if (specText) specText.textContent = 'Target: Native Raw Stream — Format mentah asli YouTube (.webm / .m4a) tanpa remux';
+        if (specDot) specDot.style.backgroundColor = 'var(--accent-cyan)';
+      } else {
+        if (specText) specText.textContent = 'Target: Opus Best Quality (.opus) — Lossless Remux 48 kHz + Metadata Tag';
+        if (specDot) specDot.style.backgroundColor = '#10b981';
+      }
     } else if (val === 'mp3_320k') {
+      const opusSuffix = keepOpus ? ' + Simpan File Asli Opus (.webm)' : '';
       if (specText) specText.textContent = 'Target: MP3 320 kbps CBR' + opusSuffix + ' (KONVERSI lossy)';
       if (specDot) specDot.style.backgroundColor = 'var(--accent-amber)';
     } else if (val === 'mp3_vbr0') {
+      const opusSuffix = keepOpus ? ' + Simpan File Asli Opus (.webm)' : '';
       if (specText) specText.textContent = 'Target: MP3 VBR 0' + opusSuffix + ' (KONVERSI lossy)';
       if (specDot) specDot.style.backgroundColor = '#c084fc';
     }
@@ -299,6 +389,12 @@ document.addEventListener('DOMContentLoaded', () => {
     optKeepOpus.addEventListener('change', updateFormatSpecBanner);
   }
 
+  if (optRawWebm) {
+    optRawWebm.addEventListener('change', updateFormatSpecBanner);
+  }
+
+  updateFormatSpecBanner();
+
   // 4. Submit Batch Ingestion Form
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -310,17 +406,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const isPlaylist = optPlaylist ? optPlaylist.checked : false;
     const useCookies = optUseCookies ? optUseCookies.checked : true;
     const keepOpus = optKeepOpus ? optKeepOpus.checked : false;
-    const audioFormat = document.querySelector('input[name="audioFormat"]:checked')?.value || 'native';
+    const selectedFormat = document.querySelector('input[name="audioFormat"]:checked')?.value || 'opus';
+    const isRawWebm = optRawWebm ? optRawWebm.checked : false;
+    const effectiveFormat = (selectedFormat === 'opus' && isRawWebm) ? 'native' : selectedFormat;
 
     btnStartIngest.disabled = true;
-    const opusLog = (audioFormat !== 'native' && keepOpus) ? ' + Opus (.webm)' : '';
-    log('info', `[DISPATCH] Mengirim ${urls.length} item ke antrian unduhan (${audioFormat}${opusLog})...`);
+    const opusLog = (effectiveFormat.startsWith('mp3') && keepOpus) ? ' + Opus (.webm)' : '';
+    log('info', `[DISPATCH] Mengirim ${urls.length} item ke antrian unduhan (${effectiveFormat}${opusLog})...`);
 
     const { ok, data, error } = await apiPost('/api/download', {
       urls,
       auto_scan: autoScan,
       is_playlist: isPlaylist,
-      audio_format: audioFormat,
+      audio_format: effectiveFormat,
       keep_opus: keepOpus,
       use_cookies: useCookies,
       cookie_browser: 'chrome',
@@ -375,6 +473,12 @@ document.addEventListener('DOMContentLoaded', () => {
         playSound: true,
       });
     }
+  }
+
+  if (btnOpenInboxExplorer) {
+    btnOpenInboxExplorer.addEventListener('click', () => {
+      openFolderInExplorer('', currentSourceDir);
+    });
   }
 
   btnRefreshLibrary.addEventListener('click', async () => {

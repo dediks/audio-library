@@ -25,6 +25,30 @@ class AudioMetadataCache:
         with self.lock:
             self.qc_results[str(file_path)] = qc_data
 
+    def rename_entry(self, old_path: Path | str, new_path: Path | str) -> None:
+        """Renames a cached file entry in both QC and metadata stores."""
+        old_str = str(old_path)
+        new_str = str(new_path)
+        with self.lock:
+            if old_str in self.qc_results:
+                self.qc_results[new_str] = self.qc_results.pop(old_str)
+            if old_str in self.meta_results:
+                self.meta_results[new_str] = self.meta_results.pop(old_str)
+
+    def rename_folder(self, old_folder: Path | str, new_folder: Path | str) -> None:
+        """Renames all cached entries matching a playlist/folder prefix."""
+        old_prefix = str(old_folder).rstrip("/") + "/"
+        new_prefix = str(new_folder).rstrip("/") + "/"
+        with self.lock:
+            for store in (self.qc_results, self.meta_results):
+                keys_to_update = [k for k in store if k == str(old_folder) or k.startswith(old_prefix)]
+                for k in keys_to_update:
+                    if k == str(old_folder):
+                        new_k = str(new_folder)
+                    else:
+                        new_k = new_prefix + k[len(old_prefix):]
+                    store[new_k] = store.pop(k)
+
     def update_after_resample(self, out_p: Path, old_p_str: str, overwrite: bool) -> None:
         with self.lock:
             if overwrite and old_p_str != str(out_p):
@@ -279,11 +303,11 @@ class TaskQueueManager:
         if cookie_browser not in ("chrome", "chromium", "firefox", "brave", "edge", "opera", "vivaldi"):
             cookie_browser = "chrome"
 
-        audio_format = str(payload.get("audio_format", "native")).lower()
-        if audio_format == "premium_aac":  # legacy alias
-            audio_format = "native"
-        if audio_format not in ("native", "mp3_320k", "mp3_vbr0"):
-            audio_format = "native"
+        audio_format = str(payload.get("audio_format", "opus")).lower()
+        if audio_format in ("premium", "premium_aac"):  # legacy alias
+            audio_format = "opus"
+        if audio_format not in ("opus", "native", "mp3_320k", "mp3_vbr0"):
+            audio_format = "opus"
         keep_opus = bool(payload.get("keep_opus", False))
 
         if isinstance(urls, str):
@@ -606,9 +630,9 @@ class TaskQueueManager:
             )
             return
 
-        audio_format = task.get("audio_format", "native")
-        if audio_format == "premium_aac":
-            audio_format = "native"
+        audio_format = task.get("audio_format", "opus")
+        if audio_format in ("premium", "premium_aac"):
+            audio_format = "opus"
         keep_opus = bool(task.get("keep_opus", False))
         is_playlist = bool(task.get("is_playlist", False))
         use_cookies = bool(task.get("use_cookies", True))

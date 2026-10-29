@@ -3,7 +3,7 @@
  * Strict DOM Manipulation (No innerHTML, strictly textContent & createElement)
  */
 
-import { notify, apiPost } from './ui-shared.js';
+import { notify, apiPost, openFolderInExplorer } from './ui-shared.js';
 
 /**
  * Initializes the folder browser modal for selecting Source or Destination directories.
@@ -179,6 +179,15 @@ export function initFolderModal(opts) {
         onSelectSource(chosen);
       } else {
         onSelectDest(chosen);
+      }
+    });
+  }
+
+  const btnModalOpenExplorer = opts.btnModalOpenExplorer || document.getElementById('btnModalOpenExplorer');
+  if (btnModalOpenExplorer) {
+    btnModalOpenExplorer.addEventListener('click', () => {
+      if (modalBrowsingPath) {
+        openFolderInExplorer(modalBrowsingPath);
       }
     });
   }

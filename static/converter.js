@@ -15,6 +15,8 @@ import {
   createFileNameCell,
   createGroupCollapseController,
   createQueueMonitor,
+  openRenameModal,
+  openFolderInExplorer,
 } from './modules/ui-shared.js';
 import { initFolderModal } from './modules/folder-modal.js';
 
@@ -39,6 +41,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnClearLogs = document.getElementById('btnClearLogs');
 
   const btnProbeCurrent = document.getElementById('btnProbeCurrent');
+  const btnOpenSourceExplorer = document.getElementById('btnOpenSourceExplorer');
   const btnConvertSelected = document.getElementById('btnConvertSelected');
   const btnConvertSelectedText = document.getElementById('btnConvertSelectedText');
 
@@ -149,6 +152,61 @@ document.addEventListener('DOMContentLoaded', () => {
     applyFiltersAndRenderTable();
     updateSelectionUI();
     return true;
+  }
+
+  function handleRenameFile(fileObj) {
+    openRenameModal({
+      title: 'Ubah Nama File Audio',
+      oldName: fileObj.name,
+      isFolder: false,
+      onSave: async (newName) => {
+        const { ok, data, error } = await apiPost('/api/rename', {
+          source_dir: currentSourceDir,
+          rel_path: fileObj.rel_path,
+          new_name: newName,
+          is_folder: false,
+        });
+        if (!ok) {
+          throw new Error(error || 'Gagal mengubah nama file.');
+        }
+        notify({
+          type: 'success',
+          title: 'File Berhasil Diubah',
+          message: `Nama file diubah menjadi: ${data?.new_name || newName}`,
+          duration: 3500,
+        });
+        await fetchLibrary();
+      },
+    });
+  }
+
+  function handleRenameFolder(group) {
+    openRenameModal({
+      title: 'Ubah Nama Folder Playlist',
+      oldName: group.key.split('/').pop(),
+      isFolder: true,
+      onSave: async (newName) => {
+        const { ok, data, error } = await apiPost('/api/rename', {
+          source_dir: currentSourceDir,
+          rel_path: group.key,
+          new_name: newName,
+          is_folder: true,
+        });
+        if (!ok) {
+          throw new Error(error || 'Gagal mengubah nama folder.');
+        }
+        notify({
+          type: 'success',
+          title: 'Folder Berhasil Diubah',
+          message: `Nama folder diubah menjadi: ${data?.new_name || newName}`,
+          duration: 3500,
+        });
+        if (activePlaylist === group.key) {
+          activePlaylist = data?.rel_path || 'ALL';
+        }
+        await fetchLibrary();
+      },
+    });
   }
 
   // 3. Fast ffprobe scan for a playlist folder
@@ -376,7 +434,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const headerTd = document.createElement('td');
       headerTd.setAttribute('colspan', '5');
-      const { bar, chevron, toggleHint } = createGroupHeaderBar(group, isCollapsed);
+      const { bar, chevron, toggleHint } = createGroupHeaderBar(group, isCollapsed, {
+        onOpenExplorer: (g) => {
+          openFolderInExplorer(g.isRoot ? '' : g.key, currentSourceDir);
+        },
+        onRenameFolder: (g) => {
+          handleRenameFolder(g);
+        },
+      });
       headerTd.appendChild(bar);
       headerTr.appendChild(headerTd);
 
@@ -420,7 +485,15 @@ document.addEventListener('DOMContentLoaded', () => {
         rowElementsByPath.set(f.rel_path, { tr, chk });
 
         // 2. Compact single-line song title + track number (folder is shown on group header)
-        tr.appendChild(createFileNameCell(f, { index: groupIdx + 1, showFolderBadge: false }));
+        tr.appendChild(
+          createFileNameCell(f, {
+            index: groupIdx + 1,
+            showFolderBadge: false,
+            onRename: (fileObj) => {
+              handleRenameFile(fileObj);
+            },
+          })
+        );
 
         const qc = f.qc || {};
 
@@ -818,6 +891,12 @@ document.addEventListener('DOMContentLoaded', () => {
       }, 1000);
     }
   });
+
+  if (btnOpenSourceExplorer) {
+    btnOpenSourceExplorer.addEventListener('click', () => {
+      openFolderInExplorer('', currentSourceDir);
+    });
+  }
 
   btnClearLogs.addEventListener('click', () => {
     terminalLogs.replaceChildren();

@@ -3,6 +3,8 @@
  * Strict DOM Manipulation (No innerHTML, strictly textContent & createElement)
  */
 
+import { createExplorerIcon, createEditIcon } from './dom-icons.js';
+
 /**
  * Groups an array of file objects by their folder/playlist name.
  * @param {Array<any>} files
@@ -60,7 +62,7 @@ export function groupFilesByFolder(files) {
  * @param {boolean} isCollapsed
  * @returns {{ bar: HTMLDivElement, chevron: HTMLSpanElement, toggleHint: HTMLSpanElement }}
  */
-export function createGroupHeaderBar(group, isCollapsed) {
+export function createGroupHeaderBar(group, isCollapsed, opts = {}) {
   const bar = document.createElement('div');
   bar.className = 'group-header-bar';
 
@@ -95,6 +97,40 @@ export function createGroupHeaderBar(group, isCollapsed) {
   const right = document.createElement('div');
   right.className = 'group-header-right';
 
+  // Quick Action: Open in Windows Explorer
+  if (typeof opts.onOpenExplorer === 'function') {
+    const btnExplorer = document.createElement('button');
+    btnExplorer.type = 'button';
+    btnExplorer.className = 'btn-group-action';
+    btnExplorer.title = 'Buka folder ini di Windows Explorer';
+    btnExplorer.appendChild(createExplorerIcon());
+    const expText = document.createElement('span');
+    expText.textContent = 'Explorer';
+    btnExplorer.appendChild(expText);
+    btnExplorer.addEventListener('click', (e) => {
+      e.stopPropagation();
+      opts.onOpenExplorer(group);
+    });
+    right.appendChild(btnExplorer);
+  }
+
+  // Quick Action: Rename Folder (only for subfolders/playlists, not inbox root)
+  if (typeof opts.onRenameFolder === 'function' && !group.isRoot) {
+    const btnRename = document.createElement('button');
+    btnRename.type = 'button';
+    btnRename.className = 'btn-group-action';
+    btnRename.title = 'Ubah nama folder playlist ini';
+    btnRename.appendChild(createEditIcon());
+    const renText = document.createElement('span');
+    renText.textContent = 'Rename';
+    btnRename.appendChild(renText);
+    btnRename.addEventListener('click', (e) => {
+      e.stopPropagation();
+      opts.onRenameFolder(group);
+    });
+    right.appendChild(btnRename);
+  }
+
   const toggleHint = document.createElement('span');
   toggleHint.className = 'group-toggle-hint';
   toggleHint.textContent = isCollapsed ? 'Buka Daftar' : 'Lipat';
@@ -107,9 +143,9 @@ export function createGroupHeaderBar(group, isCollapsed) {
 }
 
 /**
- * Creates a compact table cell (<td>) displaying a track index and file name (with optional folder badge).
- * @param {{ name: string, folder?: string }} fileObj
- * @param {{ index?: number, showFolderBadge?: boolean }} opts
+ * Creates a compact table cell (<td>) displaying a track index and file name (with optional folder badge & rename button).
+ * @param {{ name: string, folder?: string, rel_path?: string }} fileObj
+ * @param {{ index?: number, showFolderBadge?: boolean, onRename?: (file: any) => void }} opts
  * @returns {HTMLTableCellElement}
  */
 export function createFileNameCell(fileObj, opts = {}) {
@@ -140,6 +176,19 @@ export function createFileNameCell(fileObj, opts = {}) {
   titleSpan.textContent = fileObj.name;
   titleSpan.title = fileObj.name;
   wrapper.appendChild(titleSpan);
+
+  if (typeof opts.onRename === 'function') {
+    const btnRename = document.createElement('button');
+    btnRename.type = 'button';
+    btnRename.className = 'btn-file-rename';
+    btnRename.title = 'Ubah nama file audio ini';
+    btnRename.appendChild(createEditIcon());
+    btnRename.addEventListener('click', (e) => {
+      e.stopPropagation();
+      opts.onRename(fileObj);
+    });
+    wrapper.appendChild(btnRename);
+  }
 
   tdName.appendChild(wrapper);
   return tdName;

@@ -158,6 +158,10 @@ class AudioServerHandler(BaseHTTPRequestHandler):
         elif path == "/api/resample":
             status, resp = task_manager.enqueue_resample(payload)
             self.send_json(status, resp)
+        elif path == "/api/open-folder":
+            self._handle_post_open_folder(payload)
+        elif path == "/api/rename":
+            self._handle_post_rename(payload)
         else:
             self.send_error(404, "Endpoint not found")
 
@@ -213,6 +217,65 @@ class AudioServerHandler(BaseHTTPRequestHandler):
             "playlists": playlists_data,
             "source_dir": str(source_resolved),
         })
+
+    def _handle_post_open_folder(self, payload: dict) -> None:
+        raw_src = payload.get("source_dir")
+        raw_folder = payload.get("folder")
+        try:
+            base = resolve_safe_dir(raw_src, INBOX_DIR, must_exist=True) if raw_src else INBOX_DIR.resolve()
+            if raw_folder and isinstance(raw_folder, str) and raw_folder.strip():
+                folder_str = raw_folder.strip()
+                if Path(folder_str).is_absolute() or folder_str.startswith("/mnt/"):
+                    target = resolve_safe_dir(folder_str, must_exist=True)
+                else:
+                    target = (base / folder_str).resolve()
+                    if not target.is_relative_to(base) or not target.exists():
+                        self.send_json(400, {"error": "Folder tidak ditemukan atau berada di luar batas direktori."})
+                        return
+            else:
+                target = base
+
+            ok, msg = fs_browser.open_in_file_manager(target)
+            if ok:
+                self.send_json(200, {"ok": True, "message": msg, "path": str(target)})
+            else:
+                self.send_json(500, {"ok": False, "error": msg})
+        except Exception as exc:
+            self.send_json(400, {"error": str(exc)})
+
+    def _handle_post_rename(self, payload: dict) -> None:
+        raw_src = payload.get("source_dir")
+        rel_path = payload.get("rel_path")
+        new_name = payload.get("new_name")
+        is_folder = payload.get("is_folder")
+
+        try:
+            src_dir = resolve_safe_dir(raw_src, INBOX_DIR, must_exist=True) if raw_src else INBOX_DIR.resolve()
+            ok, msg, old_p, new_p = fs_browser.rename_fs_entry(
+                source_dir=src_dir,
+                rel_path=rel_path or "",
+                new_name=new_name or "",
+                is_folder=is_folder,
+            )
+            if not ok:
+                self.send_json(400, {"error": msg})
+                return
+
+            # Update cache keys
+            if new_p.is_dir():
+                metadata_cache.rename_folder(old_p, new_p)
+            else:
+                metadata_cache.rename_entry(old_p, new_p)
+
+            self.send_json(200, {
+                "ok": True,
+                "message": msg,
+                "old_name": old_p.name,
+                "new_name": new_p.name,
+                "rel_path": str(new_p.relative_to(src_dir)),
+            })
+        except Exception as exc:
+            self.send_json(400, {"error": str(exc)})
 
     def serve_file(self, file_path: Path, content_type: str):
         try:

@@ -67,17 +67,17 @@
           <div class="field-group">
             <label class="field-label">
               <span>Format &amp; Kualitas Output</span>
-              <span class="label-hint">Default: stream asli terbaik dari YouTube, tanpa konversi apa pun</span>
+              <span class="label-hint">Default: Opus 48 kHz (.opus) dengan lossless stream remux &amp; embedded tags</span>
             </label>
             <div class="format-grid">
               <label class="format-card">
-                <input type="radio" name="audioFormat" value="native" checked>
+                <input type="radio" name="audioFormat" value="opus" checked>
                 <div class="format-card-inner">
                   <div class="format-badge-row">
-                    <span class="format-badge emerald">BEST AVAILABLE</span>
-                    <span class="format-sub">Tanpa konversi</span>
+                    <span class="format-badge emerald">OPUS 48 KHZ</span>
+                    <span class="format-sub">BEST QUALITY (.OPUS)</span>
                   </div>
-                  <p class="format-desc">Stream audio asli yang disediakan YouTube (umumnya Opus 48 kHz, atau AAC jika server menyediakannya). File disimpan apa adanya dalam container aslinya (.webm / .m4a).</p>
+                  <p class="format-desc">Stream Opus terbaik YouTube dalam wadah standar <strong>.opus</strong> (lossless remux + metadata tag). Format modern paling optimal untuk pemutar audio.</p>
                 </div>
               </label>
 
@@ -106,6 +106,15 @@
           </div>
 
           <div class="options-row">
+            <label class="custom-toggle" id="rawWebmToggleWrap">
+              <input type="checkbox" id="optRawWebm">
+              <span class="toggle-slider"></span>
+              <div class="toggle-text-wrap">
+                <span class="toggle-text">Unduh stream mentah (.webm / .m4a tanpa remux)</span>
+                <span class="toggle-hint">Default (Nonaktif): Menghasilkan file .opus standar. Aktifkan jika ingin file wadah mentah asli YouTube</span>
+              </div>
+            </label>
+
             <label class="custom-toggle" id="keepOpusToggleWrap">
               <input type="checkbox" id="optKeepOpus">
               <span class="toggle-slider"></span>
@@ -225,6 +234,14 @@
         </div>
 
         <div class="library-actions">
+          <button type="button" id="btnOpenInboxExplorer" class="btn-secondary" title="Buka folder inbox library di Windows File Explorer">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+              <line x1="12" y1="11" x2="12" y2="17"></line>
+              <polyline points="9 14 12 11 15 14"></polyline>
+            </svg>
+            <span>Buka di Explorer</span>
+          </button>
           <button type="button" id="btnRefreshLibrary" class="btn-secondary">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="23 4 23 10 17 10"></polyline>

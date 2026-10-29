@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -254,4 +256,160 @@ def validate_url(url_str: str) -> bool:
         return any(netloc == domain or netloc.endswith("." + domain) for domain in ALLOWED_YOUTUBE_DOMAINS)
     except Exception:
         return False
+
+
+def to_windows_path(linux_path: Path | str) -> str:
+    """Converts a Linux/WSL path to a Windows-compatible path (Drive or UNC)."""
+    p_str = str(linux_path).strip()
+    wslpath_bin = shutil.which("wslpath")
+    if wslpath_bin:
+        try:
+            res = subprocess.run([wslpath_bin, "-w", p_str], capture_output=True, text=True, timeout=3)
+            if res.returncode == 0 and res.stdout.strip():
+                return res.stdout.strip()
+        except Exception:
+            pass
+
+    # Fallback 1: Drive mapping for /mnt/<letter>/...
+    mnt_match = re.match(r"^/mnt/([a-zA-Z])(?:/(.*))?$", p_str)
+    if mnt_match:
+        drive = mnt_match.group(1).upper()
+        rest = (mnt_match.group(2) or "").replace("/", "\\")
+        return f"{drive}:\\{rest}" if rest else f"{drive}:\\"
+
+    # Fallback 2: UNC path for WSL2 distro
+    distro = os.environ.get("WSL_DISTRO_NAME", "Ubuntu")
+    win_rest = p_str.replace("/", "\\")
+    return f"\\\\wsl.localhost\\{distro}{win_rest}"
+
+
+def open_in_file_manager(target_path: Path) -> tuple[bool, str]:
+    """Opens a directory or highlights a file in Windows File Explorer (or host file manager)."""
+    if not target_path.exists():
+        return False, f"Jalur tidak ditemukan di sistem: {target_path}"
+
+    win_path = to_windows_path(target_path)
+
+    # 1. Search for explorer.exe or Windows launch binaries in PATH and standard locations
+    explorer_candidates = [
+        shutil.which("explorer.exe"),
+        "/mnt/c/Windows/explorer.exe",
+        "/mnt/c/WINDOWS/explorer.exe",
+    ]
+    explorer_bin = next((b for b in explorer_candidates if b and os.path.isfile(b) and os.access(b, os.X_OK)), None)
+
+    if explorer_bin:
+        try:
+            args = [explorer_bin, win_path] if target_path.is_dir() else [explorer_bin, f"/select,{win_path}"]
+            subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True, f"Membuka di Windows Explorer: {win_path}"
+        except Exception as exc:
+            return False, f"Gagal menjalankan explorer.exe: {exc}"
+
+    # 2. Try PowerShell Start-Process
+    ps_candidates = [
+        shutil.which("powershell.exe"),
+        "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
+        "/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe",
+    ]
+    ps_bin = next((b for b in ps_candidates if b and os.path.isfile(b) and os.access(b, os.X_OK)), None)
+    if ps_bin:
+        try:
+            cmd = f"Start-Process explorer.exe -ArgumentList '{win_path}'"
+            subprocess.Popen([ps_bin, "-NoProfile", "-Command", cmd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True, f"Membuka via PowerShell: {win_path}"
+        except Exception as exc:
+            pass
+
+    # 3. Try xdg-open for Linux desktops
+    xdg_bin = shutil.which("xdg-open")
+    if xdg_bin:
+        try:
+            subprocess.Popen([xdg_bin, str(target_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True, f"Membuka via xdg-open: {target_path}"
+        except Exception as exc:
+            return False, f"Gagal menjalankan xdg-open: {exc}"
+
+    # 4. Try macOS open
+    mac_open = shutil.which("open")
+    if mac_open:
+        try:
+            subprocess.Popen([mac_open, str(target_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True, f"Membuka via open: {target_path}"
+        except Exception as exc:
+            return False, f"Gagal menjalankan open: {exc}"
+
+    return False, "Tidak dapat menemukan explorer.exe atau file manager di sistem host."
+
+
+FORBIDDEN_NAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def sanitize_entry_name(name: str) -> str:
+    """Sanitizes a proposed filename or folder name."""
+    clean = name.strip()
+    if not clean:
+        raise ValueError("Nama tidak boleh kosong.")
+    if clean in (".", "..") or clean.startswith("."):
+        raise ValueError("Nama tidak boleh diawali tanda titik (.) atau berupa nama tersembunyi.")
+    if FORBIDDEN_NAME_CHARS.search(clean):
+        raise ValueError('Nama mengandung karakter tidak valid (< > : " / \\ | ? * atau kontrol).')
+    if len(clean) > 255:
+        raise ValueError("Nama terlalu panjang (maksimum 255 karakter).")
+    return clean
+
+
+def rename_fs_entry(
+    source_dir: Path,
+    rel_path: str,
+    new_name: str,
+    is_folder: bool | None = None,
+) -> tuple[bool, str, Path, Path]:
+    """Safely renames an audio file or a subfolder within source_dir.
+
+    Returns:
+        tuple[bool, message, old_resolved_path, new_resolved_path]
+    """
+    if not rel_path or not isinstance(rel_path, str):
+        return False, "Jalur file/folder sumber tidak valid.", Path(), Path()
+
+    clean_new_name = sanitize_entry_name(new_name)
+
+    base = source_dir.resolve()
+    target_path = (base / rel_path.strip().lstrip("/\\")).resolve()
+    if not target_path.is_relative_to(base):
+        return False, "Akses jalur ditolak (di luar batas direktori sumber).", Path(), Path()
+    if not target_path.exists():
+        return False, f"File atau folder tidak ditemukan: {rel_path}", Path(), Path()
+
+    target_is_dir = target_path.is_dir() if is_folder is None else bool(is_folder)
+    parent_dir = target_path.parent
+
+    if target_is_dir:
+        new_path = (parent_dir / clean_new_name).resolve()
+        if not new_path.is_relative_to(base):
+            return False, "Akses jalur ditolak saat menentukan folder tujuan.", Path(), Path()
+        if new_path == target_path:
+            return True, "Nama folder tidak berubah.", target_path, new_path
+        if new_path.exists():
+            return False, f"Folder dengan nama '{clean_new_name}' sudah ada.", Path(), Path()
+    else:
+        orig_ext = target_path.suffix.lower()
+        if not clean_new_name.lower().endswith(orig_ext):
+            clean_new_name = f"{clean_new_name}{orig_ext}"
+
+        new_path = (parent_dir / clean_new_name).resolve()
+        if not new_path.is_relative_to(base):
+            return False, "Akses jalur ditolak saat menentukan file tujuan.", Path(), Path()
+        if new_path == target_path:
+            return True, "Nama file tidak berubah.", target_path, new_path
+        if new_path.exists():
+            return False, f"File dengan nama '{clean_new_name}' sudah ada.", Path(), Path()
+
+    try:
+        target_path.rename(new_path)
+        msg = f"Berhasil mengubah nama menjadi '{new_path.name}'"
+        return True, msg, target_path, new_path
+    except OSError as exc:
+        return False, f"Gagal mengubah nama di sistem: {exc}", Path(), Path()
 

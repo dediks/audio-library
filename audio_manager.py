@@ -143,6 +143,8 @@ def sync_download_archive(
 
     if audio_format in ("mp3", "mp3_320k", "mp3_vbr0"):
         valid_ids = (mp3_ids & opus_ids) if keep_opus else mp3_ids
+    elif audio_format == "opus":
+        valid_ids = opus_ids
     else:
         valid_ids = any_ids
 
@@ -389,7 +391,7 @@ def build_ytdlp_command(
     url: str,
     output_template: str,
     archive_file: Path,
-    audio_format: str = "native",
+    audio_format: str = "opus",
     keep_opus: bool = False,
     is_playlist: bool = False,
     cookies_file: Path | None = None,
@@ -397,12 +399,21 @@ def build_ytdlp_command(
     js_runtime: str | None = None,
 ) -> tuple[list[str], str]:
     """Builds the yt-dlp command list and a human-readable target description."""
-    norm_format = "native" if audio_format in ("native", "premium", "premium_aac") else audio_format
+    norm_format = "opus" if audio_format in ("opus", "premium", "premium_aac") else audio_format
     if norm_format == "mp3":
         norm_format = "mp3_320k"
 
     cmd = ["yt-dlp"]
-    if norm_format == "native":
+    if norm_format == "opus":
+        # Prioritize 774 (Premium Opus 256k) then 251 (Public High Opus 160k),
+        # extract to .opus via lossless stream copy (-c:a copy), and embed metadata
+        cmd.extend([
+            "-f", f"{YOUTUBE_OPUS_SELECTOR}/b",
+            "--extract-audio",
+            "--audio-format", "opus",
+            "--embed-metadata",
+        ])
+    elif norm_format == "native":
         # Audio-only stream, kept as-is. Prioritize Premium 256k (141 AAC / 774 Opus),
         # then Public 160k 48kHz Opus (251), 128k AAC (140), and non-DRC streams.
         cmd.extend(["-f", YOUTUBE_AUDIO_SELECTOR])
@@ -430,7 +441,9 @@ def build_ytdlp_command(
         auth_desc = cookie_browser
 
     opus_note = " + Simpan File Asli Opus (.webm)" if keep_opus else ""
-    if norm_format == "mp3_320k":
+    if norm_format == "opus":
+        desc = f"Target: Opus Best Quality (.opus) — Lossless Remux 48 kHz (Auth: {auth_desc})"
+    elif norm_format == "mp3_320k":
         cmd.extend([
             "--extract-audio",
             "--audio-format", "mp3",
@@ -452,7 +465,7 @@ def build_ytdlp_command(
         desc = f"Target: MP3 VBR 0{opus_note} (KONVERSI lossy, Auth: {auth_desc})"
     else:
         # Native: no postprocessing at all (no extract/convert/remux/metadata embed).
-        desc = f"Target: Best Available - stream asli YouTube tanpa konversi (Auth: {auth_desc})"
+        desc = f"Target: Native Raw Stream - stream asli YouTube tanpa konversi (Auth: {auth_desc})"
 
     cmd.append(url)
     return cmd, desc
@@ -470,10 +483,10 @@ def download(args) -> int:
     else:
         template = str(folder / "%(title).150B [%(id)s].%(ext)s")
 
-    selected_format = getattr(args, "format", "native")
+    selected_format = getattr(args, "format", "opus")
     keep_opus = bool(getattr(args, "keep_opus", False))
-    if selected_format == "premium":  # legacy alias
-        selected_format = "native"
+    if selected_format in ("premium", "premium_aac"):  # legacy alias
+        selected_format = "opus"
 
     removed_stale = sync_download_archive(folder, archive, selected_format, keep_opus)
     if removed_stale > 0:
@@ -795,8 +808,8 @@ def main() -> int:
     d = sub.add_parser("download", help="Download sumber yang memang diizinkan")
     d.add_argument("url")
     d.add_argument("--authorized", action="store_true", help="Saya memiliki izin sumber ini")
-    d.add_argument("--format", choices=["native", "premium", "mp3"], default="native",
-                   help="'native' (default): stream audio terbaik apa adanya, tanpa konversi. 'premium' = alias 'native'. 'mp3': konversi MP3 320 kbps CBR.")
+    d.add_argument("--format", choices=["opus", "native", "mp3", "mp3_320k", "mp3_vbr0", "premium"], default="opus",
+                   help="'opus' (default): Best Quality Opus (.opus) 48 kHz dengan lossless remux & embedded metadata. 'native': stream mentah asli YouTube (.webm/.m4a). 'mp3': konversi MP3 320 kbps.")
     d.add_argument("--keep-opus", action="store_true",
                    help="Saat download --format mp3, tetap simpan juga file asli Opus (.webm) (default: tidak aktif)")
     d.add_argument("--playlist", action="store_true", help="Proses seluruh playlist (otomatis disimpan ke folder nama playlist)")
