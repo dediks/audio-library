@@ -10,6 +10,7 @@ import {
   appendLog,
   renderLogs,
   notify,
+  groupFiles,
   groupFilesByFolder,
   createGroupHeaderBar,
   createFileNameCell,
@@ -57,6 +58,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnConvertSelectedText = document.getElementById('btnConvertSelectedText');
 
   const searchInput = document.getElementById('searchInput');
+  const groupByMode = document.getElementById('groupByMode');
   const filterFormat = document.getElementById('filterFormat');
   const filterRate = document.getElementById('filterRate');
   const filterBitrate = document.getElementById('filterBitrate');
@@ -360,6 +362,37 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  function handleDeleteGroupFiles(group) {
+    const relPaths = group.files.map(f => f.rel_path);
+    if (relPaths.length === 0) return;
+    openDeleteModal({
+      title: `Hapus Grup: ${group.label}`,
+      message: `Sebanyak ${relPaths.length} file audio (${group.totalSizeMb} MB) dalam grup "${group.label}" akan dihapus permanen:`,
+      items: relPaths,
+      confirmLabel: `Hapus ${relPaths.length} File`,
+      onConfirm: async () => {
+        const { ok, data, error } = await apiPost('/api/delete', {
+          source_dir: currentSourceDir,
+          rel_paths: relPaths,
+          is_folder: false,
+        });
+        if (!ok) {
+          throw new Error(error || 'Gagal menghapus file dalam grup.');
+        }
+        relPaths.forEach(rp => selectedPaths.delete(rp));
+        lastClickedIndex = null;
+        log('warn', '[DELETE GROUP] ' + (data?.message || `${relPaths.length} file dihapus.`));
+        notify({
+          type: 'info',
+          title: 'Grup File Dihapus',
+          message: data?.message || `Berhasil menghapus ${relPaths.length} file dari grup "${group.label}".`,
+          duration: 3800,
+        });
+        await fetchLibrary();
+      },
+    });
+  }
+
   function handleBatchDeleteSelected() {
     if (selectedPaths.size === 0) return;
     const relPaths = Array.from(selectedPaths);
@@ -597,7 +630,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const targetLabel = `${targetRateStr === '44100' ? '44.1 kHz' : '48 kHz'} • ${targetBr} kbps`;
     const fragment = document.createDocumentFragment();
 
-    const groups = groupFilesByFolder(visibleFiles);
+    const currentGroupBy = groupByMode ? groupByMode.value : 'folder';
+    const showRowFolder = currentGroupBy === 'type' || currentGroupBy === 'rate';
+    const groups = groupFiles(visibleFiles, currentGroupBy);
     let flatIdx = 0;
 
     groups.forEach(group => {
@@ -612,8 +647,8 @@ document.addEventListener('DOMContentLoaded', () => {
       tdGroupCheck.className = 'col-check';
       const groupChk = document.createElement('input');
       groupChk.type = 'checkbox';
-      groupChk.title = `Pilih semua lagu di folder "${group.label}"`;
-      groupChk.setAttribute('aria-label', `Pilih semua lagu di folder ${group.label}`);
+      groupChk.title = `Pilih semua lagu di grup "${group.label}"`;
+      groupChk.setAttribute('aria-label', `Pilih semua lagu di grup ${group.label}`);
       groupChk.addEventListener('click', (e) => {
         e.stopPropagation();
         const checkAll = groupChk.checked;
@@ -630,13 +665,16 @@ document.addEventListener('DOMContentLoaded', () => {
       headerTd.setAttribute('colspan', '5');
       const { bar, chevron, toggleHint } = createGroupHeaderBar(group, isCollapsed, {
         onOpenExplorer: (g) => {
-          openFolderInExplorer(g.isRoot ? '' : g.key, currentSourceDir);
+          openFolderInExplorer(g.isRoot ? '' : (g.folderPath || g.key), currentSourceDir);
         },
         onRenameFolder: (g) => {
           handleRenameFolder(g);
         },
         onDeleteFolder: (g) => {
           handleDeleteFolder(g);
+        },
+        onDeleteGroupFiles: (g) => {
+          handleDeleteGroupFiles(g);
         },
       });
       headerTd.appendChild(bar);
@@ -681,11 +719,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         rowElementsByPath.set(f.rel_path, { tr, chk });
 
-        // 2. Compact single-line song title + track number (folder is shown on group header)
+        // 2. Compact single-line song title + track number (shows folder badge when grouped by type/rate)
         tr.appendChild(
           createFileNameCell(f, {
             index: groupIdx + 1,
-            showFolderBadge: false,
+            showFolderBadge: showRowFolder,
             onRename: (fileObj) => {
               handleRenameFile(fileObj);
             },
@@ -921,6 +959,12 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   searchInput.addEventListener('input', applyFiltersAndRenderTable);
+  if (groupByMode) {
+    groupByMode.addEventListener('change', () => {
+      collapsedGroups.clear();
+      applyFiltersAndRenderTable();
+    });
+  }
   filterFormat.addEventListener('change', applyFiltersAndRenderTable);
   filterRate.addEventListener('change', applyFiltersAndRenderTable);
   if (filterBitrate) {

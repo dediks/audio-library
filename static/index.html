@@ -294,14 +294,27 @@
             placeholder="Cari judul lagu atau nama playlist..."
             aria-label="Cari lagu atau playlist"
           >
+          <select id="libraryGroupBy" class="toolbar-select" aria-label="Kelompokkan Tabel Berdasarkan" title="Pilih cara pengelompokan baris tabel">
+            <option value="folder">Grup: 📁 Folder Playlist</option>
+            <option value="type">Grup: 🎵 Tipe File (.opus/.webm/.mp3)</option>
+            <option value="folder_type">Grup: 📁 Folder + 🎵 Tipe File</option>
+            <option value="rate">Grup: 🎛️ Sample Rate</option>
+          </select>
+          <select id="libraryFilterFormat" class="toolbar-select" aria-label="Filter Tipe File">
+            <option value="ALL">Semua Tipe File</option>
+            <option value=".opus">Opus (.opus)</option>
+            <option value=".webm">WebM (.webm)</option>
+            <option value=".mp3">MP3 (.mp3)</option>
+            <option value=".m4a">AAC (.m4a)</option>
+          </select>
         </div>
         <div class="toolbar-selection-btns">
           <span class="selection-counter-pill" id="librarySummaryPill">0 lagu</span>
           <span class="selection-counter-pill" id="librarySelectionPill">0 dipilih</span>
-          <button type="button" id="btnCollapseAllGroups" class="btn-chip">Lipat Semua Folder</button>
-          <button type="button" id="btnExpandAllGroups" class="btn-chip">Buka Semua Folder</button>
+          <button type="button" id="btnCollapseAllGroups" class="btn-chip">Lipat</button>
+          <button type="button" id="btnExpandAllGroups" class="btn-chip">Buka</button>
           <button type="button" id="btnSelectAllLibrary" class="btn-chip">Pilih Semua Tampil</button>
-          <button type="button" id="btnClearLibrarySelection" class="btn-chip">Batal Pilih</button>
+          <button type="button" id="btnClearLibrarySelection" class="btn-chip">Reset Pilih</button>
         </div>
       </div>
 

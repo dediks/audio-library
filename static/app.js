@@ -10,6 +10,7 @@ import {
   appendLog,
   renderLogs,
   notify,
+  groupFiles,
   groupFilesByFolder,
   createGroupHeaderBar,
   createFileNameCell,
@@ -54,6 +55,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnAuditAll = document.getElementById('btnAuditAll');
   const libraryTableBody = document.getElementById('libraryTableBody');
   const librarySearchInput = document.getElementById('librarySearchInput');
+  const libraryGroupBy = document.getElementById('libraryGroupBy');
+  const libraryFilterFormat = document.getElementById('libraryFilterFormat');
   const librarySummaryPill = document.getElementById('librarySummaryPill');
   const librarySelectionPill = document.getElementById('librarySelectionPill');
   const btnCollapseAllGroups = document.getElementById('btnCollapseAllGroups');
@@ -261,6 +264,37 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  function handleDeleteGroupFiles(group) {
+    const relPaths = group.files.map(f => f.rel_path);
+    if (relPaths.length === 0) return;
+    openDeleteModal({
+      title: `Hapus Grup: ${group.label}`,
+      message: `Sebanyak ${relPaths.length} file audio (${group.totalSizeMb} MB) dalam grup "${group.label}" akan dihapus permanen:`,
+      items: relPaths,
+      confirmLabel: `Hapus ${relPaths.length} File`,
+      onConfirm: async () => {
+        const { ok, data, error } = await apiPost('/api/delete', {
+          source_dir: currentSourceDir,
+          rel_paths: relPaths,
+          is_folder: false,
+        });
+        if (!ok) {
+          throw new Error(error || 'Gagal menghapus file dalam grup.');
+        }
+        relPaths.forEach(rp => selectedPaths.delete(rp));
+        lastClickedIndex = null;
+        log('warn', '[DELETE GROUP] ' + (data?.message || `${relPaths.length} file dihapus.`));
+        notify({
+          type: 'info',
+          title: 'Grup File Dihapus',
+          message: data?.message || `Berhasil menghapus ${relPaths.length} file dari grup "${group.label}".`,
+          duration: 3800,
+        });
+        await fetchLibraryFiles();
+      },
+    });
+  }
+
   function handleBatchDeleteSelected() {
     if (selectedPaths.size === 0) return;
     const relPaths = Array.from(selectedPaths);
@@ -354,17 +388,26 @@ document.addEventListener('DOMContentLoaded', () => {
     rowElementsByPath.clear();
 
     const query = (librarySearchInput ? librarySearchInput.value : '').trim().toLowerCase();
-    const filtered = query
-      ? allLibraryFiles.filter(f =>
-          f.name.toLowerCase().includes(query) ||
-          (f.folder || '').toLowerCase().includes(query)
-        )
-      : allLibraryFiles;
+    const fmtFilter = libraryFilterFormat ? libraryFilterFormat.value : 'ALL';
+    const groupByMode = libraryGroupBy ? libraryGroupBy.value : 'folder';
+
+    const filtered = allLibraryFiles.filter(f => {
+      if (fmtFilter !== 'ALL' && f.ext !== fmtFilter) {
+        return false;
+      }
+      if (query) {
+        const matchName = f.name.toLowerCase().includes(query);
+        const matchFolder = (f.folder || '').toLowerCase().includes(query);
+        const matchExt = (f.ext || '').toLowerCase().includes(query);
+        if (!matchName && !matchFolder && !matchExt) return false;
+      }
+      return true;
+    });
 
     visibleLibraryFiles = filtered;
-    const groups = groupFilesByFolder(filtered);
+    const groups = groupFiles(filtered, groupByMode);
     if (librarySummaryPill) {
-      librarySummaryPill.textContent = `${filtered.length} lagu • ${groups.length} folder`;
+      librarySummaryPill.textContent = `${filtered.length} lagu • ${groups.length} grup`;
     }
 
     if (filtered.length === 0) {
@@ -374,7 +417,7 @@ document.addEventListener('DOMContentLoaded', () => {
       td.setAttribute('colspan', '9');
       td.textContent = allLibraryFiles.length === 0
         ? 'Belum ada file audio di library/inbox. Masukkan URL YouTube di atas untuk memulai.'
-        : 'Tidak ada lagu atau playlist yang cocok dengan kata kunci pencarian.';
+        : 'Tidak ada lagu atau tipe file yang cocok dengan filter saat ini.';
       tr.appendChild(td);
       libraryTableBody.appendChild(tr);
       syncLibrarySelectionDOM();
@@ -396,8 +439,8 @@ document.addEventListener('DOMContentLoaded', () => {
       tdGroupCheck.className = 'col-check';
       const groupChk = document.createElement('input');
       groupChk.type = 'checkbox';
-      groupChk.title = `Pilih semua lagu di folder "${group.label}"`;
-      groupChk.setAttribute('aria-label', `Pilih semua lagu di folder ${group.label}`);
+      groupChk.title = `Pilih semua lagu di grup "${group.label}"`;
+      groupChk.setAttribute('aria-label', `Pilih semua lagu di grup ${group.label}`);
       groupChk.addEventListener('click', (e) => {
         e.stopPropagation();
         const checkAll = groupChk.checked;
@@ -415,13 +458,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const { bar, chevron, toggleHint } = createGroupHeaderBar(group, isCollapsed, {
         onOpenExplorer: (g) => {
-          openFolderInExplorer(g.isRoot ? '' : g.key, currentSourceDir);
+          openFolderInExplorer(g.isRoot ? '' : (g.folderPath || g.key), currentSourceDir);
         },
         onRenameFolder: (g) => {
           handleRenameFolder(g);
         },
         onDeleteFolder: (g) => {
           handleDeleteFolder(g);
+        },
+        onDeleteGroupFiles: (g) => {
+          handleDeleteGroupFiles(g);
         },
       });
       headerTd.appendChild(bar);
@@ -434,6 +480,8 @@ document.addEventListener('DOMContentLoaded', () => {
       fragment.appendChild(headerTr);
 
       const childRows = [];
+      const showRowFolder = groupByMode === 'type' || groupByMode === 'rate';
+
       group.files.forEach((f, idx) => {
         const currentFlatIdx = flatIdx++;
         const tr = document.createElement('tr');
@@ -462,11 +510,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         rowElementsByPath.set(f.rel_path, { tr, chk });
 
-        // Compact single-line song title with track index (folder is already shown on the group header)
         tr.appendChild(
           createFileNameCell(f, {
             index: idx + 1,
-            showFolderBadge: false,
+            showFolderBadge: showRowFolder,
             onRename: (fileObj) => {
               handleRenameFile(fileObj);
             },
@@ -563,6 +610,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (librarySearchInput) {
     librarySearchInput.addEventListener('input', renderLibraryTable);
+  }
+  if (libraryGroupBy) {
+    libraryGroupBy.addEventListener('change', () => {
+      collapsedGroups.clear();
+      renderLibraryTable();
+    });
+  }
+  if (libraryFilterFormat) {
+    libraryFilterFormat.addEventListener('change', renderLibraryTable);
   }
 
   if (chkSelectAllLibrary) {

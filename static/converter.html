@@ -329,6 +329,12 @@
             placeholder="Cari judul lagu atau folder..."
             aria-label="Cari judul lagu"
           >
+          <select id="groupByMode" class="toolbar-select" aria-label="Kelompokkan Tabel Berdasarkan" title="Pilih cara pengelompokan baris tabel">
+            <option value="folder">Grup: 📁 Folder Playlist</option>
+            <option value="type">Grup: 🎵 Tipe File (.opus/.webm/.mp3)</option>
+            <option value="folder_type">Grup: 📁 Folder + 🎵 Tipe File</option>
+            <option value="rate">Grup: 🎛️ Sample Rate</option>
+          </select>
           <select id="filterFormat" class="toolbar-select" aria-label="Filter Format">
             <option value="ALL">Semua Format</option>
             <option value=".opus">Opus (.opus)</option>

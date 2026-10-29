@@ -1142,6 +1142,19 @@ body.dark-theme {
   padding: 0.14rem 0.45rem;
 }
 
+.playlist-folder-badge.group-badge.group-badge-type {
+  background: rgba(0, 229, 255, 0.14);
+  color: var(--accent-cyan);
+  border-color: rgba(0, 229, 255, 0.35);
+}
+
+.playlist-folder-badge.row-folder-tag {
+  font-size: 0.62rem;
+  padding: 0.06rem 0.35rem;
+  max-width: 140px;
+  flex-shrink: 0;
+}
+
 .group-meta-pill {
   font-family: var(--font-mono);
   font-size: 0.68rem;

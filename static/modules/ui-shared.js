@@ -11,6 +11,7 @@ import {
   createHeaderNotificationCenter,
 } from './notifications.js';
 import {
+  groupFiles,
   groupFilesByFolder,
   createGroupHeaderBar,
   createFileNameCell,
@@ -28,6 +29,7 @@ export {
   apiPost,
   notify,
   playNotificationSound,
+  groupFiles,
   groupFilesByFolder,
   createGroupHeaderBar,
   createFileNameCell,
