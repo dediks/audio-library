@@ -3,7 +3,7 @@
  * Strict DOM Manipulation (No innerHTML, strictly textContent & createElement)
  */
 
-import { notify } from './ui-shared.js';
+import { notify, apiPost } from './ui-shared.js';
 
 /**
  * Initializes the folder browser modal for selecting Source or Destination directories.
@@ -54,85 +54,77 @@ export function initFolderModal(opts) {
 
   async function browseTo(pathStr, createSubfolder) {
     if (!modalDirList) return;
-    try {
-      const payload = { path: pathStr || '' };
-      if (createSubfolder) payload.create_subfolder = createSubfolder;
-      const res = await fetch('/api/browse-dirs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+    const payload = { path: pathStr || '' };
+    if (createSubfolder) payload.create_subfolder = createSubfolder;
+
+    const { ok, data, error } = await apiPost('/api/browse-dirs', payload);
+    if (!ok) {
+      const errMsg = error || 'Gagal membuka direktori.';
+      onLog('error', '[BROWSER] ' + errMsg);
+      notify({
+        type: 'error',
+        title: 'Gagal Membuka Direktori',
+        message: errMsg,
+        playSound: true,
       });
-      const data = await res.json();
-      if (!res.ok) {
-        const errMsg = data.error || 'Gagal membuka direktori.';
-        onLog('error', '[BROWSER] ' + errMsg);
-        notify({
-          type: 'error',
-          title: 'Gagal Membuka Direktori',
-          message: errMsg,
-          playSound: true,
-        });
-        return;
-      }
+      return;
+    }
 
-      if (createSubfolder) {
-        notify({
-          type: 'success',
-          title: 'Folder Baru Dibuat',
-          message: 'Berhasil membuat dan membuka folder: ' + (data.current || createSubfolder),
-          duration: 3800,
-        });
-      }
+    if (createSubfolder) {
+      notify({
+        type: 'success',
+        title: 'Folder Baru Dibuat',
+        message: 'Berhasil membuat dan membuka folder: ' + (data.current || createSubfolder),
+        duration: 3800,
+      });
+    }
 
-      modalBrowsingPath = data.current || '';
-      modalParentPath = data.parent || null;
-      if (modalCurrentPath) modalCurrentPath.textContent = modalBrowsingPath;
-      if (btnModalUp) btnModalUp.disabled = !modalParentPath;
+    modalBrowsingPath = data.current || '';
+    modalParentPath = data.parent || null;
+    if (modalCurrentPath) modalCurrentPath.textContent = modalBrowsingPath;
+    if (btnModalUp) btnModalUp.disabled = !modalParentPath;
 
-      // Render quick shortcuts
-      if (modalShortcuts && Array.isArray(data.shortcuts)) {
-        modalShortcuts.replaceChildren();
-        data.shortcuts.forEach(sc => {
-          const btn = document.createElement('button');
-          btn.type = 'button';
-          btn.className = 'btn-chip';
-          btn.textContent = sc.label;
-          btn.title = sc.path;
-          btn.addEventListener('click', () => browseTo(sc.path));
-          modalShortcuts.appendChild(btn);
-        });
-      }
+    // Render quick shortcuts
+    if (modalShortcuts && Array.isArray(data.shortcuts)) {
+      modalShortcuts.replaceChildren();
+      data.shortcuts.forEach(sc => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn-chip';
+        btn.textContent = sc.label;
+        btn.title = sc.path;
+        btn.addEventListener('click', () => browseTo(sc.path));
+        modalShortcuts.appendChild(btn);
+      });
+    }
 
-      // Render subdirectories
-      modalDirList.replaceChildren();
-      const dirs = data.dirs || [];
-      if (dirs.length === 0) {
-        const emptyMsg = document.createElement('div');
-        emptyMsg.className = 'modal-dir-empty';
-        emptyMsg.textContent = 'Tidak ada subfolder di dalam direktori ini.';
-        modalDirList.appendChild(emptyMsg);
-      } else {
-        dirs.forEach(d => {
-          const row = document.createElement('button');
-          row.type = 'button';
-          row.className = 'modal-dir-item';
+    // Render subdirectories
+    modalDirList.replaceChildren();
+    const dirs = data.dirs || [];
+    if (dirs.length === 0) {
+      const emptyMsg = document.createElement('div');
+      emptyMsg.className = 'modal-dir-empty';
+      emptyMsg.textContent = 'Tidak ada subfolder di dalam direktori ini.';
+      modalDirList.appendChild(emptyMsg);
+    } else {
+      dirs.forEach(d => {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'modal-dir-item';
 
-          const nameSpan = document.createElement('span');
-          nameSpan.className = 'modal-dir-name';
-          nameSpan.textContent = '📁 ' + d.name;
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'modal-dir-name';
+        nameSpan.textContent = '📁 ' + d.name;
 
-          const countSpan = document.createElement('span');
-          countSpan.className = 'modal-dir-meta';
-          countSpan.textContent = d.audio_count > 0 ? (d.audio_count + ' file audio') : 'Buka →';
+        const countSpan = document.createElement('span');
+        countSpan.className = 'modal-dir-meta';
+        countSpan.textContent = d.audio_count > 0 ? (d.audio_count + ' file audio') : 'Buka →';
 
-          row.appendChild(nameSpan);
-          row.appendChild(countSpan);
-          row.addEventListener('click', () => browseTo(d.path));
-          modalDirList.appendChild(row);
-        });
-      }
-    } catch (err) {
-      onLog('error', '[BROWSER] Gagal memuat daftar folder: ' + err.message);
+        row.appendChild(nameSpan);
+        row.appendChild(countSpan);
+        row.addEventListener('click', () => browseTo(d.path));
+        modalDirList.appendChild(row);
+      });
     }
   }
 
@@ -193,4 +185,3 @@ export function initFolderModal(opts) {
 
   return { open, close, browseTo };
 }
-

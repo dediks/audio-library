@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Callable
 
 EXTENSIONS = {".mp3", ".m4a", ".aac", ".opus", ".ogg", ".webm", ".flac",
               ".wav", ".aif", ".aiff", ".mka", ".wma", ".alac"}
@@ -24,6 +25,8 @@ LOSSLESS = {"flac", "alac", "wavpack", "ape", "tta", "pcm_s16le", "pcm_s24le",
 FIELDNAMES = ["file", "codec", "source_class", "sample_rate_hz", "channels", "duration_s",
               "bitrate_kbps", "integrated_lufs", "lra_lu", "true_peak_dbtp", "status",
               "notes", "sha256"]
+ALLOWED_BITRATES = (320, 192, 128, 96)
+TAG_FOLDER_PATTERN = r"\s*\[(44\.1kHz|48kHz)(?:\s+\d+k)?\]$"
 
 # Priority order for YouTube / YouTube Music:
 # 141 = Premium AAC 256 kbps (44.1 kHz)
@@ -171,22 +174,86 @@ def sync_download_archive(
     return removed_count
 
 
-def _run_ytdlp_with_tier_log(cmd: list[str], env: dict[str, str] | None = None) -> int:
+def run_ytdlp_process(
+    cmd: list[str],
+    env: dict[str, str] | None = None,
+    existing_by_vid: dict[str, str] | None = None,
+    on_log: Callable[[str], None] | None = None,
+    on_progress: Callable[[float], None] | None = None,
+) -> dict:
+    """Executes yt-dlp subprocess and parses tier info, skipped files, cookie errors, and progress."""
+    skipped_files: list[str] = []
+    last_error_line = ""
+    cookie_err_detected = False
+    vid_map = existing_by_vid or {}
+    log_fn = on_log or (lambda msg: print(msg, flush=True))
+
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
+        universal_newlines=True,
         env=env,
     )
     if proc.stdout:
         for line in proc.stdout:
-            print(line, end="", flush=True)
-            match = re.search(r"Downloading \d+ format\(s\):\s*([^\s,]+)", line)
-            if match:
-                print(describe_format_tier(match.group(1)), flush=True)
-    return proc.wait()
+            clean_line = line.strip()
+            if not clean_line:
+                continue
+            log_fn(clean_line)
+
+            if any(
+                k in clean_line.lower()
+                for k in ("could not copy", "cookie database", "database is locked", "failed to extract cookies")
+            ):
+                cookie_err_detected = True
+
+            if "ERROR:" in clean_line:
+                last_error_line = clean_line.split("ERROR:", 1)[-1].strip()
+
+            arch_match = re.search(
+                r"\[download\]\s+([A-Za-z0-9_-]{11}):\s+has already been recorded in the archive",
+                clean_line,
+            )
+            if arch_match:
+                vid = arch_match.group(1)
+                fname = vid_map.get(vid, f"Video ID [{vid}]")
+                if fname not in skipped_files:
+                    skipped_files.append(fname)
+                log_fn(f"[SKIPPED] File sudah ada di Library: {fname}")
+
+            disk_match = re.search(r"\[download\]\s+(.+?)\s+has already been downloaded", clean_line)
+            if disk_match:
+                fname = Path(disk_match.group(1)).name
+                if fname not in skipped_files:
+                    skipped_files.append(fname)
+                log_fn(f"[SKIPPED] File sudah ada di Library: {fname}")
+
+            fmt_match = re.search(r"Downloading \d+ format\(s\):\s*([^\s,]+)", clean_line)
+            if fmt_match:
+                log_fn(describe_format_tier(fmt_match.group(1)))
+
+            if on_progress is not None:
+                prog_match = re.search(r"\[download\]\s+([\d\.]+)%", clean_line)
+                if prog_match:
+                    try:
+                        on_progress(min(99.0, float(prog_match.group(1))))
+                    except ValueError:
+                        pass
+
+    returncode = proc.wait()
+    return {
+        "returncode": returncode,
+        "skipped_files": skipped_files,
+        "last_error_line": last_error_line,
+        "cookie_err_detected": cookie_err_detected,
+    }
+
+
+def _run_ytdlp_with_tier_log(cmd: list[str], env: dict[str, str] | None = None) -> int:
+    return run_ytdlp_process(cmd, env=env)["returncode"]
 
 
 def require(program: str) -> None:
@@ -476,7 +543,76 @@ def download(args) -> int:
     return 0
 
 
-ALLOWED_BITRATES = (320, 192, 128, 96)
+def _has_mp3_xing_header(path: Path) -> bool:
+    """Checks if an MP3 file contains a Xing/Info VBR header in the first 8 KB."""
+    try:
+        with path.open("rb") as fh:
+            head_bytes = fh.read(8192)
+            return b"Xing" in head_bytes or b"Info" in head_bytes
+    except OSError:
+        return False
+
+
+def _select_resample_codec_args(
+    ext: str,
+    codec: str,
+    target_rate: int,
+    target_bitrate: int,
+) -> tuple[str, list[str]]:
+    """Determines the target file extension and FFmpeg audio encoder arguments."""
+    mp3_codec_args = [
+        "-c:a", "libmp3lame",
+        "-b:a", f"{target_bitrate}k",
+        "-ac", "2",
+        "-write_xing", "0",
+        "-id3v2_version", "3",
+    ]
+    if ext in (".webm", ".opus", ".ogg") or codec == "opus":
+        if target_rate == 44100 or target_bitrate != 320:
+            return ".mp3", mp3_codec_args
+        return (".opus" if ext != ".webm" else ".webm"), ["-c:a", "libopus", "-b:a", "256k", "-ac", "2"]
+    if ext == ".mp3" or codec == "mp3":
+        return ".mp3", mp3_codec_args
+    if ext in (".m4a", ".aac"):
+        if target_bitrate != 320:
+            return ".mp3", mp3_codec_args
+        return ext, ["-c:a", "aac", "-b:a", "256k", "-ac", "2"]
+    if ext == ".flac" or codec == "flac":
+        if target_bitrate != 320:
+            return ".mp3", mp3_codec_args
+        return ".flac", ["-c:a", "flac", "-ac", "2"]
+    if ext in (".wav", ".aif", ".aiff"):
+        if target_bitrate != 320:
+            return ".mp3", mp3_codec_args
+        pcm_codec = codec if codec.startswith("pcm_") else "pcm_s16le"
+        return ext, ["-c:a", pcm_codec, "-ac", "2"]
+    return ".mp3", mp3_codec_args
+
+
+def _resolve_resample_output_path(
+    path: Path,
+    target_ext: str,
+    tag_label: str,
+    overwrite: bool,
+    out_dir: Path | None,
+) -> Path:
+    """Resolves the destination file path for resample_one while preserving folder organization."""
+    if overwrite:
+        return path.with_suffix(target_ext)
+    if out_dir is not None:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        return out_dir / f"{path.stem}{target_ext}"
+    if path.parent.name and path.parent.name != "inbox" and path.parent.parent.name == "inbox":
+        base_folder = re.sub(TAG_FOLDER_PATTERN, "", path.parent.name)
+        dest_dir = path.parent.parent / f"{base_folder} [{tag_label}]"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        return dest_dir / f"{path.stem}{target_ext}"
+    if path.parent.name == "inbox":
+        dest_dir = path.parent / f"Converted [{tag_label}]"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        return dest_dir / f"{path.stem}{target_ext}"
+    clean_stem = re.sub(TAG_FOLDER_PATTERN, "", path.stem)
+    return path.with_name(f"{clean_stem} [{tag_label}]{target_ext}")
 
 
 def resample_one(
@@ -511,14 +647,7 @@ def resample_one(
     tag_label = rate_label if target_bitrate == 320 else f"{rate_label} {target_bitrate}k"
 
     rate_matches = (current_rate == target_rate)
-    has_xing = False
-    if ext == ".mp3":
-        try:
-            with path.open("rb") as fh:
-                head_bytes = fh.read(8192)
-                has_xing = (b"Xing" in head_bytes or b"Info" in head_bytes)
-        except OSError:
-            pass
+    has_xing = _has_mp3_xing_header(path) if ext == ".mp3" else False
     br_matches = (ext == ".mp3" and abs(current_br - target_bitrate) <= 8 and current_ch == 2 and not has_xing)
 
     if rate_matches and br_matches:
@@ -532,69 +661,8 @@ def resample_one(
             "message": f"Sudah {target_rate} Hz • {target_bitrate} kbps (dilewati)",
         }
 
-    br_str = f"{target_bitrate}k"
-    mp3_codec_args = [
-        "-c:a", "libmp3lame",
-        "-b:a", br_str,
-        "-ac", "2",
-        "-write_xing", "0",
-        "-id3v2_version", "3",
-    ]
-    if ext in (".webm", ".opus", ".ogg") or codec == "opus":
-        if target_rate == 44100 or target_bitrate != 320:
-            # Convert to MP3 at target_bitrate & target_rate
-            target_ext = ".mp3"
-            codec_args = mp3_codec_args
-        else:
-            target_ext = ".opus" if ext != ".webm" else ".webm"
-            codec_args = ["-c:a", "libopus", "-b:a", "256k", "-ac", "2"]
-    elif ext == ".mp3" or codec == "mp3":
-        target_ext = ".mp3"
-        codec_args = mp3_codec_args
-    elif ext in (".m4a", ".aac"):
-        if target_bitrate != 320:
-            target_ext = ".mp3"
-            codec_args = mp3_codec_args
-        else:
-            target_ext = ext
-            codec_args = ["-c:a", "aac", "-b:a", "256k", "-ac", "2"]
-    elif ext == ".flac" or codec == "flac":
-        if target_bitrate != 320:
-            target_ext = ".mp3"
-            codec_args = mp3_codec_args
-        else:
-            target_ext = ".flac"
-            codec_args = ["-c:a", "flac", "-ac", "2"]
-    elif ext in (".wav", ".aif", ".aiff"):
-        if target_bitrate != 320:
-            target_ext = ".mp3"
-            codec_args = mp3_codec_args
-        else:
-            target_ext = ext
-            pcm_codec = codec if codec.startswith("pcm_") else "pcm_s16le"
-            codec_args = ["-c:a", pcm_codec, "-ac", "2"]
-    else:
-        target_ext = ".mp3"
-        codec_args = mp3_codec_args
-
-    tag_pattern = r"\s*\[(44\.1kHz|48kHz)(?:\s+\d+k)?\]$"
-    if overwrite:
-        out_path = path.with_suffix(target_ext)
-    elif out_dir is not None:
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f"{path.stem}{target_ext}"
-    elif path.parent.name and path.parent.name != "inbox" and path.parent.parent.name == "inbox":
-        base_folder = re.sub(tag_pattern, "", path.parent.name)
-        dest_dir = path.parent.parent / f"{base_folder} [{tag_label}]"
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        out_path = dest_dir / f"{path.stem}{target_ext}"
-    elif path.parent.name == "inbox":
-        dest_dir = path.parent / f"Converted [{tag_label}]"
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        out_path = dest_dir / f"{path.stem}{target_ext}"
-    else:
-        clean_stem = re.sub(tag_pattern, "", path.stem)
-        out_path = path.with_name(f"{clean_stem} [{tag_label}]{target_ext}")
+    target_ext, codec_args = _select_resample_codec_args(ext, codec, target_rate, target_bitrate)
+    out_path = _resolve_resample_output_path(path, target_ext, tag_label, overwrite, out_dir)
 
     # Skip if non-overwrite target file already exists with target sample rate and bitrate
     if not overwrite and out_path != path and out_path.is_file():
@@ -686,7 +754,7 @@ def resample(args) -> int:
             if p.is_file()
             and p.suffix.lower() in allowed_exts
             and not p.name.startswith(".")
-            and not re.search(r"\[(44\.1kHz|48kHz)(?:\s+\d+k)?\]$", p.parent.name)
+            and not re.search(TAG_FOLDER_PATTERN, p.parent.name)
         )
 
     if not files:

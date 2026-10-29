@@ -5,12 +5,15 @@
 
 import {
   initAppHeader,
+  apiGet,
+  apiPost,
   appendLog,
   renderLogs,
   notify,
   groupFilesByFolder,
   createGroupHeaderBar,
   createFileNameCell,
+  createGroupCollapseController,
   createQueueMonitor,
 } from './modules/ui-shared.js';
 
@@ -48,12 +51,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
   let allLibraryFiles = [];
   const collapsedGroups = new Set();
-  // Map of groupKey -> { childRows: HTMLTableRowElement[], chevron: HTMLElement, toggleHint: HTMLElement }
   const groupDomMap = new Map();
 
   function log(level, message) {
     appendLog(terminalLogs, level, message);
   }
+
+  const groupCollapseCtrl = createGroupCollapseController({
+    collapsedGroups,
+    groupDomMap,
+    btnCollapseAll: btnCollapseAllGroups,
+    btnExpandAll: btnExpandAllGroups,
+  });
 
   // 1. Mount Shared Top Header & Check System Dependencies
   initAppHeader({
@@ -110,28 +119,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 3. Fetch Library Files and Render Grouped QC Table
   async function fetchLibraryFiles() {
-    try {
-      const res = await fetch('/api/library');
-      if (!res.ok) return;
-      const data = await res.json();
-      allLibraryFiles = data.files || [];
-      renderLibraryTable();
-    } catch (err) {
-      log('error', '[LIBRARY] Gagal memuat daftar file: ' + err.message);
+    const { ok, data, error } = await apiGet('/api/library');
+    if (!ok) {
+      log('error', '[LIBRARY] Gagal memuat daftar file: ' + (error || 'Unknown error'));
+      return;
     }
-  }
-
-  function setGroupCollapsed(groupKey, collapse) {
-    if (collapse) collapsedGroups.add(groupKey);
-    else collapsedGroups.delete(groupKey);
-
-    const domEntry = groupDomMap.get(groupKey);
-    if (!domEntry) return;
-    domEntry.chevron.classList.toggle('collapsed', collapse);
-    domEntry.toggleHint.textContent = collapse ? 'Buka Daftar' : 'Lipat';
-    domEntry.childRows.forEach(tr => {
-      tr.classList.toggle('group-row-hidden', collapse);
-    });
+    allLibraryFiles = data.files || [];
+    renderLibraryTable();
   }
 
   function renderLibraryTable() {
@@ -180,8 +174,7 @@ document.addEventListener('DOMContentLoaded', () => {
       headerTr.appendChild(headerTd);
 
       headerTr.addEventListener('click', () => {
-        const nextCollapsed = !collapsedGroups.has(group.key);
-        setGroupCollapsed(group.key, nextCollapsed);
+        groupCollapseCtrl.toggleGroup(group.key);
       });
 
       fragment.appendChild(headerTr);
@@ -276,18 +269,6 @@ document.addEventListener('DOMContentLoaded', () => {
     librarySearchInput.addEventListener('input', renderLibraryTable);
   }
 
-  if (btnCollapseAllGroups) {
-    btnCollapseAllGroups.addEventListener('click', () => {
-      groupDomMap.forEach((_, key) => setGroupCollapsed(key, true));
-    });
-  }
-
-  if (btnExpandAllGroups) {
-    btnExpandAllGroups.addEventListener('click', () => {
-      groupDomMap.forEach((_, key) => setGroupCollapsed(key, false));
-    });
-  }
-
   // Format radio change listeners
   const specText = document.getElementById('specText');
   const specDot = document.getElementById('specDot');
@@ -335,49 +316,33 @@ document.addEventListener('DOMContentLoaded', () => {
     const opusLog = (audioFormat !== 'native' && keepOpus) ? ' + Opus (.webm)' : '';
     log('info', `[DISPATCH] Mengirim ${urls.length} item ke antrian unduhan (${audioFormat}${opusLog})...`);
 
-    try {
-      const res = await fetch('/api/download', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          urls,
-          auto_scan: autoScan,
-          is_playlist: isPlaylist,
-          audio_format: audioFormat,
-          keep_opus: keepOpus,
-          use_cookies: useCookies,
-          cookie_browser: 'chrome',
-        }),
-      });
+    const { ok, data, error } = await apiPost('/api/download', {
+      urls,
+      auto_scan: autoScan,
+      is_playlist: isPlaylist,
+      audio_format: audioFormat,
+      keep_opus: keepOpus,
+      use_cookies: useCookies,
+      cookie_browser: 'chrome',
+    });
 
-      const data = await res.json();
-      if (res.ok) {
-        log('info', '[DISPATCH] ' + data.message);
-        const hasSkippedUrls = (data.duplicate_count || 0) > 0 || (data.invalid_count || 0) > 0;
-        notify({
-          type: hasSkippedUrls ? 'warning' : 'info',
-          title: hasSkippedUrls ? 'Antrian Ditambahkan (Dengan Catatan)' : 'Masuk Antrian Unduhan',
-          message: data.message,
-        });
-        urlInput.value = '';
-        queueMonitor.poll();
-      } else {
-        const errMsg = data.error || 'Gagal menambahkan tugas.';
-        log('error', '[DISPATCH ERROR] ' + errMsg);
-        notify({
-          type: data.duplicate_count > 0 ? 'exists' : 'error',
-          title: data.duplicate_count > 0 ? 'URL Sudah Dalam Antrian' : 'Gagal Menambahkan Unduhan',
-          message: errMsg,
-          playSound: true,
-        });
-        btnStartIngest.disabled = false;
-      }
-    } catch (err) {
-      log('error', '[NETWORK ERROR] ' + err.message);
+    if (ok) {
+      log('info', '[DISPATCH] ' + data.message);
+      const hasSkippedUrls = (data.duplicate_count || 0) > 0 || (data.invalid_count || 0) > 0;
       notify({
-        type: 'error',
-        title: 'Kesalahan Jaringan',
-        message: 'Tidak dapat menghubungi server lokal: ' + err.message,
+        type: hasSkippedUrls ? 'warning' : 'info',
+        title: hasSkippedUrls ? 'Antrian Ditambahkan (Dengan Catatan)' : 'Masuk Antrian Unduhan',
+        message: data.message,
+      });
+      urlInput.value = '';
+      queueMonitor.poll();
+    } else {
+      const errMsg = error || 'Gagal menambahkan tugas.';
+      log('error', '[DISPATCH ERROR] ' + errMsg);
+      notify({
+        type: data.duplicate_count > 0 ? 'exists' : 'error',
+        title: data.duplicate_count > 0 ? 'URL Sudah Dalam Antrian' : 'Gagal Menambahkan Unduhan',
+        message: errMsg,
         playSound: true,
       });
       btnStartIngest.disabled = false;
@@ -386,41 +351,27 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 5. Actions: Refresh, Resample & Full Audit
   async function triggerResample(relPath, onlyMp3) {
-    try {
-      const res = await fetch('/api/resample', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          rel_path: relPath || null,
-          target_rate: 44100,
-          only_mp3: Boolean(onlyMp3),
-        }),
+    const { ok, data, error } = await apiPost('/api/resample', {
+      rel_path: relPath || null,
+      target_rate: 44100,
+      only_mp3: Boolean(onlyMp3),
+    });
+
+    if (ok) {
+      log('info', '[RESAMPLE] ' + data.message);
+      notify({
+        type: 'info',
+        title: 'Konversi Dijadwalkan',
+        message: data.message,
       });
-      const data = await res.json();
-      if (res.ok) {
-        log('info', '[RESAMPLE] ' + data.message);
-        notify({
-          type: 'info',
-          title: 'Konversi Dijadwalkan',
-          message: data.message,
-        });
-        queueMonitor.poll();
-      } else {
-        const errMsg = data.error || 'Gagal menjadwalkan konversi sample rate.';
-        log('error', '[RESAMPLE ERROR] ' + errMsg);
-        notify({
-          type: 'error',
-          title: 'Gagal Menjadwalkan Konversi',
-          message: errMsg,
-          playSound: true,
-        });
-      }
-    } catch (err) {
-      log('error', '[RESAMPLE NETWORK ERROR] ' + err.message);
+      queueMonitor.poll();
+    } else {
+      const errMsg = error || 'Gagal menjadwalkan konversi sample rate.';
+      log('error', '[RESAMPLE ERROR] ' + errMsg);
       notify({
         type: 'error',
-        title: 'Kesalahan Jaringan',
-        message: err.message,
+        title: 'Gagal Menjadwalkan Konversi',
+        message: errMsg,
         playSound: true,
       });
     }
@@ -453,9 +404,8 @@ document.addEventListener('DOMContentLoaded', () => {
       recordHistory: false,
     });
     try {
-      const res = await fetch('/api/scan', { method: 'POST' });
-      const data = await res.json();
-      if (res.ok) {
+      const { ok, data, error } = await apiPost('/api/scan');
+      if (ok) {
         const results = data.results || [];
         let clipCount = 0;
         let trimCount = 0;
@@ -491,7 +441,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         fetchLibraryFiles();
       } else {
-        const errMsg = data.error || 'Audit gagal.';
+        const errMsg = error || 'Audit gagal.';
         log('error', '[AUDIT ERROR] ' + errMsg);
         notify({
           type: 'error',
@@ -500,14 +450,6 @@ document.addEventListener('DOMContentLoaded', () => {
           playSound: true,
         });
       }
-    } catch (err) {
-      log('error', '[AUDIT NETWORK ERROR] ' + err.message);
-      notify({
-        type: 'error',
-        title: 'Audit QC Gagal',
-        message: err.message,
-        playSound: true,
-      });
     } finally {
       btnAuditAll.disabled = false;
     }

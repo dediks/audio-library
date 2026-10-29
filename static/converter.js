@@ -5,12 +5,15 @@
 
 import {
   initAppHeader,
+  apiGet,
+  apiPost,
   appendLog,
   renderLogs,
   notify,
   groupFilesByFolder,
   createGroupHeaderBar,
   createFileNameCell,
+  createGroupCollapseController,
   createQueueMonitor,
 } from './modules/ui-shared.js';
 import { initFolderModal } from './modules/folder-modal.js';
@@ -82,6 +85,13 @@ document.addEventListener('DOMContentLoaded', () => {
     appendLog(terminalLogs, level, message);
   }
 
+  const groupCollapseCtrl = createGroupCollapseController({
+    collapsedGroups,
+    groupDomMap,
+    btnCollapseAll: btnCollapseAllGroups,
+    btnExpandAll: btnExpandAllGroups,
+  });
+
   function getTargetRate() {
     const checked = document.querySelector('input[name="targetRate"]:checked');
     return checked ? parseInt(checked.value, 10) : 44100;
@@ -106,45 +116,39 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 2. Fetch library and playlists
   async function fetchLibrary(customSource) {
-    try {
-      const targetSource = typeof customSource === 'string' ? customSource.trim() : currentSourceDir;
-      const url = targetSource
-        ? '/api/library?source_dir=' + encodeURIComponent(targetSource)
-        : '/api/library';
-      const res = await fetch(url);
-      const data = await res.json();
-      if (!res.ok) {
-        const errMsg = data.error || 'Gagal memuat folder sumber.';
-        log('error', '[LIBRARY] ' + errMsg);
-        notify({
-          type: 'error',
-          title: 'Gagal Memuat Folder Sumber',
-          message: errMsg,
-          playSound: true,
-        });
-        return false;
-      }
-      if (data.source_dir) {
-        currentSourceDir = data.source_dir;
-        if (sourceDirInput) sourceDirInput.value = data.source_dir;
-      }
-      allFiles = data.files || [];
-      allPlaylists = data.playlists || [];
-
-      // Remove any selected paths that no longer exist
-      const validSet = new Set(allFiles.map(f => f.rel_path));
-      Array.from(selectedPaths).forEach(p => {
-        if (!validSet.has(p)) selectedPaths.delete(p);
+    const targetSource = typeof customSource === 'string' ? customSource.trim() : currentSourceDir;
+    const url = targetSource
+      ? '/api/library?source_dir=' + encodeURIComponent(targetSource)
+      : '/api/library';
+    const { ok, data, error } = await apiGet(url);
+    if (!ok) {
+      const errMsg = error || 'Gagal memuat folder sumber.';
+      log('error', '[LIBRARY] ' + errMsg);
+      notify({
+        type: 'error',
+        title: 'Gagal Memuat Folder Sumber',
+        message: errMsg,
+        playSound: true,
       });
-
-      renderPlaylists();
-      applyFiltersAndRenderTable();
-      updateSelectionUI();
-      return true;
-    } catch (err) {
-      log('error', '[LIBRARY] Gagal memuat daftar lagu: ' + err.message);
       return false;
     }
+    if (data.source_dir) {
+      currentSourceDir = data.source_dir;
+      if (sourceDirInput) sourceDirInput.value = data.source_dir;
+    }
+    allFiles = data.files || [];
+    allPlaylists = data.playlists || [];
+
+    // Remove any selected paths that no longer exist
+    const validSet = new Set(allFiles.map(f => f.rel_path));
+    Array.from(selectedPaths).forEach(p => {
+      if (!validSet.has(p)) selectedPaths.delete(p);
+    });
+
+    renderPlaylists();
+    applyFiltersAndRenderTable();
+    updateSelectionUI();
+    return true;
   }
 
   // 3. Fast ffprobe scan for a playlist folder
@@ -156,13 +160,8 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const payload = folderName === 'ALL' ? {} : { folder: folderName };
       if (currentSourceDir) payload.source_dir = currentSourceDir;
-      const res = await fetch('/api/probe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (res.ok) {
-        const data = await res.json();
+      const { ok, data, error } = await apiPost('/api/probe', payload);
+      if (ok) {
         allFiles = data.files || [];
         allPlaylists = data.playlists || [];
         probedFolders.add(currentSourceDir + '::' + folderName);
@@ -178,25 +177,16 @@ document.addEventListener('DOMContentLoaded', () => {
           });
         }
       } else {
-        const errData = await res.json().catch(() => ({}));
+        const errMsg = error || 'Terjadi kesalahan saat menjalankan ffprobe.';
+        log('error', '[PROBE] Gagal membaca metadata: ' + errMsg);
         if (isManual) {
           notify({
             type: 'error',
             title: 'Gagal Memindai Sample Rate',
-            message: errData.error || 'Terjadi kesalahan saat menjalankan ffprobe.',
+            message: errMsg,
             playSound: true,
           });
         }
-      }
-    } catch (err) {
-      log('error', '[PROBE] Gagal membaca metadata: ' + err.message);
-      if (isManual) {
-        notify({
-          type: 'error',
-          title: 'Kesalahan Pemindaian',
-          message: err.message,
-          playSound: true,
-        });
       }
     } finally {
       if (probeStatusHint) {
@@ -285,19 +275,6 @@ document.addEventListener('DOMContentLoaded', () => {
         ? `Konversi Seluruh Koleksi → ${specLabel}`
         : `Konversi Playlist "${plLabel}" → ${specLabel}`;
     }
-  }
-
-  function setGroupCollapsed(groupKey, collapse) {
-    if (collapse) collapsedGroups.add(groupKey);
-    else collapsedGroups.delete(groupKey);
-
-    const domEntry = groupDomMap.get(groupKey);
-    if (!domEntry) return;
-    domEntry.chevron.classList.toggle('collapsed', collapse);
-    domEntry.toggleHint.textContent = collapse ? 'Buka Daftar' : 'Lipat';
-    domEntry.childRows.forEach(tr => {
-      tr.classList.toggle('group-row-hidden', collapse);
-    });
   }
 
   // 5. Filter and Render Song Table
@@ -404,8 +381,7 @@ document.addEventListener('DOMContentLoaded', () => {
       headerTr.appendChild(headerTd);
 
       headerTr.addEventListener('click', () => {
-        const nextCollapsed = !collapsedGroups.has(group.key);
-        setGroupCollapsed(group.key, nextCollapsed);
+        groupCollapseCtrl.toggleGroup(group.key);
       });
 
       fragment.appendChild(headerTr);
@@ -637,18 +613,6 @@ document.addEventListener('DOMContentLoaded', () => {
     filterBitrate.addEventListener('change', applyFiltersAndRenderTable);
   }
 
-  if (btnCollapseAllGroups) {
-    btnCollapseAllGroups.addEventListener('click', () => {
-      groupDomMap.forEach((_, key) => setGroupCollapsed(key, true));
-    });
-  }
-
-  if (btnExpandAllGroups) {
-    btnExpandAllGroups.addEventListener('click', () => {
-      groupDomMap.forEach((_, key) => setGroupCollapsed(key, false));
-    });
-  }
-
   chkSelectAllVisible.addEventListener('change', () => {
     const check = chkSelectAllVisible.checked;
     visibleFiles.forEach(f => {
@@ -770,6 +734,30 @@ document.addEventListener('DOMContentLoaded', () => {
     onLog: log,
   });
 
+  // Shared helper for scheduling a resample job
+  async function dispatchResampleJob(payload, notifTitle) {
+    const { ok, data, error } = await apiPost('/api/resample', payload);
+    if (ok) {
+      log('info', '[QUEUE] ' + data.message);
+      notify({
+        type: 'info',
+        title: notifTitle,
+        message: data.message,
+      });
+      queueMonitor.poll();
+      return true;
+    }
+    const errMsg = error || 'Gagal menjadwalkan konversi.';
+    log('error', '[ERROR] ' + errMsg);
+    notify({
+      type: 'error',
+      title: 'Gagal Menjadwalkan Konversi',
+      message: errMsg,
+      playSound: true,
+    });
+    return false;
+  }
+
   // Convert Selected Songs (Batch Checkboxes)
   btnConvertSelected.addEventListener('click', async () => {
     if (selectedPaths.size === 0) return;
@@ -782,48 +770,19 @@ document.addEventListener('DOMContentLoaded', () => {
     btnConvertSelected.disabled = true;
     log('info', `[DISPATCH] Menjadwalkan konversi ${relPaths.length} lagu terpilih ke ${targetRate} Hz • ${targetBitrate} kbps...`);
 
-    try {
-      const res = await fetch('/api/resample', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          source_dir: currentSourceDir || null,
-          dest_dir: destDirVal,
-          rel_paths: relPaths,
-          target_rate: targetRate,
-          target_bitrate: targetBitrate,
-          only_mp3: false,
-          overwrite,
-        }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        log('info', '[QUEUE] ' + data.message);
-        notify({
-          type: 'info',
-          title: 'Konversi Masuk Antrian',
-          message: data.message,
-        });
-        queueMonitor.poll();
-      } else {
-        const errMsg = data.error || 'Gagal menjadwalkan konversi.';
-        log('error', '[ERROR] ' + errMsg);
-        notify({
-          type: 'error',
-          title: 'Gagal Menjadwalkan Konversi',
-          message: errMsg,
-          playSound: true,
-        });
-        btnConvertSelected.disabled = false;
-      }
-    } catch (err) {
-      log('error', '[NETWORK ERROR] ' + err.message);
-      notify({
-        type: 'error',
-        title: 'Kesalahan Jaringan',
-        message: err.message,
-        playSound: true,
-      });
+    const ok = await dispatchResampleJob(
+      {
+        source_dir: currentSourceDir || null,
+        dest_dir: destDirVal,
+        rel_paths: relPaths,
+        target_rate: targetRate,
+        target_bitrate: targetBitrate,
+        only_mp3: false,
+        overwrite,
+      },
+      'Konversi Masuk Antrian'
+    );
+    if (!ok) {
       btnConvertSelected.disabled = false;
     }
   });
@@ -841,10 +800,8 @@ document.addEventListener('DOMContentLoaded', () => {
     log('info', `[DISPATCH] Menjadwalkan konversi playlist (${activePlaylist}) ke ${targetRate} Hz • ${targetBitrate} kbps...`);
 
     try {
-      const res = await fetch('/api/resample', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      await dispatchResampleJob(
+        {
           source_dir: currentSourceDir || null,
           dest_dir: destDirVal,
           playlist: playlistArg,
@@ -852,35 +809,9 @@ document.addEventListener('DOMContentLoaded', () => {
           target_bitrate: targetBitrate,
           only_mp3: onlyMp3,
           overwrite,
-        }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        log('info', '[QUEUE] ' + data.message);
-        notify({
-          type: 'info',
-          title: 'Konversi Playlist Dijadwalkan',
-          message: data.message,
-        });
-        queueMonitor.poll();
-      } else {
-        const errMsg = data.error || 'Gagal menjadwalkan konversi playlist.';
-        log('error', '[ERROR] ' + errMsg);
-        notify({
-          type: 'error',
-          title: 'Gagal Menjadwalkan Konversi',
-          message: errMsg,
-          playSound: true,
-        });
-      }
-    } catch (err) {
-      log('error', '[NETWORK ERROR] ' + err.message);
-      notify({
-        type: 'error',
-        title: 'Kesalahan Jaringan',
-        message: err.message,
-        playSound: true,
-      });
+        },
+        'Konversi Playlist Dijadwalkan'
+      );
     } finally {
       setTimeout(() => {
         btnConvertPlaylist.disabled = false;
