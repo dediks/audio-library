@@ -300,8 +300,20 @@ def open_in_file_manager(target_path: Path) -> tuple[bool, str]:
 
     if explorer_bin:
         try:
-            args = [explorer_bin, win_path] if target_path.is_dir() else [explorer_bin, f"/select,{win_path}"]
-            subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if target_path.is_dir():
+                subprocess.Popen(
+                    [explorer_bin, "."],
+                    cwd=str(target_path),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            else:
+                subprocess.Popen(
+                    [explorer_bin, f"/select,{win_path}"],
+                    cwd=str(target_path.parent),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
             return True, f"Membuka di Windows Explorer: {win_path}"
         except Exception as exc:
             return False, f"Gagal menjalankan explorer.exe: {exc}"
