@@ -33,6 +33,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const convertModeRadios = document.querySelectorAll('input[name="convertMode"]');
   const targetRateRadios = document.querySelectorAll('input[name="targetRate"]');
   const targetBitrateRadios = document.querySelectorAll('input[name="targetBitrate"]');
+  const outputModeRadios = document.querySelectorAll('input[name="outputMode"]');
+  const customDestBox = document.getElementById('customDestBox');
+  const resampleParamsRow = document.getElementById('resampleParamsRow');
   const resampleRateGroup = document.getElementById('resampleRateGroup');
   const resampleBitrateGroup = document.getElementById('resampleBitrateGroup');
   const onlyMp3ToggleWrap = document.getElementById('onlyMp3ToggleWrap');
@@ -70,7 +73,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Source & Destination Folder controls
   const sourceDirInput = document.getElementById('sourceDirInput');
+  const activeSourceBadge = document.getElementById('activeSourceBadge');
   const btnBrowseSource = document.getElementById('btnBrowseSource');
+  const btnResetInbox = document.getElementById('btnResetInbox');
   const btnLoadSource = document.getElementById('btnLoadSource');
   const destDirInput = document.getElementById('destDirInput');
   const btnBrowseDest = document.getElementById('btnBrowseDest');
@@ -85,6 +90,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let lastClickedIndex = null;
   const probedFolders = new Set();
   let currentSourceDir = '';
+  let defaultInboxDir = '';
   const collapsedGroups = new Set();
 
   // Map of rel_path -> { tr: HTMLTableRowElement, chk: HTMLInputElement } for O(1) DOM selection updates
@@ -118,6 +124,63 @@ document.addEventListener('DOMContentLoaded', () => {
     return checked ? parseInt(checked.value, 10) : 320;
   }
 
+  function getOutputMode() {
+    const checked = document.querySelector('input[name="outputMode"]:checked');
+    return checked ? checked.value : 'auto';
+  }
+
+  function setOutputMode(mode) {
+    outputModeRadios.forEach(r => {
+      r.checked = r.value === mode;
+    });
+    syncOutputModeUI();
+  }
+
+  function syncOutputModeUI() {
+    const mode = getOutputMode();
+    const isRemux = getConvertMode() === 'remux_opus';
+    if (optOverwrite) {
+      optOverwrite.checked = mode === 'overwrite';
+    }
+    if (customDestBox) {
+      customDestBox.classList.toggle('hidden', mode !== 'custom');
+    }
+    if (mode !== 'custom' && destDirInput) {
+      destDirInput.value = '';
+    }
+    if (overwriteHintText) {
+      if (mode === 'overwrite') {
+        overwriteHintText.textContent = isRemux
+          ? 'Mode Timpa: File .webm asli akan langsung diganti menjadi .opus di dalam folder yang sama.'
+          : 'Mode Timpa: File asli akan langsung diganti dengan hasil konversi di dalam folder yang sama.';
+      } else if (mode === 'custom') {
+        overwriteHintText.textContent = 'Hasil konversi akan disimpan ke folder tujuan pilihan Anda atau ke Flashdisk.';
+      } else {
+        overwriteHintText.textContent = isRemux
+          ? 'File asli aman. Hasil remux disimpan ke folder baru otomatis "[Nama Playlist] [Opus]".'
+          : 'File asli aman. Hasil konversi disimpan ke folder baru otomatis "[Nama Playlist] [44.1kHz]".';
+      }
+    }
+    updatePlaylistSummaryText();
+  }
+
+  function syncSourceLocationUI() {
+    const isDefault =
+      !currentSourceDir ||
+      (defaultInboxDir && currentSourceDir === defaultInboxDir) ||
+      currentSourceDir.endsWith('/library/inbox') ||
+      currentSourceDir.endsWith('\\library\\inbox');
+    if (activeSourceBadge) {
+      activeSourceBadge.textContent = isDefault
+        ? 'library/inbox (Koleksi Default Aplikasi)'
+        : currentSourceDir;
+      activeSourceBadge.title = currentSourceDir || 'library/inbox';
+    }
+    if (btnResetInbox) {
+      btnResetInbox.classList.toggle('hidden', isDefault);
+    }
+  }
+
   function isAlreadyMatching(fileObj, targetRate, targetBitrate) {
     if (getConvertMode() === 'remux_opus') {
       return fileObj.ext !== '.webm' && fileObj.ext !== '.ogg';
@@ -132,14 +195,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function syncConvertModeUI() {
     const isRemux = getConvertMode() === 'remux_opus';
+    if (resampleParamsRow) resampleParamsRow.style.display = isRemux ? 'none' : '';
     if (resampleRateGroup) resampleRateGroup.style.display = isRemux ? 'none' : '';
     if (resampleBitrateGroup) resampleBitrateGroup.style.display = isRemux ? 'none' : '';
     if (onlyMp3ToggleWrap) onlyMp3ToggleWrap.style.display = isRemux ? 'none' : '';
-    if (overwriteHintText) {
-      overwriteHintText.textContent = isRemux
-        ? 'Jika aktif: file .webm asli langsung diganti menjadi .opus di folder yang sama. Jika nonaktif: disimpan ke folder baru "[Nama Playlist] [Opus]".'
-        : 'Default (Nonaktif): File asli TIDAK ditimpa. Hasil konversi disimpan ke folder baru "[Nama Playlist] [44.1kHz]"';
-    }
+    syncOutputModeUI();
   }
 
   // 1. Mount Shared Top Header & System status check
@@ -163,10 +223,14 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       return false;
     }
+    if (data.default_inbox) {
+      defaultInboxDir = data.default_inbox;
+    }
     if (data.source_dir) {
       currentSourceDir = data.source_dir;
       if (sourceDirInput) sourceDirInput.value = data.source_dir;
     }
+    syncSourceLocationUI();
     allFiles = data.files || [];
     allPlaylists = data.playlists || [];
 
@@ -366,7 +430,8 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     } finally {
       if (probeStatusHint) {
-        probeStatusHint.textContent = 'Klik playlist untuk memfilter & membaca sample rate lagu';
+        probeStatusHint.textContent =
+          'Klik kartu untuk memfilter tampilan tabel • Centang kotak di samping nama folder di tabel untuk memilih 1 playlist penuh';
       }
       if (btnProbeCurrent) btnProbeCurrent.disabled = false;
     }
@@ -381,7 +446,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const fragment = document.createDocumentFragment();
     fragment.appendChild(
-      createPlaylistCard('ALL', 'Semua Koleksi (Inbox)', totalSongs + ' lagu total', totalMp3 + ' MP3')
+      createPlaylistCard('ALL', 'Semua Koleksi (Tampilkan Semua)', totalSongs + ' lagu total', totalMp3 + ' MP3')
     );
 
     allPlaylists.forEach(pl => {
@@ -439,16 +504,24 @@ document.addEventListener('DOMContentLoaded', () => {
     const targetHz = getTargetRate();
     const targetBr = getTargetBitrate();
     const rateLabel = targetHz === 44100 ? '44.1 kHz' : '48 kHz';
-    const specLabel = isRemux ? '.opus (Lossless Remux)' : `${rateLabel} • ${targetBr} kbps`;
-    const verb = isRemux ? 'Remux' : 'Konversi';
-    const plLabel = activePlaylist === 'ALL'
-      ? 'Semua Koleksi'
-      : (activePlaylist === '__ROOT__' ? 'Root Inbox' : activePlaylist);
+    const specLabel = isRemux ? '.opus (Lossless Remux)' : `MP3 ${rateLabel} • ${targetBr} kbps`;
+    const outMode = getOutputMode();
+    let outLabel = 'Folder Baru Otomatis';
+    if (outMode === 'overwrite') {
+      outLabel = 'Timpa File Asli';
+    } else if (outMode === 'custom') {
+      const customVal = destDirInput && destDirInput.value.trim() ? destDirInput.value.trim() : '';
+      outLabel = customVal ? `Folder: ${customVal}` : 'Folder Custom / USB';
+    }
 
     if (activePlaylistSummary) {
-      activePlaylistSummary.textContent = `Playlist Aktif: ${plLabel} → Target ${specLabel}`;
+      activePlaylistSummary.textContent = `Target Output: ${specLabel} → ${outLabel}`;
     }
     if (btnConvertPlaylistText) {
+      const verb = isRemux ? 'Remux' : 'Konversi';
+      const plLabel = activePlaylist === 'ALL'
+        ? 'Semua Koleksi'
+        : (activePlaylist === '__ROOT__' ? 'Root Inbox' : activePlaylist);
       btnConvertPlaylistText.textContent = activePlaylist === 'ALL'
         ? `${verb} Seluruh Koleksi → ${specLabel}`
         : `${verb} Playlist "${plLabel}" → ${specLabel}`;
@@ -835,6 +908,18 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+  outputModeRadios.forEach(radio => {
+    radio.addEventListener('change', () => {
+      syncOutputModeUI();
+    });
+  });
+
+  if (destDirInput) {
+    destDirInput.addEventListener('input', () => {
+      updatePlaylistSummaryText();
+    });
+  }
+
   searchInput.addEventListener('input', applyFiltersAndRenderTable);
   filterFormat.addEventListener('change', applyFiltersAndRenderTable);
   filterRate.addEventListener('change', applyFiltersAndRenderTable);
@@ -892,16 +977,16 @@ document.addEventListener('DOMContentLoaded', () => {
         message: `${allFiles.length} file audio ditemukan di ${currentSourceDir}`,
         duration: 4000,
       });
-      const mp3Playlist = allPlaylists.find(p => p.mp3_count > 0);
-      if (mp3Playlist) {
-        activePlaylist = mp3Playlist.name;
-        renderPlaylists();
-        applyFiltersAndRenderTable();
-        probeFolder(mp3Playlist.name);
-      } else if (allFiles.length > 0 && allFiles.length <= 120) {
+      if (allFiles.length > 0 && allFiles.length <= 120) {
         probeFolder('ALL');
       }
     }
+  }
+
+  if (btnResetInbox) {
+    btnResetInbox.addEventListener('click', () => {
+      loadCustomSourceFolder(defaultInboxDir || '');
+    });
   }
 
   if (btnLoadSource) {
@@ -922,6 +1007,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (btnClearDest && destDirInput) {
     btnClearDest.addEventListener('click', () => {
       destDirInput.value = '';
+      setOutputMode('auto');
       log('info', '[DESTINATION] Mode tujuan dikembalikan ke otomatis (folder baru di samping sumber).');
     });
   }
@@ -951,7 +1037,9 @@ document.addEventListener('DOMContentLoaded', () => {
       loadCustomSourceFolder(chosenPath);
     },
     onSelectDest: (chosenPath) => {
+      setOutputMode('custom');
       if (destDirInput) destDirInput.value = chosenPath;
+      updatePlaylistSummaryText();
       log('info', '[DESTINATION] Folder tujuan disetel ke: ' + chosenPath);
       notify({
         type: 'info',
@@ -996,12 +1084,26 @@ document.addEventListener('DOMContentLoaded', () => {
   // Convert Selected Songs (Batch Checkboxes)
   btnConvertSelected.addEventListener('click', async () => {
     if (selectedPaths.size === 0) return;
+    const outMode = getOutputMode();
+    const destDirVal =
+      outMode === 'custom' && destDirInput && destDirInput.value.trim()
+        ? destDirInput.value.trim()
+        : null;
+    if (outMode === 'custom' && !destDirVal) {
+      notify({
+        type: 'error',
+        title: 'Folder Tujuan Belum Dipilih',
+        message: 'Klik tombol "📁 Pilih Folder Tujuan..." atau pilih mode "Folder Baru Otomatis".',
+        playSound: true,
+      });
+      return;
+    }
+
     const relPaths = Array.from(selectedPaths);
     const mode = getConvertMode();
     const targetRate = getTargetRate();
     const targetBitrate = getTargetBitrate();
-    const overwrite = optOverwrite ? optOverwrite.checked : false;
-    const destDirVal = destDirInput && destDirInput.value.trim() ? destDirInput.value.trim() : null;
+    const overwrite = outMode === 'overwrite';
 
     btnConvertSelected.disabled = true;
     const descTarget = mode === 'remux_opus' ? '.opus (Lossless Remux)' : `${targetRate} Hz • ${targetBitrate} kbps`;
@@ -1025,40 +1127,46 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Convert Entire Active Playlist
-  btnConvertPlaylist.addEventListener('click', async () => {
-    const mode = getConvertMode();
-    const targetRate = getTargetRate();
-    const targetBitrate = getTargetBitrate();
-    const onlyMp3 = optOnlyMp3 ? optOnlyMp3.checked : true;
-    const overwrite = optOverwrite ? optOverwrite.checked : false;
-    const playlistArg = activePlaylist === 'ALL' ? null : activePlaylist;
-    const destDirVal = destDirInput && destDirInput.value.trim() ? destDirInput.value.trim() : null;
+  // Convert Entire Active Playlist (if legacy button exists)
+  if (btnConvertPlaylist) {
+    btnConvertPlaylist.addEventListener('click', async () => {
+      const mode = getConvertMode();
+      const targetRate = getTargetRate();
+      const targetBitrate = getTargetBitrate();
+      const onlyMp3 = optOnlyMp3 ? optOnlyMp3.checked : true;
+      const outMode = getOutputMode();
+      const overwrite = outMode === 'overwrite';
+      const playlistArg = activePlaylist === 'ALL' ? null : activePlaylist;
+      const destDirVal =
+        outMode === 'custom' && destDirInput && destDirInput.value.trim()
+          ? destDirInput.value.trim()
+          : null;
 
-    btnConvertPlaylist.disabled = true;
-    const descTarget = mode === 'remux_opus' ? '.opus (Lossless Remux)' : `${targetRate} Hz • ${targetBitrate} kbps`;
-    log('info', `[DISPATCH] Menjadwalkan proses playlist (${activePlaylist}) ke ${descTarget}...`);
+      btnConvertPlaylist.disabled = true;
+      const descTarget = mode === 'remux_opus' ? '.opus (Lossless Remux)' : `${targetRate} Hz • ${targetBitrate} kbps`;
+      log('info', `[DISPATCH] Menjadwalkan proses playlist (${activePlaylist}) ke ${descTarget}...`);
 
-    try {
-      await dispatchResampleJob(
-        {
-          mode,
-          source_dir: currentSourceDir || null,
-          dest_dir: destDirVal,
-          playlist: playlistArg,
-          target_rate: targetRate,
-          target_bitrate: targetBitrate,
-          only_mp3: onlyMp3,
-          overwrite,
-        },
-        mode === 'remux_opus' ? 'Remux Playlist Dijadwalkan' : 'Konversi Playlist Dijadwalkan'
-      );
-    } finally {
-      setTimeout(() => {
-        btnConvertPlaylist.disabled = false;
-      }, 1000);
-    }
-  });
+      try {
+        await dispatchResampleJob(
+          {
+            mode,
+            source_dir: currentSourceDir || null,
+            dest_dir: destDirVal,
+            playlist: playlistArg,
+            target_rate: targetRate,
+            target_bitrate: targetBitrate,
+            only_mp3: onlyMp3,
+            overwrite,
+          },
+          mode === 'remux_opus' ? 'Remux Playlist Dijadwalkan' : 'Konversi Playlist Dijadwalkan'
+        );
+      } finally {
+        setTimeout(() => {
+          btnConvertPlaylist.disabled = false;
+        }, 1000);
+      }
+    });
+  }
 
   if (btnOpenSourceExplorer) {
     btnOpenSourceExplorer.addEventListener('click', () => {
@@ -1071,13 +1179,10 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Initialize
+  syncOutputModeUI();
   fetchLibrary().then(() => {
-    const mp3Playlist = allPlaylists.find(p => p.mp3_count > 0);
-    if (mp3Playlist) {
-      activePlaylist = mp3Playlist.name;
-      renderPlaylists();
-      applyFiltersAndRenderTable();
-      probeFolder(mp3Playlist.name);
+    if (allFiles.length > 0 && allFiles.length <= 120) {
+      probeFolder('ALL');
     }
   });
   queueMonitor.poll();

@@ -17,9 +17,9 @@
   <header class="app-header" id="appHeader" data-page="converter"></header>
 
   <main class="app-container">
-    <!-- Top Grid: Playlist & Conversion Config + Live Monitor -->
+    <!-- Top Grid: Compact Conversion Settings + Live Monitor -->
     <div class="dashboard-grid">
-      <!-- Left Panel: Playlist Selector & Sample Rate Target -->
+      <!-- Left Panel: Compact Shadcn-style Conversion Config -->
       <section class="console-card ingestion-panel" aria-labelledby="convConfigHeading">
         <div class="panel-header">
           <div class="panel-title-wrap">
@@ -31,204 +31,170 @@
                 <path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
               </svg>
             </span>
-            <h2 id="convConfigHeading">1. Pilih Playlist &amp; Target Sample Rate</h2>
+            <div>
+              <h2 id="convConfigHeading">1. Pengaturan Target Konversi</h2>
+              <p class="panel-sub">Tentukan format output, sample rate, bitrate, dan lokasi simpan</p>
+            </div>
           </div>
-          <span class="panel-badge">SoXR 28-bit VHQ Engine</span>
+          <span class="panel-badge">SoXR 28-bit VHQ</span>
         </div>
 
-        <div class="ingest-form">
-          <!-- Step 0: Source & Destination Folder Selection -->
-          <div class="folder-io-box">
-            <div class="folder-io-row">
-              <label for="sourceDirInput" class="folder-io-label">Folder Sumber (Source):</label>
-              <div class="folder-io-controls">
-                <input
-                  type="text"
-                  id="sourceDirInput"
-                  class="toolbar-input folder-path-input"
-                  placeholder="Contoh: library/inbox atau C:\Users\tsimp\Music atau /mnt/d/Lagu"
-                  aria-label="Folder Sumber Audio"
-                >
-                <button type="button" id="btnBrowseSource" class="btn-chip">📁 Pilih Folder...</button>
-                <button type="button" id="btnLoadSource" class="btn-secondary btn-sm">Muat Sumber</button>
+        <div class="ingest-form compact-settings-stack">
+          <!-- Step A: Conversion Mode (Shadcn Segmented Control) -->
+          <div class="field-group compact-field">
+            <div class="field-label">
+              <span>A. Mode Konversi Audio</span>
+              <span class="label-hint">Transcode MP3 atau Lossless Remux</span>
+            </div>
+            <div class="seg-grid two-cols">
+              <label class="seg-option">
+                <input type="radio" name="convertMode" value="resample" checked>
+                <div class="seg-option-body">
+                  <div class="seg-option-top">
+                    <span class="seg-option-title">Konversi ke MP3 (SoXR)</span>
+                    <span class="format-badge cyan">CBR</span>
+                  </div>
+                  <span class="seg-option-desc">Ubah sample rate &amp; bitrate untuk CDJ, USB, atau Mixer</span>
+                </div>
+              </label>
+
+              <label class="seg-option">
+                <input type="radio" name="convertMode" value="remux_opus">
+                <div class="seg-option-body">
+                  <div class="seg-option-top">
+                    <span class="seg-option-title">Lossless Remux (.opus)</span>
+                    <span class="format-badge emerald">COPY</span>
+                  </div>
+                  <span class="seg-option-desc">Pindahkan wadah .webm ke .opus tanpa re-encode (100% asli)</span>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <!-- Step B & C Side-by-Side: Sample Rate + Bitrate -->
+          <div class="settings-split-row" id="resampleParamsRow">
+            <!-- Step B: Target Sample Rate -->
+            <div class="field-group compact-field" id="resampleRateGroup">
+              <div class="field-label">
+                <span>B. Sample Rate</span>
+                <span class="label-hint">Standar perangkat</span>
+              </div>
+              <div class="seg-pills two-cols">
+                <label class="seg-pill">
+                  <input type="radio" name="targetRate" value="44100" checked>
+                  <span class="seg-pill-inner">
+                    <strong>44.1 kHz</strong>
+                    <small>CDJ / USB</small>
+                  </span>
+                </label>
+                <label class="seg-pill">
+                  <input type="radio" name="targetRate" value="48000">
+                  <span class="seg-pill-inner">
+                    <strong>48.0 kHz</strong>
+                    <small>Pro FOH / Mixer</small>
+                  </span>
+                </label>
               </div>
             </div>
 
-            <div class="folder-io-row">
-              <label for="destDirInput" class="folder-io-label">Folder Tujuan (Destination):</label>
+            <!-- Step C: Target Bitrate -->
+            <div class="field-group compact-field" id="resampleBitrateGroup">
+              <div class="field-label">
+                <span>C. Bitrate MP3</span>
+                <span class="label-hint">CBR Konstan</span>
+              </div>
+              <div class="seg-pills four-cols">
+                <label class="seg-pill">
+                  <input type="radio" name="targetBitrate" value="320" checked>
+                  <span class="seg-pill-inner">
+                    <strong>320k</strong>
+                    <small>Maks</small>
+                  </span>
+                </label>
+                <label class="seg-pill">
+                  <input type="radio" name="targetBitrate" value="192">
+                  <span class="seg-pill-inner">
+                    <strong>192k</strong>
+                    <small>Tinggi</small>
+                  </span>
+                </label>
+                <label class="seg-pill">
+                  <input type="radio" name="targetBitrate" value="128">
+                  <span class="seg-pill-inner">
+                    <strong>128k</strong>
+                    <small>Std</small>
+                  </span>
+                </label>
+                <label class="seg-pill">
+                  <input type="radio" name="targetBitrate" value="96">
+                  <span class="seg-pill-inner">
+                    <strong>96k</strong>
+                    <small>Hemat</small>
+                  </span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <!-- Step D: Output Destination Mode -->
+          <div class="field-group compact-field">
+            <div class="field-label">
+              <span>D. Lokasi Penyimpanan Output</span>
+              <span class="label-hint" id="overwriteHintText">File asli aman. Disimpan ke folder baru otomatis.</span>
+            </div>
+            <div class="seg-pills three-cols">
+              <label class="seg-pill">
+                <input type="radio" name="outputMode" value="auto" checked>
+                <span class="seg-pill-inner">
+                  <strong>📁 Folder Baru</strong>
+                  <small>Otomatis (Aman)</small>
+                </span>
+              </label>
+
+              <label class="seg-pill">
+                <input type="radio" name="outputMode" value="overwrite">
+                <span class="seg-pill-inner">
+                  <strong>🔄 Timpa Asli</strong>
+                  <small>Overwrite</small>
+                </span>
+              </label>
+
+              <label class="seg-pill">
+                <input type="radio" name="outputMode" value="custom">
+                <span class="seg-pill-inner">
+                  <strong>💾 Folder Lain / USB</strong>
+                  <small>Custom Path</small>
+                </span>
+              </label>
+            </div>
+
+            <!-- Hidden checkboxes for state compatibility -->
+            <input type="checkbox" id="optOverwrite" class="hidden" style="display: none;">
+            <input type="checkbox" id="optOnlyMp3" class="hidden" style="display: none;">
+
+            <!-- Custom Destination Folder Picker (Only shown when outputMode === 'custom') -->
+            <div class="folder-io-box hidden" id="customDestBox">
               <div class="folder-io-controls">
                 <input
                   type="text"
                   id="destDirInput"
                   class="toolbar-input folder-path-input"
-                  placeholder="Otomatis: buat folder baru '[Nama Playlist] [44.1kHz ...]' di samping sumber"
+                  placeholder="Klik 'Pilih Folder...' untuk memilih lokasi simpan / USB"
                   aria-label="Folder Tujuan Hasil Konversi"
                 >
-                <button type="button" id="btnBrowseDest" class="btn-chip">📁 Pilih Tujuan...</button>
-                <button type="button" id="btnClearDest" class="btn-chip" title="Kembalikan ke mode folder otomatis">Otomatis</button>
+                <button type="button" id="btnBrowseDest" class="btn-secondary btn-sm">📁 Pilih Folder...</button>
+                <button type="button" id="btnClearDest" class="btn-chip" title="Kembalikan ke mode folder baru otomatis">Reset</button>
               </div>
             </div>
           </div>
 
-          <!-- Step 1: Playlist Cards -->
-          <div class="field-group">
-            <div class="field-label">
-              <span>Pilih Folder Playlist</span>
-              <span class="label-hint" id="probeStatusHint">Klik playlist untuk memfilter &amp; membaca sample rate lagu</span>
-            </div>
-            <div class="playlist-selector-grid" id="playlistGrid">
-              <!-- Populated dynamically via converter.js -->
-            </div>
-          </div>
-
-          <!-- Step 2: Conversion Mode -->
-          <div class="field-group">
-            <div class="field-label">
-              <span>Mode Konversi Audio</span>
-              <span class="label-hint">Pilih antara Resampling MP3 atau Lossless Remux (.webm &rarr; .opus)</span>
-            </div>
-            <div class="format-grid two-cols">
-              <label class="format-card">
-                <input type="radio" name="convertMode" value="resample" checked>
-                <div class="format-card-inner">
-                  <div class="format-badge-row">
-                    <span class="format-badge cyan">SoXR Sample Rate &amp; MP3</span>
-                    <span class="format-sub">Transcode / Resample</span>
-                  </div>
-                  <p class="format-desc">Konversi sample rate (44.1 / 48 kHz) dan bitrate MP3 CBR (320 / 192 / 128 / 96 kbps) untuk kompatibilitas perangkat.</p>
-                </div>
-              </label>
-
-              <label class="format-card">
-                <input type="radio" name="convertMode" value="remux_opus">
-                <div class="format-card-inner">
-                  <div class="format-badge-row">
-                    <span class="format-badge emerald">Lossless Remux (.webm &rarr; .opus)</span>
-                    <span class="format-sub">0% Degradasi (-c:a copy)</span>
-                  </div>
-                  <p class="format-desc">Pindahkan stream Opus asli dari wadah <b>.webm</b> ke <b>.opus</b> secara instan tanpa re-encode (kualitas 100% identik).</p>
-                </div>
-              </label>
-            </div>
-          </div>
-
-          <!-- Step 3: Target Sample Rate -->
-          <div class="field-group" id="resampleRateGroup">
-            <div class="field-label">
-              <span>Target Sample Rate Output</span>
-              <span class="label-hint">Lagu yang sudah sesuai target sample rate &amp; bitrate akan dilewati</span>
-            </div>
-            <div class="format-grid two-cols">
-              <label class="format-card">
-                <input type="radio" name="targetRate" value="44100" checked>
-                <div class="format-card-inner">
-                  <div class="format-badge-row">
-                    <span class="format-badge emerald">44.1 kHz (44100 Hz)</span>
-                    <span class="format-sub">Standar CD / USB Player</span>
-                  </div>
-                  <p class="format-desc">Kompatibilitas penuh untuk CDJ, flashdisk mixer analog/digital, modul USB speaker aktif, dan head unit mobil.</p>
-                </div>
-              </label>
-
-              <label class="format-card">
-                <input type="radio" name="targetRate" value="48000">
-                <div class="format-card-inner">
-                  <div class="format-badge-row">
-                    <span class="format-badge gold">48.0 kHz (48000 Hz)</span>
-                    <span class="format-sub">Standar Pro FOH / DLMS</span>
-                  </div>
-                  <p class="format-desc">Sinkron langsung dengan clock internal Mixer Digital panggung (X32/M32/Yamaha) dan DLMS manajemen speaker.</p>
-                </div>
-              </label>
-            </div>
-          </div>
-
-          <!-- Step 4: Target Bitrate -->
-          <div class="field-group" id="resampleBitrateGroup">
-            <div class="field-label">
-              <span>Target Bitrate Output (MP3 CBR)</span>
-              <span class="label-hint">Ubah dari 320 kbps ke 192 / 128 / 96 kbps untuk menghemat ukuran file</span>
-            </div>
-            <div class="format-grid four-cols">
-              <label class="format-card compact-card">
-                <input type="radio" name="targetBitrate" value="320" checked>
-                <div class="format-card-inner">
-                  <div class="format-badge-row">
-                    <span class="format-badge emerald">320 kbps</span>
-                    <span class="format-sub">Maksimal</span>
-                  </div>
-                  <p class="format-desc">Kualitas penuh panggung FOH (~10 MB/lagu).</p>
-                </div>
-              </label>
-
-              <label class="format-card compact-card">
-                <input type="radio" name="targetBitrate" value="192">
-                <div class="format-card-inner">
-                  <div class="format-badge-row">
-                    <span class="format-badge gold">192 kbps</span>
-                    <span class="format-sub">Tinggi</span>
-                  </div>
-                  <p class="format-desc">Suara tetap jernih, hemat ~40% ukuran (~6 MB/lagu).</p>
-                </div>
-              </label>
-
-              <label class="format-card compact-card">
-                <input type="radio" name="targetBitrate" value="128">
-                <div class="format-card-inner">
-                  <div class="format-badge-row">
-                    <span class="format-badge purple">128 kbps</span>
-                    <span class="format-sub">Standar</span>
-                  </div>
-                  <p class="format-desc">Ukuran ringkas standar, hemat ~60% (~4 MB/lagu).</p>
-                </div>
-              </label>
-
-              <label class="format-card compact-card">
-                <input type="radio" name="targetBitrate" value="96">
-                <div class="format-card-inner">
-                  <div class="format-badge-row">
-                    <span class="format-badge cyan">96 kbps</span>
-                    <span class="format-sub">Hemat</span>
-                  </div>
-                  <p class="format-desc">Super irit kapasitas flashdisk, hemat ~70% (~3 MB/lagu).</p>
-                </div>
-              </label>
-            </div>
-          </div>
-
-          <!-- Step 5: Options -->
-          <div class="options-row">
-            <label class="custom-toggle" id="onlyMp3ToggleWrap">
-              <input type="checkbox" id="optOnlyMp3" checked>
-              <span class="toggle-slider"></span>
-              <div class="toggle-text-wrap">
-                <span class="toggle-text">Hanya proses file MP3 (.mp3) saat Konversi Playlist</span>
-                <span class="toggle-hint">Biarkan file .webm (Opus) tetap utuh kecuali Anda memilihnya secara manual di tabel bawah</span>
-              </div>
-            </label>
-
-            <label class="custom-toggle">
-              <input type="checkbox" id="optOverwrite">
-              <span class="toggle-slider"></span>
-              <div class="toggle-text-wrap">
-                <span class="toggle-text">Timpa file asli secara langsung (Overwrite)</span>
-                <span class="toggle-hint" id="overwriteHintText">Default (Nonaktif): File asli TIDAK ditimpa. Hasil konversi disimpan ke folder baru "[Nama Playlist] [44.1kHz]"</span>
-              </div>
-            </label>
-          </div>
-
-          <!-- Quick Playlist Conversion Footer -->
-          <div class="action-footer">
+          <!-- Active Target Summary Footer -->
+          <div class="action-footer compact-footer">
             <div class="format-spec-tag">
-              <span class="spec-dot" style="background-color: #06b6d4;"></span>
-              <span id="activePlaylistSummary">Playlist Aktif: Semua Koleksi</span>
+              <span class="spec-dot"></span>
+              <span id="activePlaylistSummary">Target Output: MP3 44.1 kHz • 320 kbps → Folder Baru Otomatis</span>
             </div>
-            <button type="button" id="btnConvertPlaylist" class="btn-accent">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
-                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
-              </svg>
-              <span id="btnConvertPlaylistText">Konversi Seluruh Playlist Ini</span>
-            </button>
+            <span class="label-hint">Centang lagu / folder di tabel bawah lalu klik <b>Konversi Terpilih</b></span>
           </div>
         </div>
       </section>
@@ -243,7 +209,10 @@
                 <polyline points="12 6 12 12 16 14"></polyline>
               </svg>
             </span>
-            <h2 id="monitorHeading">Conversion Queue &amp; Live Monitor</h2>
+            <div>
+              <h2 id="monitorHeading">Conversion Queue &amp; Live Monitor</h2>
+              <p class="panel-sub">Status antrian proses FFmpeg &amp; log stream real-time</p>
+            </div>
           </div>
           <span class="queue-counter" id="queueCounter">Antrian: 0</span>
         </div>
@@ -282,7 +251,7 @@
       </section>
     </div>
 
-    <!-- Bottom Panel: Batch Song Selection Table -->
+    <!-- Bottom Panel: Unified Playlist Filter & Song Selection DataTable -->
     <section class="console-card library-panel" aria-labelledby="batchTableHeading">
       <div class="panel-header">
         <div class="panel-title-wrap">
@@ -293,33 +262,31 @@
             </svg>
           </span>
           <div>
-            <h2 id="batchTableHeading">2. Pilih Lagu Secara Batch (Manual / Filter)</h2>
-            <p class="panel-sub" id="tableSubInfo">Centang lagu yang ingin dikonversi (mendukung Shift+Klik untuk pilih rentang baris)</p>
+            <h2 id="batchTableHeading">2. Pilih Lagu atau Folder Playlist</h2>
+            <p class="panel-sub" id="tableSubInfo">Centang kotak di samping nama folder untuk memilih 1 playlist penuh, atau centang lagu tertentu</p>
           </div>
         </div>
 
         <div class="library-actions">
-          <button type="button" id="btnOpenSourceExplorer" class="btn-secondary" title="Buka folder sumber di Windows File Explorer">
+          <button type="button" id="btnOpenSourceExplorer" class="btn-secondary" title="Buka folder sumber di File Explorer">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
               <line x1="12" y1="11" x2="12" y2="17"></line>
               <polyline points="9 14 12 11 15 14"></polyline>
             </svg>
-            <span>Buka di Explorer</span>
+            <span>Explorer</span>
           </button>
           <button type="button" id="btnProbeCurrent" class="btn-secondary" title="Pindai cepat sample rate & codec menggunakan ffprobe">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
               <circle cx="11" cy="11" r="8"></circle>
               <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
             </svg>
-            <span>Cek Sample Rate (ffprobe)</span>
+            <span>Cek Sample Rate</span>
           </button>
           <button type="button" id="btnDeleteSelected" class="btn-danger" disabled title="Hapus semua lagu yang dicentang secara permanen">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
               <polyline points="3 6 5 6 21 6"></polyline>
               <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-              <line x1="10" y1="11" x2="10" y2="17"></line>
-              <line x1="14" y1="11" x2="14" y2="17"></line>
             </svg>
             <span id="btnDeleteSelectedText">Hapus Terpilih (0)</span>
           </button>
@@ -327,33 +294,53 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
               <polygon points="5 3 19 12 5 21 5 3"></polygon>
             </svg>
-            <span id="btnConvertSelectedText">Konversi Lagu Terpilih (0)</span>
+            <span id="btnConvertSelectedText">Konversi Terpilih (0)</span>
           </button>
         </div>
       </div>
 
-      <!-- Filter & Batch Selection Toolbar -->
+      <!-- Compact Source Strip + Shadcn Playlist Filter Chips -->
+      <div class="source-playlist-bar">
+        <div class="source-location-row">
+          <div class="source-location-info">
+            <span class="source-location-label">📂 Sumber:</span>
+            <code id="activeSourceBadge" class="source-location-badge">library/inbox (Koleksi Default)</code>
+            <input type="hidden" id="sourceDirInput">
+          </div>
+          <div class="source-location-actions">
+            <span class="label-hint" id="probeStatusHint">Klik tab folder untuk memfilter tabel</span>
+            <button type="button" id="btnBrowseSource" class="btn-chip">📁 Ganti Folder Sumber / USB...</button>
+            <button type="button" id="btnResetInbox" class="btn-chip hidden">↩️ Kembali ke Inbox</button>
+          </div>
+        </div>
+
+        <div class="playlist-selector-grid" id="playlistGrid" aria-label="Filter Folder Playlist">
+          <!-- Populated dynamically via converter.js -->
+        </div>
+      </div>
+
+      <!-- Compact Shadcn DataTable Toolbar -->
       <div class="converter-toolbar">
         <div class="toolbar-filters">
           <input
             type="search"
             id="searchInput"
             class="toolbar-input"
-            placeholder="Cari judul lagu..."
+            placeholder="Cari judul lagu atau folder..."
             aria-label="Cari judul lagu"
           >
           <select id="filterFormat" class="toolbar-select" aria-label="Filter Format">
             <option value="ALL">Semua Format</option>
-            <option value=".opus">Hanya Opus (.opus)</option>
-            <option value=".webm">Hanya WebM (.webm)</option>
-            <option value=".mp3">Hanya MP3 (.mp3)</option>
-            <option value=".m4a">Hanya AAC (.m4a)</option>
+            <option value=".opus">Opus (.opus)</option>
+            <option value=".webm">WebM (.webm)</option>
+            <option value=".mp3">MP3 (.mp3)</option>
+            <option value=".m4a">AAC (.m4a)</option>
           </select>
           <select id="filterRate" class="toolbar-select" aria-label="Filter Sample Rate">
             <option value="ALL">Semua Sample Rate</option>
-            <option value="NEEDS_CONVERT">Belum Sesuai Target (Perlu Konversi)</option>
-            <option value="48000">Hanya 48000 Hz (48 kHz)</option>
-            <option value="44100">Hanya 44100 Hz (44.1 kHz)</option>
+            <option value="NEEDS_CONVERT">Perlu Konversi</option>
+            <option value="48000">48000 Hz (48 kHz)</option>
+            <option value="44100">44100 Hz (44.1 kHz)</option>
           </select>
           <select id="filterBitrate" class="toolbar-select" aria-label="Filter Bitrate">
             <option value="ALL">Semua Bitrate</option>
@@ -366,11 +353,11 @@
 
         <div class="toolbar-selection-btns">
           <span class="selection-counter-pill" id="selectionCounterPill">0 dipilih</span>
-          <button type="button" id="btnCollapseAllGroups" class="btn-chip" title="Lipat semua grup folder">Lipat Semua</button>
-          <button type="button" id="btnExpandAllGroups" class="btn-chip" title="Buka semua grup folder">Buka Semua</button>
-          <button type="button" id="btnSelectNeedConvert" class="btn-chip">Pilih Semua yg Perlu Konversi</button>
+          <button type="button" id="btnCollapseAllGroups" class="btn-chip" title="Lipat semua grup folder">Lipat</button>
+          <button type="button" id="btnExpandAllGroups" class="btn-chip" title="Buka semua grup folder">Buka</button>
+          <button type="button" id="btnSelectNeedConvert" class="btn-chip">Pilih Perlu Konversi</button>
           <button type="button" id="btnSelectVisible" class="btn-chip">Pilih Semua Tampil</button>
-          <button type="button" id="btnClearSelection" class="btn-chip">Batal Pilih</button>
+          <button type="button" id="btnClearSelection" class="btn-chip">Reset Pilih</button>
         </div>
       </div>
 
@@ -385,7 +372,7 @@
               <th scope="col">Nama File Audio &amp; Playlist</th>
               <th scope="col">Format / Codec</th>
               <th scope="col">Bitrate &amp; Ukuran</th>
-              <th scope="col">Sample Rate Saat Ini</th>
+              <th scope="col">Sample Rate</th>
               <th scope="col">Status Konversi</th>
             </tr>
           </thead>
@@ -433,7 +420,7 @@
       </div>
 
       <div class="modal-footer">
-        <button type="button" id="btnModalOpenExplorer" class="btn-secondary" title="Buka folder yang sedang dipilih ini di Windows File Explorer">
+        <button type="button" id="btnModalOpenExplorer" class="btn-secondary" title="Buka folder yang sedang dipilih ini di File Explorer">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
             <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
             <line x1="12" y1="11" x2="12" y2="17"></line>
@@ -450,4 +437,3 @@
   <script type="module" src="/static/converter.js"></script>
 </body>
 </html>
-

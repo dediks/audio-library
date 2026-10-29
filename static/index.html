@@ -50,109 +50,110 @@
           <span class="panel-badge">Native Audio Stream (No Re-encode)</span>
         </div>
 
-        <form id="ingestForm" class="ingest-form">
-          <div class="field-group">
+        <form id="ingestForm" class="ingest-form compact-settings-stack">
+          <div class="field-group compact-field">
             <label for="urlInput" class="field-label">
               <span>YouTube / YouTube Music URLs</span>
-              <span class="label-hint">Satu URL per baris (mendukung video atau playlist)</span>
+              <span class="label-hint">Satu URL per baris (video atau playlist)</span>
             </label>
             <textarea
               id="urlInput"
               class="field-textarea"
-              rows="4"
+              rows="3"
               placeholder="https://www.youtube.com/watch?v=...&#10;https://music.youtube.com/watch?v=...&#10;https://www.youtube.com/playlist?list=..."
               required
             ></textarea>
           </div>
 
-          <div class="field-group">
+          <div class="field-group compact-field">
             <label class="field-label">
               <span>Format &amp; Kualitas Output</span>
-              <span class="label-hint">Default: Opus 48 kHz (.opus) dengan lossless stream remux &amp; embedded tags</span>
+              <span class="label-hint">Default: Opus 48 kHz (.opus) lossless remux</span>
             </label>
-            <div class="format-grid">
-              <label class="format-card">
+            <div class="seg-grid three-cols">
+              <label class="seg-option">
                 <input type="radio" name="audioFormat" value="opus" checked>
-                <div class="format-card-inner">
-                  <div class="format-badge-row">
-                    <span class="format-badge emerald">OPUS 48 KHZ</span>
-                    <span class="format-sub">BEST QUALITY (.OPUS)</span>
+                <div class="seg-option-body">
+                  <div class="seg-option-top">
+                    <span class="seg-option-title">Opus 48 kHz</span>
+                    <span class="format-badge emerald">BEST</span>
                   </div>
-                  <p class="format-desc">Stream Opus terbaik YouTube dalam wadah standar <strong>.opus</strong> (lossless remux + metadata tag). Format modern paling optimal untuk pemutar audio.</p>
+                  <span class="seg-option-desc">Lossless remux .opus + tag asli</span>
                 </div>
               </label>
 
-              <label class="format-card">
+              <label class="seg-option">
                 <input type="radio" name="audioFormat" value="mp3_320k">
-                <div class="format-card-inner">
-                  <div class="format-badge-row">
-                    <span class="format-badge gold">MP3 320 KBPS</span>
-                    <span class="format-sub">KONVERSI lossy</span>
+                <div class="seg-option-body">
+                  <div class="seg-option-top">
+                    <span class="seg-option-title">MP3 320 kbps</span>
+                    <span class="format-badge gold">CBR</span>
                   </div>
-                  <p class="format-desc">Mengonversi stream YouTube ke MP3 320k. Tidak menambah kualitas (justru satu generasi kompresi lagi); hanya untuk kompatibilitas perangkat lama.</p>
+                  <span class="seg-option-desc">Kompatibilitas CDJ / USB lama</span>
                 </div>
               </label>
 
-              <label class="format-card">
+              <label class="seg-option">
                 <input type="radio" name="audioFormat" value="mp3_vbr0">
-                <div class="format-card-inner">
-                  <div class="format-badge-row">
-                    <span class="format-badge purple">MP3 VBR 0</span>
-                    <span class="format-sub">KONVERSI lossy</span>
+                <div class="seg-option-body">
+                  <div class="seg-option-top">
+                    <span class="seg-option-title">MP3 VBR 0</span>
+                    <span class="format-badge purple">VBR</span>
                   </div>
-                  <p class="format-desc">Mengonversi stream YouTube ke MP3 VBR 0. Sama seperti di atas: tidak menambah kualitas, hanya kompatibilitas.</p>
+                  <span class="seg-option-desc">Ukuran efisien untuk perangkat lama</span>
                 </div>
               </label>
             </div>
           </div>
 
-          <div class="options-row">
-            <label class="custom-toggle" id="rawWebmToggleWrap">
+          <div class="options-row compact-options-grid">
+            <label class="custom-toggle" id="rawWebmToggleWrap" title="Default (Nonaktif): Menghasilkan file .opus standar. Aktifkan jika ingin file wadah mentah asli YouTube (.webm / .m4a)">
               <input type="checkbox" id="optRawWebm">
               <span class="toggle-slider"></span>
               <div class="toggle-text-wrap">
-                <span class="toggle-text">Unduh stream mentah (.webm / .m4a tanpa remux)</span>
-                <span class="toggle-hint">Default (Nonaktif): Menghasilkan file .opus standar. Aktifkan jika ingin file wadah mentah asli YouTube</span>
+                <span class="toggle-text">Stream mentah (.webm/.m4a)</span>
+                <span class="toggle-hint">Tanpa remux ke .opus</span>
               </div>
             </label>
 
-            <label class="custom-toggle" id="keepOpusToggleWrap">
+            <label class="custom-toggle" id="keepOpusToggleWrap" title="Simpan juga file asli Opus 48 kHz saat mengunduh MP3">
               <input type="checkbox" id="optKeepOpus">
               <span class="toggle-slider"></span>
               <div class="toggle-text-wrap">
-                <span class="toggle-text">Simpan juga file asli Opus (.webm) saat download MP3</span>
-                <span class="toggle-hint">Default (Nonaktif): Saat memilih MP3 320 kbps / VBR 0, aktifkan ini agar file asli Opus 48 kHz tidak dihapus setelah konversi MP3</span>
+                <span class="toggle-text">Simpan master Opus (.webm)</span>
+                <span class="toggle-hint">Saat download mode MP3</span>
               </div>
             </label>
 
-            <label class="custom-toggle">
+            <label class="custom-toggle" title="Gunakan file sesi YouTube (library/cookies.txt)">
               <input type="checkbox" id="optUseCookies" checked>
               <span class="toggle-slider"></span>
               <div class="toggle-text-wrap">
-                <span class="toggle-text">Gunakan file sesi YouTube (library/cookies.txt)</span>
-                <span class="toggle-hint">Mengirim cookies akun Anda ke YouTube. Belum terbukti membuka kualitas lebih tinggi; otomatis mencoba ulang tanpa cookies jika gagal</span>
+                <span class="toggle-text">Gunakan Cookies Sesi</span>
+                <span class="toggle-hint">library/cookies.txt</span>
               </div>
             </label>
 
-            <label class="custom-toggle">
+            <label class="custom-toggle" title="Otomatis buat subfolder dengan nama playlist di dalam library/inbox">
               <input type="checkbox" id="optPlaylist" checked>
               <span class="toggle-slider"></span>
               <div class="toggle-text-wrap">
-                <span class="toggle-text">Simpan Playlist Otomatis per Folder</span>
-                <span class="toggle-hint">Otomatis buat subfolder dengan nama playlist di dalam library/inbox</span>
+                <span class="toggle-text">Subfolder per Playlist</span>
+                <span class="toggle-hint">Rapi di library/inbox</span>
               </div>
             </label>
 
-            <label class="custom-toggle">
+            <label class="custom-toggle" title="Otomatis hitung True Peak (dBTP) dan LUFS setelah unduhan selesai">
               <input type="checkbox" id="optAutoScan" checked>
               <span class="toggle-slider"></span>
               <div class="toggle-text-wrap">
-                <span class="toggle-text">Otomatis Jalankan Audio QC (True Peak &amp; LUFS)</span>
+                <span class="toggle-text">Auto QC Audit (dBTP &amp; LUFS)</span>
+                <span class="toggle-hint">Analisis EBU R128 otomatis</span>
               </div>
             </label>
           </div>
 
-          <div class="action-footer">
+          <div class="action-footer compact-footer">
             <div class="format-spec-tag">
               <span class="spec-dot" id="specDot"></span>
               <span id="specText">Target: Best Available - stream asli YouTube, tanpa konversi</span>
