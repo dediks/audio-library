@@ -3,7 +3,7 @@
  * Strict DOM Manipulation (No innerHTML, strictly textContent, createElement & createElementNS)
  */
 
-import { createSvgIcon, createExplorerIcon, createEditIcon } from './dom-icons.js';
+import { createSvgIcon, createExplorerIcon, createEditIcon, createTrashIcon } from './dom-icons.js';
 import { apiGet, apiPost } from './api-client.js';
 import {
   notify,
@@ -17,12 +17,13 @@ import {
   createGroupCollapseController,
 } from './table-groups.js';
 import { renderLogs, createQueueMonitor } from './queue-monitor.js';
-import { openRenameModal } from './rename-modal.js';
+import { openRenameModal, openDeleteModal } from './rename-modal.js';
 
 export {
   createSvgIcon,
   createExplorerIcon,
   createEditIcon,
+  createTrashIcon,
   apiGet,
   apiPost,
   notify,
@@ -34,6 +35,7 @@ export {
   renderLogs,
   createQueueMonitor,
   openRenameModal,
+  openDeleteModal,
 };
 
 /**
@@ -60,23 +62,18 @@ export function initAppHeader(opts = {}) {
 
   const brandIcon = document.createElement('div');
   brandIcon.className = 'brand-icon';
-  brandIcon.appendChild(
-    createSvgIcon(
-      [
-        { tag: 'path', attrs: { d: 'M9 18V5l12-2v13' } },
-        { tag: 'circle', attrs: { cx: '6', cy: '18', r: '3' } },
-        { tag: 'circle', attrs: { cx: '18', cy: '16', r: '3' } },
-      ],
-      { 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }
-    )
-  );
+  const brandLogoImg = document.createElement('img');
+  brandLogoImg.src = '/static/swararia-logo.jpg';
+  brandLogoImg.alt = 'SWARARIA AUDIO LAB';
+  brandLogoImg.className = 'brand-logo-img';
+  brandIcon.appendChild(brandLogoImg);
 
   const brandInfo = document.createElement('div');
   brandInfo.className = 'brand-info';
 
   const brandTitle = document.createElement('h1');
   brandTitle.className = 'brand-title';
-  brandTitle.appendChild(document.createTextNode('AUDIO LAB '));
+  brandTitle.appendChild(document.createTextNode('SWARARIA AUDIO LAB '));
   const studioBadge = document.createElement('span');
   studioBadge.className = 'badge-studio';
   studioBadge.textContent = 'PRO FOH';

@@ -1,6 +1,6 @@
-# Audio Lab — Dokumentasi Lengkap Sistem & Audio QC Engine
+# SWARARIA AUDIO LAB — Dokumentasi Lengkap Sistem & Audio QC Engine
 
-Selamat datang di dokumentasi resmi **Audio Lab (Batch Ingestion & Soundsystem QC Engine)**. Dokumen ini dirancang sebagai panduan komprehensif untuk audio engineer, teknisi FOH/soundsystem, dan programmer.
+Selamat datang di dokumentasi resmi **SWARARIA AUDIO LAB (Batch Ingestion, SoXR Converter & Soundsystem QC Engine)**. Dokumen ini dirancang sebagai panduan komprehensif untuk audio engineer, teknisi FOH/soundsystem, dan programmer.
 
 ---
 

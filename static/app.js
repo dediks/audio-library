@@ -16,6 +16,7 @@ import {
   createGroupCollapseController,
   createQueueMonitor,
   openRenameModal,
+  openDeleteModal,
   openFolderInExplorer,
 } from './modules/ui-shared.js';
 
@@ -47,18 +48,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const btnRefreshLibrary = document.getElementById('btnRefreshLibrary');
   const btnOpenInboxExplorer = document.getElementById('btnOpenInboxExplorer');
+  const btnDeleteSelectedLibrary = document.getElementById('btnDeleteSelectedLibrary');
+  const btnDeleteSelectedLibraryText = document.getElementById('btnDeleteSelectedLibraryText');
   const btnResampleMp3 = document.getElementById('btnResampleMp3');
   const btnAuditAll = document.getElementById('btnAuditAll');
   const libraryTableBody = document.getElementById('libraryTableBody');
   const librarySearchInput = document.getElementById('librarySearchInput');
   const librarySummaryPill = document.getElementById('librarySummaryPill');
+  const librarySelectionPill = document.getElementById('librarySelectionPill');
   const btnCollapseAllGroups = document.getElementById('btnCollapseAllGroups');
   const btnExpandAllGroups = document.getElementById('btnExpandAllGroups');
+  const btnSelectAllLibrary = document.getElementById('btnSelectAllLibrary');
+  const btnClearLibrarySelection = document.getElementById('btnClearLibrarySelection');
+  const chkSelectAllLibrary = document.getElementById('chkSelectAllLibrary');
 
   let allLibraryFiles = [];
+  let visibleLibraryFiles = [];
   let currentSourceDir = '';
+  const selectedPaths = new Set();
+  let lastClickedIndex = null;
   const collapsedGroups = new Set();
   const groupDomMap = new Map();
+  const rowElementsByPath = new Map();
 
   function log(level, message) {
     appendLog(terminalLogs, level, message);
@@ -133,6 +144,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     allLibraryFiles = data.files || [];
     currentSourceDir = data.source_dir || '';
+
+    const validSet = new Set(allLibraryFiles.map(f => f.rel_path));
+    Array.from(selectedPaths).forEach(p => {
+      if (!validSet.has(p)) selectedPaths.delete(p);
+    });
+
     renderLibraryTable();
   }
 
@@ -188,9 +205,153 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  function handleDeleteFile(fileObj) {
+    openDeleteModal({
+      title: 'Hapus File Audio',
+      message: 'Apakah Anda yakin ingin menghapus file audio ini secara permanen dari disk?',
+      items: [fileObj.rel_path || fileObj.name],
+      confirmLabel: 'Hapus File',
+      onConfirm: async () => {
+        const { ok, data, error } = await apiPost('/api/delete', {
+          source_dir: currentSourceDir,
+          rel_path: fileObj.rel_path,
+          is_folder: false,
+        });
+        if (!ok) {
+          throw new Error(error || 'Gagal menghapus file audio.');
+        }
+        selectedPaths.delete(fileObj.rel_path);
+        log('warn', '[DELETE] ' + (data?.message || `File dihapus: ${fileObj.name}`));
+        notify({
+          type: 'info',
+          title: 'File Audio Dihapus',
+          message: data?.message || `File "${fileObj.name}" berhasil dihapus.`,
+          duration: 3500,
+        });
+        await fetchLibraryFiles();
+      },
+    });
+  }
+
+  function handleDeleteFolder(group) {
+    openDeleteModal({
+      title: 'Hapus Folder Playlist',
+      message: `Seluruh folder playlist "${group.label}" beserta ${group.files.length} file audio (${group.totalSizeMb} MB) di dalamnya akan dihapus permanen:`,
+      items: [`📁 ${group.label} (${group.files.length} lagu • ${group.totalSizeMb} MB)`],
+      confirmLabel: 'Hapus Folder & Lagu',
+      onConfirm: async () => {
+        const { ok, data, error } = await apiPost('/api/delete', {
+          source_dir: currentSourceDir,
+          rel_path: group.key,
+          is_folder: true,
+        });
+        if (!ok) {
+          throw new Error(error || 'Gagal menghapus folder playlist.');
+        }
+        group.files.forEach(f => selectedPaths.delete(f.rel_path));
+        log('warn', '[DELETE FOLDER] ' + (data?.message || `Folder dihapus: ${group.label}`));
+        notify({
+          type: 'info',
+          title: 'Folder Playlist Dihapus',
+          message: data?.message || `Folder "${group.label}" berhasil dihapus.`,
+          duration: 3800,
+        });
+        await fetchLibraryFiles();
+      },
+    });
+  }
+
+  function handleBatchDeleteSelected() {
+    if (selectedPaths.size === 0) return;
+    const relPaths = Array.from(selectedPaths);
+    openDeleteModal({
+      title: `Hapus Batch (${relPaths.length} Lagu Terpilih)`,
+      message: `Sebanyak ${relPaths.length} file audio yang dicentang akan dihapus permanen dari disk:`,
+      items: relPaths,
+      confirmLabel: `Hapus ${relPaths.length} Lagu`,
+      onConfirm: async () => {
+        const { ok, data, error } = await apiPost('/api/delete', {
+          source_dir: currentSourceDir,
+          rel_paths: relPaths,
+          is_folder: false,
+        });
+        if (!ok) {
+          throw new Error(error || 'Gagal menghapus lagu terpilih.');
+        }
+        selectedPaths.clear();
+        lastClickedIndex = null;
+        log('warn', '[BATCH DELETE] ' + (data?.message || `${relPaths.length} file dihapus.`));
+        notify({
+          type: 'info',
+          title: 'Batch Delete Selesai',
+          message: data?.message || `Berhasil menghapus ${relPaths.length} file audio.`,
+          duration: 4000,
+        });
+        await fetchLibraryFiles();
+      },
+    });
+  }
+
+  function syncLibrarySelectionDOM() {
+    rowElementsByPath.forEach(({ tr, chk }, relPath) => {
+      const isSelected = selectedPaths.has(relPath);
+      chk.checked = isSelected;
+      tr.classList.toggle('row-selected', isSelected);
+    });
+
+    groupDomMap.forEach(({ groupChk, filePaths }) => {
+      if (!groupChk || !filePaths || filePaths.length === 0) return;
+      const selCount = filePaths.filter(rp => selectedPaths.has(rp)).length;
+      groupChk.checked = selCount === filePaths.length;
+      groupChk.indeterminate = selCount > 0 && selCount < filePaths.length;
+    });
+
+    if (chkSelectAllLibrary) {
+      if (visibleLibraryFiles.length === 0) {
+        chkSelectAllLibrary.checked = false;
+        chkSelectAllLibrary.indeterminate = false;
+      } else {
+        const visSelected = visibleLibraryFiles.filter(f => selectedPaths.has(f.rel_path)).length;
+        chkSelectAllLibrary.checked = visSelected === visibleLibraryFiles.length;
+        chkSelectAllLibrary.indeterminate = visSelected > 0 && visSelected < visibleLibraryFiles.length;
+      }
+    }
+
+    const count = selectedPaths.size;
+    if (librarySelectionPill) {
+      librarySelectionPill.textContent = `${count} dipilih`;
+    }
+    if (btnDeleteSelectedLibraryText) {
+      btnDeleteSelectedLibraryText.textContent = `Hapus Terpilih (${count})`;
+    }
+    if (btnDeleteSelectedLibrary) {
+      btnDeleteSelectedLibrary.disabled = count === 0;
+    }
+  }
+
+  function handleLibraryRowSelect(idx, relPath, checked, isShift) {
+    if (isShift && lastClickedIndex !== null && lastClickedIndex !== idx) {
+      const start = Math.min(lastClickedIndex, idx);
+      const end = Math.max(lastClickedIndex, idx);
+      for (let i = start; i <= end; i++) {
+        const item = visibleLibraryFiles[i];
+        if (item) {
+          if (checked) selectedPaths.add(item.rel_path);
+          else selectedPaths.delete(item.rel_path);
+        }
+      }
+    } else {
+      if (checked) selectedPaths.add(relPath);
+      else selectedPaths.delete(relPath);
+    }
+    lastClickedIndex = idx;
+    syncLibrarySelectionDOM();
+  }
+
   function renderLibraryTable() {
     libraryTableBody.replaceChildren();
     groupDomMap.clear();
+    rowElementsByPath.clear();
 
     const query = (librarySearchInput ? librarySearchInput.value : '').trim().toLowerCase();
     const filtered = query
@@ -200,6 +361,7 @@ document.addEventListener('DOMContentLoaded', () => {
         )
       : allLibraryFiles;
 
+    visibleLibraryFiles = filtered;
     const groups = groupFilesByFolder(filtered);
     if (librarySummaryPill) {
       librarySummaryPill.textContent = `${filtered.length} lagu • ${groups.length} folder`;
@@ -209,23 +371,45 @@ document.addEventListener('DOMContentLoaded', () => {
       const tr = document.createElement('tr');
       tr.className = 'empty-row';
       const td = document.createElement('td');
-      td.setAttribute('colspan', '8');
+      td.setAttribute('colspan', '9');
       td.textContent = allLibraryFiles.length === 0
         ? 'Belum ada file audio di library/inbox. Masukkan URL YouTube di atas untuk memulai.'
         : 'Tidak ada lagu atau playlist yang cocok dengan kata kunci pencarian.';
       tr.appendChild(td);
       libraryTableBody.appendChild(tr);
+      syncLibrarySelectionDOM();
       return;
     }
 
     const fragment = document.createDocumentFragment();
+    let flatIdx = 0;
 
     groups.forEach(group => {
       const isCollapsed = collapsedGroups.has(group.key);
+      const groupFilePaths = group.files.map(f => f.rel_path);
 
-      // Group Header Row
+      // Group Header Row with Group Select Checkbox
       const headerTr = document.createElement('tr');
       headerTr.className = 'group-header-row';
+
+      const tdGroupCheck = document.createElement('td');
+      tdGroupCheck.className = 'col-check';
+      const groupChk = document.createElement('input');
+      groupChk.type = 'checkbox';
+      groupChk.title = `Pilih semua lagu di folder "${group.label}"`;
+      groupChk.setAttribute('aria-label', `Pilih semua lagu di folder ${group.label}`);
+      groupChk.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const checkAll = groupChk.checked;
+        groupFilePaths.forEach(rp => {
+          if (checkAll) selectedPaths.add(rp);
+          else selectedPaths.delete(rp);
+        });
+        syncLibrarySelectionDOM();
+      });
+      tdGroupCheck.appendChild(groupChk);
+      headerTr.appendChild(tdGroupCheck);
+
       const headerTd = document.createElement('td');
       headerTd.setAttribute('colspan', '8');
 
@@ -235,6 +419,9 @@ document.addEventListener('DOMContentLoaded', () => {
         },
         onRenameFolder: (g) => {
           handleRenameFolder(g);
+        },
+        onDeleteFolder: (g) => {
+          handleDeleteFolder(g);
         },
       });
       headerTd.appendChild(bar);
@@ -248,8 +435,32 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const childRows = [];
       group.files.forEach((f, idx) => {
+        const currentFlatIdx = flatIdx++;
         const tr = document.createElement('tr');
+        const isSelected = selectedPaths.has(f.rel_path);
+        if (isSelected) tr.classList.add('row-selected');
         if (isCollapsed) tr.classList.add('group-row-hidden');
+
+        // Checkbox cell
+        const tdCheck = document.createElement('td');
+        tdCheck.className = 'col-check';
+        const chk = document.createElement('input');
+        chk.type = 'checkbox';
+        chk.checked = isSelected;
+        chk.setAttribute('aria-label', 'Pilih ' + f.name);
+        chk.addEventListener('click', (e) => {
+          e.stopPropagation();
+          handleLibraryRowSelect(currentFlatIdx, f.rel_path, chk.checked, e.shiftKey);
+        });
+        tdCheck.appendChild(chk);
+        tr.appendChild(tdCheck);
+
+        tr.addEventListener('click', (e) => {
+          const newChecked = !selectedPaths.has(f.rel_path);
+          handleLibraryRowSelect(currentFlatIdx, f.rel_path, newChecked, e.shiftKey);
+        });
+
+        rowElementsByPath.set(f.rel_path, { tr, chk });
 
         // Compact single-line song title with track index (folder is already shown on the group header)
         tr.appendChild(
@@ -258,6 +469,9 @@ document.addEventListener('DOMContentLoaded', () => {
             showFolderBadge: false,
             onRename: (fileObj) => {
               handleRenameFile(fileObj);
+            },
+            onDelete: (fileObj) => {
+              handleDeleteFile(fileObj);
             },
           })
         );
@@ -334,14 +548,53 @@ document.addEventListener('DOMContentLoaded', () => {
         childRows.push(tr);
       });
 
-      groupDomMap.set(group.key, { childRows, chevron, toggleHint });
+      groupDomMap.set(group.key, {
+        childRows,
+        chevron,
+        toggleHint,
+        groupChk,
+        filePaths: groupFilePaths,
+      });
     });
 
     libraryTableBody.appendChild(fragment);
+    syncLibrarySelectionDOM();
   }
 
   if (librarySearchInput) {
     librarySearchInput.addEventListener('input', renderLibraryTable);
+  }
+
+  if (chkSelectAllLibrary) {
+    chkSelectAllLibrary.addEventListener('change', () => {
+      const check = chkSelectAllLibrary.checked;
+      visibleLibraryFiles.forEach(f => {
+        if (check) selectedPaths.add(f.rel_path);
+        else selectedPaths.delete(f.rel_path);
+      });
+      syncLibrarySelectionDOM();
+    });
+  }
+
+  if (btnSelectAllLibrary) {
+    btnSelectAllLibrary.addEventListener('click', () => {
+      visibleLibraryFiles.forEach(f => selectedPaths.add(f.rel_path));
+      syncLibrarySelectionDOM();
+    });
+  }
+
+  if (btnClearLibrarySelection) {
+    btnClearLibrarySelection.addEventListener('click', () => {
+      selectedPaths.clear();
+      lastClickedIndex = null;
+      syncLibrarySelectionDOM();
+    });
+  }
+
+  if (btnDeleteSelectedLibrary) {
+    btnDeleteSelectedLibrary.addEventListener('click', () => {
+      handleBatchDeleteSelected();
+    });
   }
 
   // Format radio change listeners

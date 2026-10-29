@@ -3,8 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Audio Lab - Sample Rate Converter & Batch Playlist Processor">
-  <title>Audio Lab // Sample Rate &amp; Playlist Converter</title>
+  <meta name="description" content="SWARARIA AUDIO LAB - Sample Rate Converter & Batch Playlist Processor">
+  <title>SWARARIA AUDIO LAB // Sample Rate &amp; Playlist Converter</title>
+  <link rel="icon" type="image/jpeg" href="/static/swararia-logo.jpg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
@@ -313,6 +314,15 @@
             </svg>
             <span>Cek Sample Rate (ffprobe)</span>
           </button>
+          <button type="button" id="btnDeleteSelected" class="btn-danger" disabled title="Hapus semua lagu yang dicentang secara permanen">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+              <polyline points="3 6 5 6 21 6"></polyline>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+              <line x1="10" y1="11" x2="10" y2="17"></line>
+              <line x1="14" y1="11" x2="14" y2="17"></line>
+            </svg>
+            <span id="btnDeleteSelectedText">Hapus Terpilih (0)</span>
+          </button>
           <button type="button" id="btnConvertSelected" class="btn-primary" disabled>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
               <polygon points="5 3 19 12 5 21 5 3"></polygon>
@@ -390,7 +400,7 @@
   </main>
 
   <footer class="app-footer">
-    <p>Audio Lab Sample Rate Converter &bull; Strictly running on <code>127.0.0.1:8765</code> &bull; SoXR 28-Bit Resampling</p>
+    <p>SWARARIA AUDIO LAB &bull; Strictly running on <code>127.0.0.1:8765</code> &bull; SoXR 28-Bit Resampling</p>
   </footer>
 
   <!-- Interactive Folder Browser Modal -->

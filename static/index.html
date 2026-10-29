@@ -3,8 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Audio Lab - Batch Ingestion & Soundsystem Quality Control for Audio Engineers and Programmers">
-  <title>Audio Lab // Ingestion & Soundsystem QC</title>
+  <meta name="description" content="SWARARIA AUDIO LAB - Batch Ingestion & Soundsystem Quality Control for Audio Engineers and Programmers">
+  <title>SWARARIA AUDIO LAB // Ingestion &amp; Soundsystem QC</title>
+  <link rel="icon" type="image/jpeg" href="/static/swararia-logo.jpg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
@@ -255,6 +256,15 @@
             </svg>
             <span>Segarkan File</span>
           </button>
+          <button type="button" id="btnDeleteSelectedLibrary" class="btn-danger" disabled title="Hapus semua lagu yang dicentang secara permanen">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+              <polyline points="3 6 5 6 21 6"></polyline>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+              <line x1="10" y1="11" x2="10" y2="17"></line>
+              <line x1="14" y1="11" x2="14" y2="17"></line>
+            </svg>
+            <span id="btnDeleteSelectedLibraryText">Hapus Terpilih (0)</span>
+          </button>
           <a href="/converter" class="btn-secondary" style="text-decoration: none;">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
               <polyline points="17 1 21 5 17 9"></polyline>
@@ -286,16 +296,22 @@
         </div>
         <div class="toolbar-selection-btns">
           <span class="selection-counter-pill" id="librarySummaryPill">0 lagu</span>
+          <span class="selection-counter-pill" id="librarySelectionPill">0 dipilih</span>
           <button type="button" id="btnCollapseAllGroups" class="btn-chip">Lipat Semua Folder</button>
           <button type="button" id="btnExpandAllGroups" class="btn-chip">Buka Semua Folder</button>
+          <button type="button" id="btnSelectAllLibrary" class="btn-chip">Pilih Semua Tampil</button>
+          <button type="button" id="btnClearLibrarySelection" class="btn-chip">Batal Pilih</button>
         </div>
       </div>
 
       <!-- Table Container -->
       <div class="table-responsive">
-        <table class="qc-table" id="qcTable">
+        <table class="qc-table converter-table" id="qcTable">
           <thead>
             <tr>
+              <th scope="col" class="col-check">
+                <input type="checkbox" id="chkSelectAllLibrary" title="Pilih semua lagu yang tampil">
+              </th>
               <th scope="col">Nama File Audio</th>
               <th scope="col">Ukuran</th>
               <th scope="col">Codec</th>
@@ -308,7 +324,7 @@
           </thead>
           <tbody id="libraryTableBody">
             <tr class="empty-row">
-              <td colspan="8">Belum ada file audio di <code>library/inbox</code>. Masukkan URL YouTube di atas untuk memulai.</td>
+              <td colspan="9">Belum ada file audio di <code>library/inbox</code>. Masukkan URL YouTube di atas untuk memulai.</td>
             </tr>
           </tbody>
         </table>
@@ -336,7 +352,7 @@
   </main>
 
   <footer class="app-footer">
-    <p>Audio Lab Ingestion Engine &bull; Strictly running on <code>127.0.0.1:8765</code> &bull; Native Audio Preservation</p>
+    <p>SWARARIA AUDIO LAB &bull; Strictly running on <code>127.0.0.1:8765</code> &bull; Native Audio Preservation</p>
   </footer>
 
   <script type="module" src="/static/app.js"></script>

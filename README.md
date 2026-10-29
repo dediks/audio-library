@@ -1,4 +1,4 @@
-# Audio Library Manager — Starter Kit
+# SWARARIA AUDIO LAB — Audio Library & QC Manager
 
 Program untuk programmer dan audio engineer: ambil audio yang kamu miliki atau punya izin unduh (opsional) dan **audit file audio lokal** dengan FFmpeg, lalu keluarkan CSV.
 

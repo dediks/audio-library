@@ -49,6 +49,23 @@ class AudioMetadataCache:
                         new_k = new_prefix + k[len(old_prefix):]
                     store[new_k] = store.pop(k)
 
+    def remove_entry(self, file_path: Path | str) -> None:
+        """Removes a deleted file entry from both QC and metadata stores."""
+        key = str(file_path)
+        with self.lock:
+            self.qc_results.pop(key, None)
+            self.meta_results.pop(key, None)
+
+    def remove_folder(self, folder_path: Path | str) -> None:
+        """Removes all cached entries belonging to a deleted folder prefix."""
+        folder_str = str(folder_path)
+        prefix = folder_str.rstrip("/") + "/"
+        with self.lock:
+            for store in (self.qc_results, self.meta_results):
+                keys_to_drop = [k for k in store if k == folder_str or k.startswith(prefix)]
+                for k in keys_to_drop:
+                    store.pop(k, None)
+
     def update_after_resample(self, out_p: Path, old_p_str: str, overwrite: bool) -> None:
         with self.lock:
             if overwrite and old_p_str != str(out_p):

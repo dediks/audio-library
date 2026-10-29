@@ -16,6 +16,7 @@ import {
   createGroupCollapseController,
   createQueueMonitor,
   openRenameModal,
+  openDeleteModal,
   openFolderInExplorer,
 } from './modules/ui-shared.js';
 import { initFolderModal } from './modules/folder-modal.js';
@@ -47,6 +48,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const btnProbeCurrent = document.getElementById('btnProbeCurrent');
   const btnOpenSourceExplorer = document.getElementById('btnOpenSourceExplorer');
+  const btnDeleteSelected = document.getElementById('btnDeleteSelected');
+  const btnDeleteSelectedText = document.getElementById('btnDeleteSelectedText');
   const btnConvertSelected = document.getElementById('btnConvertSelected');
   const btnConvertSelectedText = document.getElementById('btnConvertSelectedText');
 
@@ -229,6 +232,96 @@ document.addEventListener('DOMContentLoaded', () => {
         if (activePlaylist === group.key) {
           activePlaylist = data?.rel_path || 'ALL';
         }
+        await fetchLibrary();
+      },
+    });
+  }
+
+  function handleDeleteFile(fileObj) {
+    openDeleteModal({
+      title: 'Hapus File Audio',
+      message: 'Apakah Anda yakin ingin menghapus file audio ini secara permanen dari disk?',
+      items: [fileObj.rel_path || fileObj.name],
+      confirmLabel: 'Hapus File',
+      onConfirm: async () => {
+        const { ok, data, error } = await apiPost('/api/delete', {
+          source_dir: currentSourceDir,
+          rel_path: fileObj.rel_path,
+          is_folder: false,
+        });
+        if (!ok) {
+          throw new Error(error || 'Gagal menghapus file audio.');
+        }
+        selectedPaths.delete(fileObj.rel_path);
+        log('warn', '[DELETE] ' + (data?.message || `File dihapus: ${fileObj.name}`));
+        notify({
+          type: 'info',
+          title: 'File Audio Dihapus',
+          message: data?.message || `File "${fileObj.name}" berhasil dihapus.`,
+          duration: 3500,
+        });
+        await fetchLibrary();
+      },
+    });
+  }
+
+  function handleDeleteFolder(group) {
+    openDeleteModal({
+      title: 'Hapus Folder Playlist',
+      message: `Seluruh folder playlist "${group.label}" beserta ${group.files.length} file audio (${group.totalSizeMb} MB) di dalamnya akan dihapus permanen:`,
+      items: [`📁 ${group.label} (${group.files.length} lagu • ${group.totalSizeMb} MB)`],
+      confirmLabel: 'Hapus Folder & Lagu',
+      onConfirm: async () => {
+        const { ok, data, error } = await apiPost('/api/delete', {
+          source_dir: currentSourceDir,
+          rel_path: group.key,
+          is_folder: true,
+        });
+        if (!ok) {
+          throw new Error(error || 'Gagal menghapus folder playlist.');
+        }
+        group.files.forEach(f => selectedPaths.delete(f.rel_path));
+        if (activePlaylist === group.key) {
+          activePlaylist = 'ALL';
+        }
+        log('warn', '[DELETE FOLDER] ' + (data?.message || `Folder dihapus: ${group.label}`));
+        notify({
+          type: 'info',
+          title: 'Folder Playlist Dihapus',
+          message: data?.message || `Folder "${group.label}" berhasil dihapus.`,
+          duration: 3800,
+        });
+        await fetchLibrary();
+      },
+    });
+  }
+
+  function handleBatchDeleteSelected() {
+    if (selectedPaths.size === 0) return;
+    const relPaths = Array.from(selectedPaths);
+    openDeleteModal({
+      title: `Hapus Batch (${relPaths.length} Lagu Terpilih)`,
+      message: `Sebanyak ${relPaths.length} file audio yang dicentang akan dihapus permanen dari disk:`,
+      items: relPaths,
+      confirmLabel: `Hapus ${relPaths.length} Lagu`,
+      onConfirm: async () => {
+        const { ok, data, error } = await apiPost('/api/delete', {
+          source_dir: currentSourceDir,
+          rel_paths: relPaths,
+          is_folder: false,
+        });
+        if (!ok) {
+          throw new Error(error || 'Gagal menghapus lagu terpilih.');
+        }
+        selectedPaths.clear();
+        lastClickedIndex = null;
+        log('warn', '[BATCH DELETE] ' + (data?.message || `${relPaths.length} file dihapus.`));
+        notify({
+          type: 'info',
+          title: 'Batch Delete Selesai',
+          message: data?.message || `Berhasil menghapus ${relPaths.length} file audio.`,
+          duration: 4000,
+        });
         await fetchLibrary();
       },
     });
@@ -469,6 +562,9 @@ document.addEventListener('DOMContentLoaded', () => {
         onRenameFolder: (g) => {
           handleRenameFolder(g);
         },
+        onDeleteFolder: (g) => {
+          handleDeleteFolder(g);
+        },
       });
       headerTd.appendChild(bar);
       headerTr.appendChild(headerTd);
@@ -519,6 +615,9 @@ document.addEventListener('DOMContentLoaded', () => {
             showFolderBadge: false,
             onRename: (fileObj) => {
               handleRenameFile(fileObj);
+            },
+            onDelete: (fileObj) => {
+              handleDeleteFile(fileObj);
             },
           })
         );
@@ -675,6 +774,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (btnConvertSelected) {
       btnConvertSelected.disabled = count === 0;
+    }
+    if (btnDeleteSelectedText) {
+      btnDeleteSelectedText.textContent = `Hapus Terpilih (${count})`;
+    }
+    if (btnDeleteSelected) {
+      btnDeleteSelected.disabled = count === 0;
     }
   }
 
@@ -880,6 +985,12 @@ document.addEventListener('DOMContentLoaded', () => {
       playSound: true,
     });
     return false;
+  }
+
+  if (btnDeleteSelected) {
+    btnDeleteSelected.addEventListener('click', () => {
+      handleBatchDeleteSelected();
+    });
   }
 
   // Convert Selected Songs (Batch Checkboxes)

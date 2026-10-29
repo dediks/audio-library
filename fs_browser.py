@@ -425,3 +425,147 @@ def rename_fs_entry(
     except OSError as exc:
         return False, f"Gagal mengubah nama di sistem: {exc}", Path(), Path()
 
+
+SAFE_COMPANION_EXTS = {
+    ".part", ".ytdl", ".jpg", ".jpeg", ".png", ".webp",
+    ".json", ".txt", ".csv", ".lrc", ".m3u", ".m3u8",
+}
+
+
+def delete_fs_entries(
+    source_dir: Path,
+    rel_paths: list[str] | None = None,
+    rel_path: str | None = None,
+    is_folder: bool | None = None,
+) -> tuple[bool, str, list[Path], list[Path]]:
+    """Safely deletes one or more audio files or a playlist subfolder within source_dir.
+
+    Returns:
+        tuple[bool, message, deleted_file_paths, deleted_folder_paths]
+    """
+    base = source_dir.resolve()
+    allowed_roots = get_allowed_roots()
+    if not any(base.is_relative_to(r) for r in allowed_roots):
+        return False, "Akses direktori sumber ditolak.", [], []
+
+    raw_targets: list[str] = []
+    if isinstance(rel_paths, list):
+        for rp in rel_paths:
+            if isinstance(rp, str) and rp.strip():
+                raw_targets.append(rp.strip())
+    if isinstance(rel_path, str) and rel_path.strip():
+        raw_targets.append(rel_path.strip())
+
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    unique_targets: list[str] = []
+    for t in raw_targets:
+        if t not in seen:
+            seen.add(t)
+            unique_targets.append(t)
+
+    if not unique_targets:
+        return False, "Tidak ada file atau folder yang dipilih untuk dihapus.", [], []
+
+    validated_paths: list[Path] = []
+    for raw_rel in unique_targets:
+        clean_rel = raw_rel.strip().lstrip("/\\")
+        if not clean_rel or clean_rel in (".", ".."):
+            return False, "Jalur file/folder tidak valid.", [], []
+        target_path = (base / clean_rel).resolve()
+        if not target_path.is_relative_to(base) or target_path == base:
+            return False, "Akses jalur ditolak (di luar batas direktori sumber).", [], []
+        rel_parts = target_path.relative_to(base).parts
+        if any(p.startswith(".") or p.startswith("$") or p in SKIP_SYSTEM_DIRS for p in rel_parts):
+            return False, "Tidak diizinkan menghapus file atau folder sistem/tersembunyi.", [], []
+        if target_path.is_symlink():
+            return False, "Tidak diizinkan menghapus symbolic link.", [], []
+        validated_paths.append(target_path)
+
+    deleted_files: list[Path] = []
+    deleted_folders: list[Path] = []
+    errors: list[str] = []
+    parent_dirs_to_check: set[Path] = set()
+
+    for target_path in validated_paths:
+        if not target_path.exists():
+            errors.append(f"Tidak ditemukan: {target_path.name}")
+            continue
+
+        if target_path.is_dir():
+            if is_folder is False:
+                errors.append(f"'{target_path.name}' adalah folder, bukan file audio.")
+                continue
+            # Ensure folder only contains audio or safe companion files before rmtree
+            unsafe_found = False
+            folder_audio_files: list[Path] = []
+            try:
+                for p in target_path.rglob("*"):
+                    if p.is_symlink():
+                        unsafe_found = True
+                        break
+                    if p.is_file():
+                        ext_low = p.suffix.lower()
+                        if ext_low in audio_manager.EXTENSIONS:
+                            folder_audio_files.append(p)
+                        elif ext_low not in SAFE_COMPANION_EXTS and not p.name.startswith("."):
+                            unsafe_found = True
+                            break
+            except OSError as exc:
+                errors.append(f"Gagal memeriksa isi folder '{target_path.name}': {exc}")
+                continue
+
+            if unsafe_found:
+                errors.append(
+                    f"Folder '{target_path.name}' berisi file non-audio lain sehingga tidak dihapus otomatis demi keamanan."
+                )
+                continue
+
+            try:
+                shutil.rmtree(target_path)
+                deleted_folders.append(target_path)
+                deleted_files.extend(folder_audio_files)
+            except OSError as exc:
+                errors.append(f"Gagal menghapus folder '{target_path.name}': {exc}")
+        else:
+            if target_path.suffix.lower() not in audio_manager.EXTENSIONS:
+                errors.append(f"File '{target_path.name}' bukan format audio yang didukung.")
+                continue
+            parent_dir = target_path.parent
+            try:
+                target_path.unlink()
+                deleted_files.append(target_path)
+                if parent_dir != base and parent_dir.is_relative_to(base):
+                    parent_dirs_to_check.add(parent_dir)
+            except OSError as exc:
+                errors.append(f"Gagal menghapus '{target_path.name}': {exc}")
+
+    # Clean up any playlist subfolders that became completely empty after file deletion
+    for pdir in sorted(parent_dirs_to_check, key=lambda p: len(p.parts), reverse=True):
+        try:
+            if pdir.is_dir() and not any(pdir.iterdir()):
+                pdir.rmdir()
+                deleted_folders.append(pdir)
+        except OSError:
+            pass
+
+    if not deleted_files and not deleted_folders:
+        err_detail = "; ".join(errors[:3]) if errors else "File atau folder tidak ditemukan."
+        return False, f"Gagal menghapus: {err_detail}", [], []
+
+    if is_folder and len(deleted_folders) == 1 and len(unique_targets) == 1:
+        folder_name = deleted_folders[0].name
+        msg = f"Folder '{folder_name}' ({len(deleted_files)} lagu) berhasil dihapus."
+    elif len(deleted_files) == 1 and not errors:
+        msg = f"File '{deleted_files[0].name}' berhasil dihapus."
+    else:
+        msg = f"Berhasil menghapus {len(deleted_files)} file audio"
+        if deleted_folders and not is_folder:
+            msg += f" ({len(deleted_folders)} folder kosong ikut dibersihkan)"
+        if errors:
+            msg += f" • {len(errors)} gagal"
+        msg += "."
+
+    return True, msg, deleted_files, deleted_folders
+
+

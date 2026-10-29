@@ -162,6 +162,8 @@ class AudioServerHandler(BaseHTTPRequestHandler):
             self._handle_post_open_folder(payload)
         elif path == "/api/rename":
             self._handle_post_rename(payload)
+        elif path == "/api/delete":
+            self._handle_post_delete(payload)
         else:
             self.send_error(404, "Endpoint not found")
 
@@ -277,6 +279,45 @@ class AudioServerHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             self.send_json(400, {"error": str(exc)})
 
+    def _handle_post_delete(self, payload: dict) -> None:
+        raw_src = payload.get("source_dir")
+        rel_path = payload.get("rel_path")
+        rel_paths = payload.get("rel_paths")
+        is_folder = payload.get("is_folder")
+
+        try:
+            src_dir = resolve_safe_dir(raw_src, INBOX_DIR, must_exist=True) if raw_src else INBOX_DIR.resolve()
+            ok, msg, deleted_files, deleted_folders = fs_browser.delete_fs_entries(
+                source_dir=src_dir,
+                rel_paths=rel_paths if isinstance(rel_paths, list) else None,
+                rel_path=rel_path if isinstance(rel_path, str) else None,
+                is_folder=is_folder if isinstance(is_folder, bool) else None,
+            )
+            if not ok:
+                self.send_json(400, {"error": msg})
+                return
+
+            # Evict deleted files and folders from metadata/QC cache
+            for fp in deleted_files:
+                metadata_cache.remove_entry(fp)
+            for dp in deleted_folders:
+                metadata_cache.remove_folder(dp)
+
+            # Sync download archive if deletions occurred inside default INBOX_DIR
+            inbox_resolved = INBOX_DIR.resolve()
+            if src_dir == inbox_resolved or src_dir.is_relative_to(inbox_resolved):
+                audio_manager.sync_download_archive(inbox_resolved, ARCHIVE_FILE)
+
+            self.send_json(200, {
+                "ok": True,
+                "message": msg,
+                "deleted_count": len(deleted_files),
+                "deleted_paths": [str(p.relative_to(src_dir)) for p in deleted_files if p.is_relative_to(src_dir)],
+                "deleted_folders": [str(d.relative_to(src_dir)) for d in deleted_folders if d.is_relative_to(src_dir)],
+            })
+        except Exception as exc:
+            self.send_json(400, {"error": str(exc)})
+
     def serve_file(self, file_path: Path, content_type: str):
         try:
             with open(file_path, "rb") as f:
@@ -313,7 +354,7 @@ def main():
 
     server = ThreadingHTTPServer((host, port), AudioServerHandler)
     print("=" * 65)
-    print("  AUDIO LAB // BATCH INGESTION & SOUNDSYSTEM QC ENGINE")
+    print("  SWARARIA AUDIO LAB // BATCH INGESTION & SOUNDSYSTEM QC ENGINE")
     print("=" * 65)
     print(f"  Server running locally at: http://{host}:{port}")
     print(f"  Inbox Folder: {INBOX_DIR}")

@@ -3,7 +3,7 @@
  * Strict DOM Manipulation (No innerHTML, strictly textContent & createElement)
  */
 
-import { createExplorerIcon, createEditIcon } from './dom-icons.js';
+import { createExplorerIcon, createEditIcon, createTrashIcon } from './dom-icons.js';
 
 /**
  * Groups an array of file objects by their folder/playlist name.
@@ -131,6 +131,23 @@ export function createGroupHeaderBar(group, isCollapsed, opts = {}) {
     right.appendChild(btnRename);
   }
 
+  // Quick Action: Delete Folder (only for subfolders/playlists, not inbox root)
+  if (typeof opts.onDeleteFolder === 'function' && !group.isRoot) {
+    const btnDelete = document.createElement('button');
+    btnDelete.type = 'button';
+    btnDelete.className = 'btn-group-action btn-group-danger';
+    btnDelete.title = 'Hapus folder playlist ini beserta seluruh lagu di dalamnya';
+    btnDelete.appendChild(createTrashIcon());
+    const delText = document.createElement('span');
+    delText.textContent = 'Hapus';
+    btnDelete.appendChild(delText);
+    btnDelete.addEventListener('click', (e) => {
+      e.stopPropagation();
+      opts.onDeleteFolder(group);
+    });
+    right.appendChild(btnDelete);
+  }
+
   const toggleHint = document.createElement('span');
   toggleHint.className = 'group-toggle-hint';
   toggleHint.textContent = isCollapsed ? 'Buka Daftar' : 'Lipat';
@@ -188,6 +205,19 @@ export function createFileNameCell(fileObj, opts = {}) {
       opts.onRename(fileObj);
     });
     wrapper.appendChild(btnRename);
+  }
+
+  if (typeof opts.onDelete === 'function') {
+    const btnDelete = document.createElement('button');
+    btnDelete.type = 'button';
+    btnDelete.className = 'btn-file-delete';
+    btnDelete.title = 'Hapus file audio ini';
+    btnDelete.appendChild(createTrashIcon());
+    btnDelete.addEventListener('click', (e) => {
+      e.stopPropagation();
+      opts.onDelete(fileObj);
+    });
+    wrapper.appendChild(btnDelete);
   }
 
   tdName.appendChild(wrapper);
