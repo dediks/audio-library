@@ -1,81 +1,86 @@
-# SWARARIA AUDIO LAB — Audio Library & QC Manager
+# SWARARIA AUDIO LAB — Pro Audio Library, FOH QC & DSP Workstation
 
-Program untuk programmer dan audio engineer: ambil audio yang kamu miliki atau punya izin unduh (opsional) dan **audit file audio lokal** dengan FFmpeg, lalu keluarkan CSV.
+Workstation lokal berbasis web & CLI untuk **Audio Engineer**, **Operator FOH / Soundsystem**, **DJ**, dan **Event Organizer**. Dirancang dengan estetika **shadcn/ui Dark High-Contrast** dan arsitektur **4 Halaman Dedicated** yang terhubung melalui *Shared Workspace State*.
 
-## Requirements
+---
 
-- Python 3.10+
-- FFmpeg dan ffprobe ada di `PATH`: https://ffmpeg.org/download.html
-- yt-dlp hanya untuk fitur unduhan yang diizinkan: `python -m pip install -U "yt-dlp[default]"`
+## ✨ Fitur Utama (4-Stage Audio Engineering Pipeline)
 
-Periksa instalasi:
+1. **`1. Ingest` (`/`) — Batch Audio Ingestion**
+   - Ekstraksi audio berizin dari URL/Playlist dengan *Smart Fallback* (`Native .opus 48kHz`, `Native AAC .m4a`, atau `MP3 CBR 320k/192k/128k/96k`).
+   - Penyimpanan otomatis per folder playlist (`library/inbox/<Nama Playlist>/`) dan *Live Extraction Stream Monitor*.
 
-```powershell
+2. **`2. QC & Spectral Lab` (`/qc`) — Soundsystem QC & Anti-Fake Bitrate**
+   - **4 Kartu Diagnostik KPI FOH**: Memantau jumlah trek *🟢 Ready for FOH ($\le -1.0\text{ dBTP}$)*, *🟡 Trim Preamp ($-1.0\text{ s/d }0\text{ dBTP}$)*, dan *🔴 Clipping Hazard / Fake HQ*.
+   - **Detektor Spektrum Palsu (*Fake 320 kbps Detector*)**: Membandingkan energi frekuensi tinggi ($16\text{ kHz}$ & $20\text{ kHz}$) terhadap energi dasar ($1\text{ kHz}$) untuk mendeteksi file *transcode* palsu hasil *upsample* dari $128\text{ kbps}$.
+   - **Pintasan 1-Klik ke Normalizer**: Pilih semua lagu bermasalah lalu kirim langsung ke halaman *Converter & Loudness*.
+
+3. **`3. Converter & Loudness` (`/converter`) — SoXR 28-bit & EBU R128 Normalizer**
+   - **Resampling Presisi Tinggi (SoXR 28-bit VHQ)**: Konversi massal ke MP3 CBR ($44.1\text{ kHz}$ untuk CDJ/USB atau $48\text{ kHz}$ untuk Digital Mixer FOH).
+   - **Lossless Remux (`.webm` $\rightarrow$ `.opus`)**: Memindahkan *container* tanpa *re-encode* (100% kualitas asli, sangat cepat).
+   - **Auto Loudness Normalization & True Peak Limiter**: Meratakan kekerasan lagu ke **$-14\text{ LUFS}$** (Standar FOH/Event) atau **$-16\text{ LUFS}$** sekaligus mengunci batas puncak di **$-1.5\text{ dBTP}$** (bebas kliping DAC).
+
+4. **`4. Tag & File Organizer` (`/organizer`) — Auto-Numbering, Grouping & Batch Delete**
+   - **Studio Auto-Numbering & Pembersih Tag YouTube**: Memberi nomor urut track otomatis (`01 - `, `001 - `, `01. `) dan menghapus tag sampah (`[ID_YouTube]`, `(Official Music Video)`, `(Lyrics)`, `[HD]`, `[4K]`) dengan **Live Diff Preview (`Nama Lama → Nama Baru`)**.
+   - **Multi-Mode Grouping**: Kelompokkan tabel berdasarkan `Folder Playlist`, `Tipe File (.opus/.webm/.mp3)`, `Folder + Tipe File`, atau `Sample Rate`.
+   - **Manajemen File Lengkap**: Rename file/folder, hapus 1 file, hapus 1 folder playlist, hapus 1 grup tipe file, atau *Batch Delete* berdasarkan pilihan *checkbox*.
+
+---
+
+## 🛠️ Prasyarat & Instalasi
+
+- **Python 3.10+**
+- **FFmpeg & ffprobe** terpasang di `PATH`: https://ffmpeg.org/download.html
+- **yt-dlp** (opsional, untuk fitur Ingest):
+  ```bash
+  python3 -m pip install -U "yt-dlp[default]"
+  ```
+
+Periksa instalasi di terminal:
+```bash
+python3 --version
 ffmpeg -version
 ffprobe -version
 yt-dlp --version
 ```
 
-## Gunakan untuk koleksi audio lokal (tanpa YouTube)
+---
 
-```powershell
-python audio_manager.py scan "D:\Music" --out quality_report.csv
+## 🚀 Menjalankan Web Workstation (`127.0.0.1:8765`)
+
+```bash
+python3 web_ui.py
 ```
 
-## Periksa format yang tersedia di sumber yang diizinkan
+Buka di browser:
+- **Stage 1 — Ingest**: `http://127.0.0.1:8765/`
+- **Stage 2 — QC & Spectral Lab**: `http://127.0.0.1:8765/qc`
+- **Stage 3 — Converter & Loudness**: `http://127.0.0.1:8765/converter`
+- **Stage 4 — Tag & File Organizer**: `http://127.0.0.1:8765/organizer`
 
-```powershell
-yt-dlp -F "URL_KONTEN_BERIZIN"
+---
+
+## 💻 Penggunaan CLI (`audio_manager.py`)
+
+### 1. Audit Koleksi Audio Lokal ke CSV (Tanpa YouTube)
+```bash
+python3 audio_manager.py scan "/path/ke/koleksi/musik" --out quality_report.csv
 ```
 
-## Unduh file audio (Premium AAC 256k / Native Opus 48k / MP3 320k) + QC
+### 2. Unduh Audio Berizin + Audit QC Otomatis
+```bash
+# Native Opus 48kHz / AAC (0% Generation Loss):
+python3 audio_manager.py download "URL_KONTEN_BERIZIN" --authorized --scan
 
-Downloader mendukung pengambilan stream terbaik dengan fallback otomatis:
+# MP3 320 kbps CBR (Kompatibilitas CDJ / USB):
+python3 audio_manager.py download "URL_KONTEN_BERIZIN" --authorized --format mp3 --bitrate 320 --scan
 
-1. **Dengan Akun YouTube Premium (AAC 256 kbps High Quality)**:
-   Otomatis membaca file `library/cookies.txt` jika tersedia, atau membaca sesi browser:
+# Playlist Otomatis Masuk Subfolder:
+python3 audio_manager.py download "URL_PLAYLIST_BERIZIN" --authorized --playlist --scan
+```
 
-   ```bash
-   python audio_manager.py download "URL_KONTEN_BERIZIN" --authorized --format premium --scan
-   ```
+---
 
-2. **Native Opus 48kHz / AAC Standar FOH (Default Publik)**:
-   Preservasi bit murni tanpa re-encoding (0% generasi degradasi):
+## 📖 Dokumentasi Teknis Lengkap
 
-   ```bash
-   python audio_manager.py download "URL_KONTEN_BERIZIN" --authorized --scan
-   ```
-
-3. **MP3 320 kbps CBR (LAME Maximum Bitrate)**:
-   Untuk kompatibilitas CDJ panggung lama atau flashdisk mobil:
-
-   ```bash
-   python audio_manager.py download "URL_KONTEN_BERIZIN" --authorized --format mp3 --scan
-   ```
-
-4. **Unduh Playlist Otomatis Masuk Folder**:
-   Otomatis membuat subfolder sesuai nama playlist (`library/inbox/<Nama Playlist>/...`):
-   ```bash
-   python audio_manager.py download "URL_PLAYLIST_BERIZIN" --authorized --playlist --scan
-   ```
-
-`downloaded_ids.txt` mencegah trek dengan ID sama terunduh ulang pada run berikutnya. `--scan` mengecek ulang semua file (termasuk rekursif di dalam folder playlist).
-
-## CSV
-
-- `codec`: codec sumber; `lossless codec` bukan bukti **master** sumber lossless.
-- `bitrate_kbps`: nilai yang dilaporkan metadata, bisa kosong/kurang bermakna untuk VBR.
-- `integrated_lufs`: loudness keseluruhan, bukan skor mutu.
-- `lra_lu`: loudness range.
-- `true_peak_dbtp`: dBTP; > -1 dBTP diberi flag untuk pengecekan headroom, bukan otomatis gagal.
-- `status`: `MEASURED`, `REVIEW`, `ERROR`. MEASURED bukan sertifikasi mutu.
-- `sha256`: duplicate byte-identical saja, bukan fingerprint musikal.
-
-File asli tidak diedit dan tidak dinormalisasi. Periksa setiap flag dengan telinga, spectrum analyzer dan kebutuhan DSP/loudspeaker.
-
-## Batasan penting
-
-- YouTube/YouTube Music dapat membatasi pengunduhan dan penggunaan konten. Gunakan hanya untuk konten yang memang boleh diunduh, dan pastikan hak pemutaran publik terpisah bila diputar pada event.
-- WAV 24-bit hasil konversi Opus/AAC **tetap berkualitas sumber lossy**.
-- Tidak ada detektor sederhana yang dapat membuktikan file berasal dari master studio. Spektrum, bitrate, dan codec hanya petunjuk.
-- QC menghitung true peak dan memeriksa decode; tidak otomatis mengidentifikasi kualitas mastering, artefak audible, distorsi dari sumber, atau izin hak cipta.
+Lihat [**`DOCUMENTATION.md`**](./DOCUMENTATION.md) untuk penjelasan mendalam mengenai arsitektur 4 halaman, algoritma deteksi spektrum palsu, standar EBU R128 / True Peak ($\text{dBTP}$), serta spesifikasi lengkap REST API internal.
