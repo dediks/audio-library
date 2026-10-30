@@ -23,10 +23,12 @@ EXTENSIONS = {".mp3", ".m4a", ".aac", ".opus", ".ogg", ".webm", ".flac",
 LOSSLESS = {"flac", "alac", "wavpack", "ape", "tta", "pcm_s16le", "pcm_s24le",
             "pcm_s32le", "pcm_f32le", "pcm_f64le", "pcm_s16be", "pcm_s24be"}
 FIELDNAMES = ["file", "codec", "source_class", "sample_rate_hz", "channels", "duration_s",
-              "bitrate_kbps", "integrated_lufs", "lra_lu", "true_peak_dbtp", "status",
-              "notes", "sha256"]
+              "bitrate_kbps", "integrated_lufs", "lra_lu", "true_peak_dbtp",
+              "spectral_status", "spectral_cutoff_khz", "spectral_label",
+              "status", "notes", "sha256"]
 ALLOWED_BITRATES = (320, 192, 128, 96)
-TAG_FOLDER_PATTERN = r"\s*\[(44\.1kHz|48kHz|Opus)(?:\s+\d+k)?\]$"
+ALLOWED_LUFS_TARGETS = (-14.0, -16.0)
+TAG_FOLDER_PATTERN = r"\s*\[(?:44\.1kHz|48kHz|Opus|-14LUFS|-16LUFS)(?:[^\]]*)\]$"
 
 # Priority order for YouTube / YouTube Music:
 # 141 = Premium AAC 256 kbps (44.1 kHz)
@@ -321,6 +323,132 @@ def loudness(path: Path):
     return integrated, lra, true_peak
 
 
+def analyze_spectral_quality(
+    path: Path,
+    codec: str = "",
+    bitrate_kbps: float = 0.0,
+    sample_rate_hz: int = 48000,
+    duration_s: float = 0.0,
+) -> dict:
+    """Fast multi-band spectral high-frequency cutoff analyzer to detect fake/upsampled audio.
+
+    Measures energy in 3 steep Butterworth filter bands over a 15s active window:
+    - Mid band (400 - 6000 Hz)
+    - High band (14.5 - 16.8 kHz)
+    - Ultra-High Air band (> 17.2 kHz)
+    """
+    if sample_rate_hz and int(sample_rate_hz) < 32000:
+        return {
+            "spectral_status": "LOW_BW",
+            "spectral_cutoff_khz": round(int(sample_rate_hz) / 2000, 1),
+            "spectral_label": f"<{round(int(sample_rate_hz) / 2000)} kHz (Low SR)",
+        }
+
+    fc = (
+        "[0:a:0]asplit=3[m][h][u];"
+        "[m]highpass=f=400,lowpass=f=6000,astats=measure_perchannel=none[m_out];"
+        "[h]highpass=f=14500,highpass=f=14500,highpass=f=14500,lowpass=f=16800,astats=measure_perchannel=none[h_out];"
+        "[u]highpass=f=17200,highpass=f=17200,highpass=f=17200,highpass=f=17200,astats=measure_perchannel=none[u_out]"
+    )
+
+    seek_sec = 0.0
+    if duration_s and duration_s > 35.0:
+        seek_sec = min(40.0, max(10.0, round(duration_s * 0.25, 1)))
+    elif duration_s and duration_s > 12.0:
+        seek_sec = round(duration_s * 0.2, 1)
+
+    cmd = ["ffmpeg", "-hide_banner", "-nostats"]
+    if seek_sec > 0:
+        cmd.extend(["-ss", str(seek_sec)])
+    cmd.extend([
+        "-t", "15",
+        "-i", str(path),
+        "-filter_complex", fc,
+        "-map", "[m_out]", "-f", "null", "-",
+        "-map", "[h_out]", "-f", "null", "-",
+        "-map", "[u_out]", "-f", "null", "-",
+    ])
+
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    blocks: dict[int, dict[str, float]] = {}
+    for line in proc.stderr.splitlines():
+        m = re.search(r"Parsed_astats_(\d+)", line)
+        if not m:
+            continue
+        idx = int(m.group(1))
+        b = blocks.setdefault(idx, {})
+        if "RMS level dB:" in line:
+            val = get_float(line.split("RMS level dB:")[-1].strip())
+            if val is not None:
+                b["rms"] = val
+        elif "Peak level dB:" in line:
+            val = get_float(line.split("Peak level dB:")[-1].strip())
+            if val is not None:
+                b["peak"] = val
+
+    ordered = [blocks[k] for k in sorted(blocks)]
+    if len(ordered) < 3:
+        return {
+            "spectral_status": "UNKNOWN",
+            "spectral_cutoff_khz": 0,
+            "spectral_label": "Spektrum N/A",
+        }
+
+    mid_rms = ordered[0].get("rms", -100.0)
+    mid_peak = ordered[0].get("peak", -100.0)
+    high_rms = ordered[1].get("rms", -120.0)
+    high_peak = ordered[1].get("peak", -120.0)
+    ultra_rms = ordered[2].get("rms", -120.0)
+    ultra_peak = ordered[2].get("peak", -120.0)
+
+    ultra_rel_rms = ultra_rms - mid_rms
+    ultra_rel_peak = ultra_peak - mid_peak
+    high_rel_rms = high_rms - mid_rms
+    high_rel_peak = high_peak - mid_peak
+
+    if ultra_rms > -86.0 and (ultra_rel_rms > -58.0 or ultra_rel_peak > -54.0):
+        cutoff_khz = 20
+    elif high_rms > -82.0 and (high_rel_rms > -54.0 or high_rel_peak > -50.0):
+        cutoff_khz = 16
+    else:
+        cutoff_khz = 12
+
+    codec_low = (codec or "").lower()
+    br = float(bitrate_kbps or 0.0)
+    claims_hq = (codec_low in LOSSLESS) or (codec_low == "mp3" and br >= 245.0) or (codec_low == "aac" and br >= 220.0)
+
+    if cutoff_khz >= 20:
+        return {
+            "spectral_status": "AUTHENTIC",
+            "spectral_cutoff_khz": 20,
+            "spectral_label": "20 kHz Asli (Full HQ)",
+        }
+    if cutoff_khz == 16:
+        if claims_hq:
+            return {
+                "spectral_status": "FAKE_HQ",
+                "spectral_cutoff_khz": 16,
+                "spectral_label": "⚠️ 16 kHz (Upsampled 128k)",
+            }
+        return {
+            "spectral_status": "STANDARD",
+            "spectral_cutoff_khz": 16,
+            "spectral_label": "16 kHz (Standar)",
+        }
+
+    if claims_hq or br >= 190.0:
+        return {
+            "spectral_status": "FAKE_HQ",
+            "spectral_cutoff_khz": 12,
+            "spectral_label": "⚠️ <14 kHz (Fake HQ)",
+        }
+    return {
+        "spectral_status": "LOW_BW",
+        "spectral_cutoff_khz": 12,
+        "spectral_label": "<14 kHz (Low-BW)",
+    }
+
+
 def audit_one(path: Path) -> dict:
     row = {key: "" for key in FIELDNAMES}
     row["file"] = str(path)
@@ -332,6 +460,14 @@ def audit_one(path: Path) -> dict:
         row["integrated_lufs"] = integrated if integrated is not None else ""
         row["lra_lu"] = lra if lra is not None else ""
         row["true_peak_dbtp"] = true_peak if true_peak is not None else ""
+        spec = analyze_spectral_quality(
+            path,
+            codec=str(details.get("codec") or ""),
+            bitrate_kbps=float(details.get("bitrate_kbps") or 0.0),
+            sample_rate_hz=int(details.get("sample_rate_hz") or 48000),
+            duration_s=float(details.get("duration_s") or 0.0),
+        )
+        row.update(spec)
         flags = []
         if true_peak is None:
             flags.append("TRUE_PEAK_UNAVAILABLE")
@@ -339,6 +475,8 @@ def audit_one(path: Path) -> dict:
             flags.append("TRUE_PEAK_ABOVE_0")
         elif true_peak > -1:
             flags.append("LOW_TRUE_PEAK_HEADROOM")
+        if spec.get("spectral_status") == "FAKE_HQ":
+            flags.append("FAKE_HQ_UPSAMPLED")
         if details["channels"] != 2:
             flags.append("CHECK_CHANNEL_LAYOUT")
         if integrated is None:
@@ -729,9 +867,11 @@ def resample_one(
     target_bitrate: int = 320,
     overwrite: bool = False,
     out_dir: Path | None = None,
+    normalize_lufs: float | None = None,
 ) -> dict:
     """Resamples an existing audio file to target_rate (44100/48000 Hz) and target_bitrate (320/192/128/96 kbps).
 
+    Optionally applies EBU R128 loudness normalization (e.g. -14.0 or -16.0 LUFS with -1.5 dBTP True Peak limit).
     By default (overwrite=False), never overwrites the original file:
     - If inside a playlist folder (e.g. 'Top songs/Lagu.mp3'), writes to
       'Top songs [44.1kHz]/Lagu.mp3' or 'Top songs [44.1kHz 192k]/Lagu.mp3'.
@@ -744,6 +884,10 @@ def resample_one(
         raise ValueError("Target sample rate hanya mendukung 44100 atau 48000 Hz.")
     if target_bitrate not in ALLOWED_BITRATES:
         raise ValueError(f"Target bitrate hanya mendukung {ALLOWED_BITRATES} kbps.")
+    if normalize_lufs is not None:
+        normalize_lufs = float(normalize_lufs)
+        if normalize_lufs not in ALLOWED_LUFS_TARGETS:
+            raise ValueError(f"Target normalisasi hanya mendukung {ALLOWED_LUFS_TARGETS} LUFS.")
 
     info = metadata(path)
     current_rate = int(info.get("sample_rate_hz") or 0)
@@ -753,12 +897,14 @@ def resample_one(
     ext = path.suffix.lower()
     rate_label = "44.1kHz" if target_rate == 44100 else "48kHz"
     tag_label = rate_label if target_bitrate == 320 else f"{rate_label} {target_bitrate}k"
+    if normalize_lufs is not None:
+        tag_label = f"{tag_label} {int(normalize_lufs)}LUFS"
 
     rate_matches = (current_rate == target_rate)
     has_xing = _has_mp3_xing_header(path) if ext == ".mp3" else False
     br_matches = (ext == ".mp3" and abs(current_br - target_bitrate) <= 8 and current_ch == 2 and not has_xing)
 
-    if rate_matches and br_matches:
+    if rate_matches and br_matches and normalize_lufs is None:
         return {
             "status": "SKIPPED",
             "file": str(path),
@@ -799,15 +945,18 @@ def resample_one(
             "-map", "0:a:0",
             "-map_metadata", "0",
         ]
+        ln_prefix = f"loudnorm=I={normalize_lufs}:TP=-1.5:LRA=11," if normalize_lufs is not None else ""
         cmd_soxr = base_cmd + [
-            "-af", f"aresample=resampler=soxr:precision=28:osr={target_rate}",
+            "-af", f"{ln_prefix}aresample=resampler=soxr:precision=28:osr={target_rate}",
             "-ar", str(target_rate),
             *codec_args,
             str(tmp_path),
         ]
         proc = subprocess.run(cmd_soxr, capture_output=True, text=True)
         if proc.returncode != 0:
+            fallback_af = ["-af", f"loudnorm=I={normalize_lufs}:TP=-1.5:LRA=11"] if normalize_lufs is not None else []
             cmd_std = base_cmd + [
+                *fallback_af,
                 "-ar", str(target_rate),
                 *codec_args,
                 str(tmp_path),
@@ -823,6 +972,7 @@ def resample_one(
 
         dest_display = f"{out_path.parent.name}/{out_path.name}" if out_path.parent != path.parent else out_path.name
         old_br_label = f"{round(current_br)}k" if current_br else codec
+        norm_suffix = f" • EBU R128 {int(normalize_lufs)} LUFS" if normalize_lufs is not None else ""
         return {
             "status": "CONVERTED",
             "file": str(out_path),
@@ -833,7 +983,122 @@ def resample_one(
             "old_bitrate": round(current_br) if current_br else "",
             "new_bitrate": target_bitrate,
             "codec": new_info.get("codec", ""),
-            "message": f"{current_rate} Hz ({old_br_label}) -> {target_rate} Hz • {target_bitrate} kbps ({dest_display})",
+            "normalized_lufs": normalize_lufs,
+            "message": f"{current_rate} Hz ({old_br_label}) -> {target_rate} Hz • {target_bitrate} kbps{norm_suffix} ({dest_display})",
+        }
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+
+
+def normalize_one(
+    path: Path,
+    target_lufs: float = -14.0,
+    overwrite: bool = False,
+    out_dir: Path | None = None,
+) -> dict:
+    """Normalizes audio loudness to target_lufs (-14.0 or -16.0 LUFS) with -1.5 dBTP True Peak limiter (EBU R128).
+
+    Preserves the track's existing sample rate (44.1 kHz or 48 kHz) and container/format family.
+    """
+    require("ffmpeg")
+    require("ffprobe")
+    target_lufs = float(target_lufs)
+    if target_lufs not in ALLOWED_LUFS_TARGETS:
+        raise ValueError(f"Target normalisasi hanya mendukung {ALLOWED_LUFS_TARGETS} LUFS.")
+
+    info = metadata(path)
+    current_rate = int(info.get("sample_rate_hz") or 48000)
+    out_rate = 44100 if current_rate == 44100 else 48000
+    current_br = float(info.get("bitrate_kbps") or 0)
+    codec = info.get("codec", "")
+    ext = path.suffix.lower()
+
+    if ext in (".webm", ".opus", ".ogg") or codec == "opus":
+        target_ext = ".opus"
+        codec_args = ["-c:a", "libopus", "-b:a", "256k", "-ac", "2"]
+    elif ext in (".m4a", ".aac"):
+        target_ext = ext
+        codec_args = ["-c:a", "aac", "-b:a", "256k", "-ac", "2"]
+    elif ext == ".flac" or codec == "flac":
+        target_ext = ".flac"
+        codec_args = ["-c:a", "flac", "-ac", "2"]
+    elif ext in (".wav", ".aif", ".aiff"):
+        target_ext = ext
+        pcm_codec = codec if codec.startswith("pcm_") else "pcm_s16le"
+        codec_args = ["-c:a", pcm_codec, "-ac", "2"]
+    else:
+        target_ext = ".mp3"
+        codec_args = [
+            "-c:a", "libmp3lame",
+            "-b:a", "320k",
+            "-ac", "2",
+            "-write_xing", "0",
+            "-id3v2_version", "3",
+        ]
+
+    tag_label = f"{int(target_lufs)}LUFS"
+    out_path = _resolve_resample_output_path(path, target_ext, tag_label, overwrite, out_dir)
+
+    if not overwrite and out_path != path and out_path.is_file():
+        return {
+            "status": "SKIPPED",
+            "file": str(out_path),
+            "old_rate": current_rate,
+            "new_rate": out_rate,
+            "old_bitrate": round(current_br) if current_br else "",
+            "new_bitrate": round(current_br) if current_br else "",
+            "message": f"Hasil normalisasi {int(target_lufs)} LUFS sudah ada ({out_path.parent.name}/{out_path.name})",
+        }
+
+    tmp_path = out_path.with_name(f".{out_path.stem}.norm_tmp{out_path.suffix}")
+    try:
+        base_cmd = [
+            "ffmpeg", "-y", "-hide_banner", "-nostats", "-xerror",
+            "-i", str(path),
+            "-map", "0:a:0",
+            "-map_metadata", "0",
+        ]
+        cmd_soxr = base_cmd + [
+            "-af", f"loudnorm=I={target_lufs}:TP=-1.5:LRA=11,aresample=resampler=soxr:precision=28:osr={out_rate}",
+            "-ar", str(out_rate),
+            *codec_args,
+            str(tmp_path),
+        ]
+        proc = subprocess.run(cmd_soxr, capture_output=True, text=True)
+        if proc.returncode != 0:
+            cmd_std = base_cmd + [
+                "-af", f"loudnorm=I={target_lufs}:TP=-1.5:LRA=11",
+                "-ar", str(out_rate),
+                *codec_args,
+                str(tmp_path),
+            ]
+            proc = subprocess.run(cmd_std, capture_output=True, text=True)
+            if proc.returncode != 0:
+                raise RuntimeError("FFmpeg loudnorm gagal: " + proc.stderr[-300:].replace("\n", " "))
+
+        new_info = metadata(tmp_path)
+        tmp_path.replace(out_path)
+        if overwrite and out_path != path and path.exists():
+            path.unlink()
+
+        dest_display = f"{out_path.parent.name}/{out_path.name}" if out_path.parent != path.parent else out_path.name
+        new_br = float(new_info.get("bitrate_kbps") or current_br)
+        return {
+            "status": "CONVERTED",
+            "file": str(out_path),
+            "old_file": str(path),
+            "overwritten": overwrite,
+            "old_rate": current_rate,
+            "new_rate": int(new_info.get("sample_rate_hz") or out_rate),
+            "old_bitrate": round(current_br) if current_br else "",
+            "new_bitrate": round(new_br) if new_br else "",
+            "codec": new_info.get("codec", ""),
+            "normalized_lufs": target_lufs,
+            "message": f"EBU R128 {int(target_lufs)} LUFS (TP -1.5 dBTP) • {out_rate} Hz -> {dest_display}",
         }
     finally:
         if tmp_path.exists():

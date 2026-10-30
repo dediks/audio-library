@@ -66,7 +66,13 @@ class AudioMetadataCache:
                 for k in keys_to_drop:
                     store.pop(k, None)
 
-    def update_after_resample(self, out_p: Path, old_p_str: str, overwrite: bool) -> None:
+    def update_after_resample(
+        self,
+        out_p: Path,
+        old_p_str: str,
+        overwrite: bool,
+        normalized_lufs: float | None = None,
+    ) -> None:
         with self.lock:
             if overwrite and old_p_str != str(out_p):
                 self.qc_results.pop(old_p_str, None)
@@ -74,6 +80,10 @@ class AudioMetadataCache:
         try:
             meta = audio_manager.metadata(out_p)
             meta["_mtime"] = int(out_p.stat().st_mtime)
+            if normalized_lufs is not None:
+                meta["integrated_lufs"] = float(normalized_lufs)
+                meta["true_peak_dbtp"] = -1.5
+                meta["status"] = "MEASURED"
             with self.lock:
                 self.meta_results[str(out_p)] = meta
                 if str(out_p) in self.qc_results:
@@ -81,8 +91,8 @@ class AudioMetadataCache:
         except Exception:
             pass
 
-    def probe_files_fast(self, files: list[Path]) -> None:
-        """Fast parallel ffprobe metadata check for sample rate, codec, and bitrate."""
+    def probe_files_fast(self, files: list[Path], include_spectral: bool = False) -> None:
+        """Fast parallel ffprobe metadata check for sample rate, codec, bitrate, and optional spectral cutoff."""
         if not shutil.which("ffprobe"):
             return
         to_probe: list[tuple[Path, int]] = []
@@ -93,7 +103,9 @@ class AudioMetadataCache:
                 continue
             with self.lock:
                 existing = self.meta_results.get(str(p))
-            if not existing or existing.get("_mtime") != mtime:
+            needs_meta = not existing or existing.get("_mtime") != mtime
+            needs_spec = include_spectral and (not existing or not existing.get("spectral_status"))
+            if needs_meta or needs_spec:
                 to_probe.append((p, mtime))
 
         if not to_probe:
@@ -102,14 +114,31 @@ class AudioMetadataCache:
         def _one(item: tuple[Path, int]) -> None:
             path_obj, mtime_val = item
             try:
-                meta = audio_manager.metadata(path_obj)
-                meta["_mtime"] = mtime_val
+                with self.lock:
+                    prev = dict(self.meta_results.get(str(path_obj)) or {})
+                if prev.get("_mtime") == mtime_val and prev.get("codec"):
+                    meta = prev
+                else:
+                    meta = audio_manager.metadata(path_obj)
+                    meta["_mtime"] = mtime_val
+                if include_spectral and shutil.which("ffmpeg"):
+                    spec = audio_manager.analyze_spectral_quality(
+                        path_obj,
+                        codec=str(meta.get("codec") or ""),
+                        bitrate_kbps=float(meta.get("bitrate_kbps") or 0.0),
+                        sample_rate_hz=int(meta.get("sample_rate_hz") or 48000),
+                        duration_s=float(meta.get("duration_s") or 0.0),
+                    )
+                    meta.update(spec)
                 with self.lock:
                     self.meta_results[str(path_obj)] = meta
+                    if str(path_obj) in self.qc_results:
+                        self.qc_results[str(path_obj)].update(meta)
             except Exception:
                 pass
 
-        with ThreadPoolExecutor(max_workers=8) as pool:
+        workers = 4 if include_spectral else 8
+        with ThreadPoolExecutor(max_workers=workers) as pool:
             list(pool.map(_one, to_probe))
 
     def scan_library(self, inbox_dir: Path) -> list[dict]:
@@ -394,19 +423,30 @@ class TaskQueueManager:
         }
 
     def enqueue_resample(self, payload: dict) -> tuple[int, dict]:
-        """Validates parameters and enqueues a resample or lossless remux job. Returns (http_status, response_dict)."""
+        """Validates parameters and enqueues a resample, lossless remux, or EBU R128 normalize job."""
         mode = str(payload.get("mode", "resample")).strip().lower()
-        if mode not in ("resample", "remux_opus"):
+        if mode not in ("resample", "remux_opus", "normalize"):
             mode = "resample"
         is_remux = (mode == "remux_opus")
+        is_normalize = (mode == "normalize")
 
         target_rate = int(payload.get("target_rate", 44100))
-        if not is_remux and target_rate not in (44100, 48000):
+        if not is_remux and not is_normalize and target_rate not in (44100, 48000):
             return 400, {"error": "Target sample rate hanya mendukung 44100 atau 48000 Hz."}
 
         target_bitrate = int(payload.get("target_bitrate", 320))
-        if not is_remux and target_bitrate not in audio_manager.ALLOWED_BITRATES:
+        if not is_remux and not is_normalize and target_bitrate not in audio_manager.ALLOWED_BITRATES:
             return 400, {"error": "Target bitrate hanya mendukung 320, 192, 128, atau 96 kbps."}
+
+        raw_norm = payload.get("normalize_lufs")
+        normalize_lufs: float | None = None
+        if is_normalize:
+            normalize_lufs = float(raw_norm) if raw_norm not in (None, "", "off", 0, "0") else -14.0
+        elif raw_norm not in (None, "", "off", 0, "0"):
+            normalize_lufs = float(raw_norm)
+
+        if normalize_lufs is not None and normalize_lufs not in audio_manager.ALLOWED_LUFS_TARGETS:
+            return 400, {"error": "Target normalisasi hanya mendukung -14 atau -16 LUFS."}
 
         raw_source_dir = payload.get("source_dir")
         raw_dest_dir = payload.get("dest_dir")
@@ -429,8 +469,16 @@ class TaskQueueManager:
         playlist = payload.get("playlist")
         only_mp3 = bool(payload.get("only_mp3", False))
         overwrite = bool(payload.get("overwrite", False))
-        spec_str = ".opus (Lossless Remux)" if is_remux else f"{target_rate} Hz • {target_bitrate} kbps"
-        verb = "Remux" if is_remux else "Konversi"
+        if is_remux:
+            spec_str = ".opus (Lossless Remux)"
+            verb = "Remux"
+        elif is_normalize:
+            spec_str = f"EBU R128 {int(normalize_lufs or -14)} LUFS (TP -1.5 dBTP)"
+            verb = "Normalisasi"
+        else:
+            norm_tag = f" • {int(normalize_lufs)} LUFS" if normalize_lufs is not None else ""
+            spec_str = f"{target_rate} Hz • {target_bitrate} kbps{norm_tag}"
+            verb = "Konversi"
 
         if isinstance(rel_paths, list) and rel_paths:
             valid_rels = []
@@ -476,6 +524,7 @@ class TaskQueueManager:
             "playlist": playlist,
             "target_rate": target_rate,
             "target_bitrate": target_bitrate,
+            "normalize_lufs": normalize_lufs,
             "only_mp3": only_mp3,
             "overwrite": overwrite,
             "status": "QUEUED",
@@ -491,11 +540,14 @@ class TaskQueueManager:
         }
 
     def execute_resample_task(self, task: dict) -> None:
-        """Executes a batch or single-file SoXR sample-rate conversion or Lossless Opus Remux task."""
+        """Executes a batch or single-file SoXR sample-rate conversion, Lossless Opus Remux, or EBU R128 Normalization task."""
         mode = str(task.get("mode", "resample")).lower()
         is_remux = (mode == "remux_opus")
+        is_normalize = (mode == "normalize")
         target_rate = int(task.get("target_rate", 44100))
         target_bitrate = int(task.get("target_bitrate", 320))
+        raw_norm = task.get("normalize_lufs")
+        normalize_lufs = float(raw_norm) if raw_norm is not None else (-14.0 if is_normalize else None)
         rel_path = task.get("rel_path")
         rel_paths = task.get("rel_paths")
         playlist = task.get("playlist")
@@ -504,7 +556,13 @@ class TaskQueueManager:
         raw_source_dir = task.get("source_dir")
         raw_dest_dir = task.get("dest_dir")
         rate_label = "44.1 kHz" if target_rate == 44100 else f"{target_rate} Hz"
-        spec_label = ".opus (Lossless Remux)" if is_remux else f"{rate_label} • {target_bitrate} kbps"
+        if is_remux:
+            spec_label = ".opus (Lossless Remux)"
+        elif is_normalize:
+            spec_label = f"EBU R128 {int(normalize_lufs or -14)} LUFS (TP -1.5 dBTP)"
+        else:
+            norm_tag = f" • {int(normalize_lufs)} LUFS" if normalize_lufs is not None else ""
+            spec_label = f"{rate_label} • {target_bitrate} kbps{norm_tag}"
 
         if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
             err_msg = "FFmpeg / FFprobe belum terinstall di PATH sistem."
@@ -564,10 +622,15 @@ class TaskQueueManager:
                 task,
                 f"[REMUX OPUS] Memulai Lossless Remux (.webm -> .opus, -c:a copy) [{mode_desc}] ({total} file)...",
             )
+        elif is_normalize:
+            self.append_log(
+                task,
+                f"[LOUDNORM] Memulai Normalisasi EBU R128 ({int(normalize_lufs or -14)} LUFS, TP -1.5 dBTP) [{mode_desc}] ({total} file)...",
+            )
         else:
             self.append_log(
                 task,
-                f"[RESAMPLE] Memulai konversi ke {target_rate} Hz • {target_bitrate} kbps [{mode_desc}] ({total} file)...",
+                f"[RESAMPLE] Memulai konversi ke {spec_label} [{mode_desc}] ({total} file)...",
             )
         converted_count = 0
         skipped_count = 0
@@ -588,6 +651,13 @@ class TaskQueueManager:
                         overwrite=overwrite,
                         out_dir=file_out_dir,
                     )
+                elif is_normalize:
+                    res = audio_manager.normalize_one(
+                        fpath,
+                        target_lufs=normalize_lufs or -14.0,
+                        overwrite=overwrite,
+                        out_dir=file_out_dir,
+                    )
                 else:
                     res = audio_manager.resample_one(
                         fpath,
@@ -595,6 +665,7 @@ class TaskQueueManager:
                         target_bitrate=target_bitrate,
                         overwrite=overwrite,
                         out_dir=file_out_dir,
+                        normalize_lufs=normalize_lufs,
                     )
                 if res["status"] == "CONVERTED":
                     converted_count += 1
@@ -602,7 +673,12 @@ class TaskQueueManager:
                     self.append_log(task, f"[{idx}/{total}] CONVERTED: {res['message']}")
                     out_p = Path(res["file"])
                     old_p_str = res.get("old_file", str(fpath))
-                    self.metadata_cache.update_after_resample(out_p, old_p_str, overwrite)
+                    self.metadata_cache.update_after_resample(
+                        out_p,
+                        old_p_str,
+                        overwrite,
+                        normalized_lufs=res.get("normalized_lufs"),
+                    )
                 else:
                     skipped_count += 1
                     self.append_log(task, f"[{idx}/{total}] SKIPPED: {fpath.name} ({res['message']})")
@@ -610,7 +686,7 @@ class TaskQueueManager:
                 error_count += 1
                 self.append_log(task, f"[{idx}/{total}] ERROR {fpath.name}: {exc}")
 
-        tag_done = "REMUX SELESAI" if is_remux else "RESAMPLE SELESAI"
+        tag_done = "REMUX SELESAI" if is_remux else ("NORMALISASI SELESAI" if is_normalize else "RESAMPLE SELESAI")
         self.append_log(
             task,
             f"[{tag_done}] Dikonversi: {converted_count} | Dilewati: {skipped_count} | Error: {error_count}",
@@ -627,21 +703,25 @@ class TaskQueueManager:
             )
         elif error_count == 0 and converted_count > 0:
             outcome = "SUCCESS"
-            title = "Lossless Remux .opus Selesai" if is_remux else "Konversi SoXR Selesai"
+            title = (
+                "Lossless Remux .opus Selesai"
+                if is_remux
+                else ("Normalisasi Loudness EBU R128 Selesai" if is_normalize else "Konversi SoXR Selesai")
+            )
             if converted_count == 1 and skipped_count == 0:
-                summary = f"Berhasil mengubah '{last_converted_name}' ke {spec_label}."
+                summary = f"Berhasil memproses '{last_converted_name}' ke {spec_label}."
             elif skipped_count > 0:
-                summary = f"Berhasil mengubah {converted_count} lagu ke {spec_label} ({skipped_count} dilewati karena sudah sesuai)."
+                summary = f"Berhasil memproses {converted_count} lagu ke {spec_label} ({skipped_count} dilewati karena sudah sesuai)."
             else:
-                summary = f"Berhasil mengubah {converted_count} lagu ke {spec_label}."
+                summary = f"Berhasil memproses {converted_count} lagu ke {spec_label}."
         elif converted_count > 0 and error_count > 0:
             outcome = "WARNING"
             title = "Proses Selesai Sebagian"
-            summary = f"{converted_count} lagu berhasil dikonversi ke {spec_label}, {error_count} gagal, {skipped_count} dilewati."
+            summary = f"{converted_count} lagu berhasil diproses ke {spec_label}, {error_count} gagal, {skipped_count} dilewati."
         else:
             outcome = "FAILED"
-            title = "Konversi Gagal"
-            summary = f"Gagal mengonversi {error_count} file audio. Periksa log terminal untuk detail."
+            title = "Proses Gagal"
+            summary = f"Gagal memproses {error_count} file audio. Periksa log terminal untuk detail."
 
         self.finish_task(
             task,

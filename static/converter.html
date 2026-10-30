@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="SWARARIA AUDIO LAB - Sample Rate Converter & Batch Playlist Processor">
-  <title>SWARARIA AUDIO LAB // Sample Rate &amp; Playlist Converter</title>
+  <meta name="description" content="SWARARIA AUDIO LAB - Stage 3: Sample Rate Converter & EBU R128 Loudness Processor">
+  <title>SWARARIA AUDIO LAB // 3. Converter &amp; Loudness</title>
   <link rel="icon" type="image/jpeg" href="/static/swararia-logo.jpg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -32,8 +32,8 @@
               </svg>
             </span>
             <div>
-              <h2 id="convConfigHeading">1. Pengaturan Target Konversi</h2>
-              <p class="panel-sub">Tentukan format output, sample rate, bitrate, dan lokasi simpan</p>
+              <h2 id="convConfigHeading">3. Pengaturan Konversi &amp; Loudness</h2>
+              <p class="panel-sub">Tentukan format output, sample rate, bitrate, atau normalisasi EBU R128</p>
             </div>
           </div>
           <span class="panel-badge">SoXR 28-bit VHQ</span>
@@ -43,10 +43,10 @@
           <!-- Step A: Conversion Mode (Shadcn Segmented Control) -->
           <div class="field-group compact-field">
             <div class="field-label">
-              <span>A. Mode Konversi Audio</span>
-              <span class="label-hint">Transcode MP3 atau Lossless Remux</span>
+              <span>A. Mode Proses Audio</span>
+              <span class="label-hint">Transcode MP3, Lossless Remux, atau Normalisasi EBU R128</span>
             </div>
-            <div class="seg-grid two-cols">
+            <div class="seg-grid three-cols">
               <label class="seg-option">
                 <input type="radio" name="convertMode" value="resample" checked>
                 <div class="seg-option-body">
@@ -66,6 +66,17 @@
                     <span class="format-badge emerald">COPY</span>
                   </div>
                   <span class="seg-option-desc">Pindahkan wadah .webm ke .opus tanpa re-encode (100% asli)</span>
+                </div>
+              </label>
+
+              <label class="seg-option">
+                <input type="radio" name="convertMode" value="normalize">
+                <div class="seg-option-body">
+                  <div class="seg-option-top">
+                    <span class="seg-option-title">Normalisasi EBU R128</span>
+                    <span class="format-badge gold">FOH SAFE</span>
+                  </div>
+                  <span class="seg-option-desc">Ratakannya kekerasan lagu &amp; limiter anti-clipping (-1.5 dBTP)</span>
                 </div>
               </label>
             </div>
@@ -133,6 +144,37 @@
                   </span>
                 </label>
               </div>
+            </div>
+          </div>
+
+          <!-- Step C2: EBU R128 Loudness Normalization & True Peak Limiter -->
+          <div class="field-group compact-field" id="loudnormGroup">
+            <div class="field-label">
+              <span>🎚️ Level Loudness &amp; Anti-Clipping (EBU R128 + Limiter -1.5 dBTP)</span>
+              <span class="label-hint" id="loudnormHintText">Opsional: Ratakan volume antar lagu agar fader FOH stabil</span>
+            </div>
+            <div class="seg-pills three-cols">
+              <label class="seg-pill" id="normOffPill">
+                <input type="radio" name="normalizeLufs" value="off" checked>
+                <span class="seg-pill-inner">
+                  <strong>Tanpa Normalisasi</strong>
+                  <small>Volume Asli</small>
+                </span>
+              </label>
+              <label class="seg-pill">
+                <input type="radio" name="normalizeLufs" value="-14">
+                <span class="seg-pill-inner">
+                  <strong>-14 LUFS • TP -1.5</strong>
+                  <small>Standar FOH / Event</small>
+                </span>
+              </label>
+              <label class="seg-pill">
+                <input type="radio" name="normalizeLufs" value="-16">
+                <span class="seg-pill-inner">
+                  <strong>-16 LUFS • TP -1.5</strong>
+                  <small>Extra Headroom Dinamis</small>
+                </span>
+              </label>
             </div>
           </div>
 
@@ -276,19 +318,15 @@
             </svg>
             <span>Explorer</span>
           </button>
-          <button type="button" id="btnProbeCurrent" class="btn-secondary" title="Pindai cepat sample rate & codec menggunakan ffprobe">
+          <button type="button" id="btnProbeCurrent" class="btn-secondary" title="Pindai cepat sample rate, bitrate, dan keaslian spektrum frekuensi tinggi (Anti-Fake 320k)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
               <circle cx="11" cy="11" r="8"></circle>
               <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
             </svg>
-            <span>Cek Sample Rate</span>
+            <span>Cek Rate &amp; Spektrum</span>
           </button>
-          <button type="button" id="btnDeleteSelected" class="btn-danger" disabled title="Hapus semua lagu yang dicentang secara permanen">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
-              <polyline points="3 6 5 6 21 6"></polyline>
-              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-            </svg>
-            <span id="btnDeleteSelectedText">Hapus Terpilih (0)</span>
+          <button type="button" id="btnSendToOrganizer" class="btn-secondary" title="Buka halaman 4. Tag & File Organizer untuk merapikan nama urut track atau menghapus file">
+            <span id="btnSendToOrganizerText">🏷️ Rapikan Nama / Hapus →</span>
           </button>
           <button type="button" id="btnConvertSelected" class="btn-primary" disabled>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">

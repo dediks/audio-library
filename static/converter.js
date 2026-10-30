@@ -18,7 +18,11 @@ import {
   createQueueMonitor,
   openRenameModal,
   openDeleteModal,
+  openBatchRenameModal,
+  createSpectralBadge,
   openFolderInExplorer,
+  getSharedWorkspaceState,
+  saveSharedWorkspaceState,
 } from './modules/ui-shared.js';
 import { initFolderModal } from './modules/folder-modal.js';
 
@@ -34,11 +38,14 @@ document.addEventListener('DOMContentLoaded', () => {
   const convertModeRadios = document.querySelectorAll('input[name="convertMode"]');
   const targetRateRadios = document.querySelectorAll('input[name="targetRate"]');
   const targetBitrateRadios = document.querySelectorAll('input[name="targetBitrate"]');
+  const normalizeLufsRadios = document.querySelectorAll('input[name="normalizeLufs"]');
   const outputModeRadios = document.querySelectorAll('input[name="outputMode"]');
   const customDestBox = document.getElementById('customDestBox');
   const resampleParamsRow = document.getElementById('resampleParamsRow');
   const resampleRateGroup = document.getElementById('resampleRateGroup');
   const resampleBitrateGroup = document.getElementById('resampleBitrateGroup');
+  const loudnormGroup = document.getElementById('loudnormGroup');
+  const normOffPill = document.getElementById('normOffPill');
   const onlyMp3ToggleWrap = document.getElementById('onlyMp3ToggleWrap');
   const overwriteHintText = document.getElementById('overwriteHintText');
 
@@ -52,6 +59,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const btnProbeCurrent = document.getElementById('btnProbeCurrent');
   const btnOpenSourceExplorer = document.getElementById('btnOpenSourceExplorer');
+  const btnSendToOrganizer = document.getElementById('btnSendToOrganizer');
+  const btnSendToOrganizerText = document.getElementById('btnSendToOrganizerText');
+  const btnBatchRenameSelected = document.getElementById('btnBatchRenameSelected');
+  const btnBatchRenameSelectedText = document.getElementById('btnBatchRenameSelectedText');
   const btnDeleteSelected = document.getElementById('btnDeleteSelected');
   const btnDeleteSelectedText = document.getElementById('btnDeleteSelectedText');
   const btnConvertSelected = document.getElementById('btnConvertSelected');
@@ -83,17 +94,26 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnBrowseDest = document.getElementById('btnBrowseDest');
   const btnClearDest = document.getElementById('btnClearDest');
 
-  // State
+  // Shared Workspace State Initialization
+  const sharedInit = getSharedWorkspaceState();
   let allFiles = [];
   let allPlaylists = [];
-  let activePlaylist = 'ALL'; // 'ALL', '__ROOT__', or folder name
-  const selectedPaths = new Set();
+  let activePlaylist = sharedInit.activePlaylist || 'ALL';
+  const selectedPaths = new Set(Array.isArray(sharedInit.selectedPaths) ? sharedInit.selectedPaths : []);
   let visibleFiles = [];
   let lastClickedIndex = null;
   const probedFolders = new Set();
-  let currentSourceDir = '';
+  let currentSourceDir = sharedInit.sourceDir || '';
   let defaultInboxDir = '';
   const collapsedGroups = new Set();
+
+  function persistWorkspaceState() {
+    saveSharedWorkspaceState({
+      sourceDir: currentSourceDir,
+      activePlaylist,
+      selectedPaths: Array.from(selectedPaths),
+    });
+  }
 
   // Map of rel_path -> { tr: HTMLTableRowElement, chk: HTMLInputElement } for O(1) DOM selection updates
   const rowElementsByPath = new Map();
@@ -126,6 +146,17 @@ document.addEventListener('DOMContentLoaded', () => {
     return checked ? parseInt(checked.value, 10) : 320;
   }
 
+  function getNormalizeLufs() {
+    const mode = getConvertMode();
+    if (mode === 'remux_opus') return null;
+    const checked = document.querySelector('input[name="normalizeLufs"]:checked');
+    const val = checked ? checked.value : 'off';
+    if (mode === 'normalize') {
+      return val === '-16' ? -16 : -14;
+    }
+    return val === '-14' || val === '-16' ? parseInt(val, 10) : null;
+  }
+
   function getOutputMode() {
     const checked = document.querySelector('input[name="outputMode"]:checked');
     return checked ? checked.value : 'auto';
@@ -140,7 +171,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function syncOutputModeUI() {
     const mode = getOutputMode();
-    const isRemux = getConvertMode() === 'remux_opus';
+    const convMode = getConvertMode();
+    const isRemux = convMode === 'remux_opus';
+    const isNorm = convMode === 'normalize';
     if (optOverwrite) {
       optOverwrite.checked = mode === 'overwrite';
     }
@@ -154,13 +187,15 @@ document.addEventListener('DOMContentLoaded', () => {
       if (mode === 'overwrite') {
         overwriteHintText.textContent = isRemux
           ? 'Mode Timpa: File .webm asli akan langsung diganti menjadi .opus di dalam folder yang sama.'
-          : 'Mode Timpa: File asli akan langsung diganti dengan hasil konversi di dalam folder yang sama.';
+          : 'Mode Timpa: File asli akan langsung diganti dengan hasil konversi/normalisasi di dalam folder yang sama.';
       } else if (mode === 'custom') {
-        overwriteHintText.textContent = 'Hasil konversi akan disimpan ke folder tujuan pilihan Anda atau ke Flashdisk.';
+        overwriteHintText.textContent = 'Hasil proses akan disimpan ke folder tujuan pilihan Anda atau ke Flashdisk.';
       } else {
         overwriteHintText.textContent = isRemux
           ? 'File asli aman. Hasil remux disimpan ke folder baru otomatis "[Nama Playlist] [Opus]".'
-          : 'File asli aman. Hasil konversi disimpan ke folder baru otomatis "[Nama Playlist] [44.1kHz]".';
+          : isNorm
+            ? 'File asli aman. Hasil normalisasi disimpan ke folder baru otomatis "[Nama Playlist] [-14LUFS]".'
+            : 'File asli aman. Hasil konversi disimpan ke folder baru otomatis "[Nama Playlist] [44.1kHz]".';
       }
     }
     updatePlaylistSummaryText();
@@ -184,8 +219,23 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function isAlreadyMatching(fileObj, targetRate, targetBitrate) {
-    if (getConvertMode() === 'remux_opus') {
+    const convMode = getConvertMode();
+    if (convMode === 'remux_opus') {
       return fileObj.ext !== '.webm' && fileObj.ext !== '.ogg';
+    }
+    const normLufs = getNormalizeLufs();
+    if (convMode === 'normalize' || normLufs !== null) {
+      const qc = fileObj.qc || {};
+      const lufs = qc.integrated_lufs !== undefined && qc.integrated_lufs !== '' ? parseFloat(qc.integrated_lufs) : NaN;
+      const tp = qc.true_peak_dbtp !== undefined && qc.true_peak_dbtp !== '' ? parseFloat(qc.true_peak_dbtp) : NaN;
+      if (!Number.isNaN(lufs) && !Number.isNaN(tp)) {
+        const lufsOk = Math.abs(lufs - normLufs) <= 0.8 && tp <= -1.0;
+        if (convMode === 'normalize') return lufsOk;
+        const sr = qc.sample_rate_hz ? parseInt(qc.sample_rate_hz, 10) : 0;
+        const br = qc.bitrate_kbps ? parseFloat(qc.bitrate_kbps) : 0;
+        return lufsOk && sr === targetRate && fileObj.ext === '.mp3' && Math.abs(br - targetBitrate) <= 8;
+      }
+      return false;
     }
     const qc = fileObj.qc || {};
     const sr = qc.sample_rate_hz ? parseInt(qc.sample_rate_hz, 10) : 0;
@@ -196,10 +246,21 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function syncConvertModeUI() {
-    const isRemux = getConvertMode() === 'remux_opus';
-    if (resampleParamsRow) resampleParamsRow.style.display = isRemux ? 'none' : '';
-    if (resampleRateGroup) resampleRateGroup.style.display = isRemux ? 'none' : '';
-    if (resampleBitrateGroup) resampleBitrateGroup.style.display = isRemux ? 'none' : '';
+    const convMode = getConvertMode();
+    const isRemux = convMode === 'remux_opus';
+    const isNorm = convMode === 'normalize';
+    if (resampleParamsRow) resampleParamsRow.style.display = (isRemux || isNorm) ? 'none' : '';
+    if (resampleRateGroup) resampleRateGroup.style.display = (isRemux || isNorm) ? 'none' : '';
+    if (resampleBitrateGroup) resampleBitrateGroup.style.display = (isRemux || isNorm) ? 'none' : '';
+    if (loudnormGroup) loudnormGroup.style.display = isRemux ? 'none' : '';
+    if (normOffPill) normOffPill.style.display = isNorm ? 'none' : '';
+    if (isNorm) {
+      const checkedNorm = document.querySelector('input[name="normalizeLufs"]:checked');
+      if (!checkedNorm || checkedNorm.value === 'off') {
+        const r14 = document.querySelector('input[name="normalizeLufs"][value="-14"]');
+        if (r14) r14.checked = true;
+      }
+    }
     if (onlyMp3ToggleWrap) onlyMp3ToggleWrap.style.display = isRemux ? 'none' : '';
     syncOutputModeUI();
   }
@@ -245,6 +306,7 @@ document.addEventListener('DOMContentLoaded', () => {
     renderPlaylists();
     applyFiltersAndRenderTable();
     updateSelectionUI();
+    persistWorkspaceState();
     return true;
   }
 
@@ -424,6 +486,28 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  function handleBatchRenameSelected() {
+    if (selectedPaths.size === 0) return;
+    const relPaths = Array.from(selectedPaths);
+    openBatchRenameModal({
+      relPaths,
+      sourceDir: currentSourceDir,
+      apiPost,
+      onApplied: async (data) => {
+        selectedPaths.clear();
+        lastClickedIndex = null;
+        log('info', '[BATCH RENAME] ' + (data?.message || 'Nama file berhasil dirapikan.'));
+        notify({
+          type: 'success',
+          title: 'Batch Auto-Number & Rename Selesai',
+          message: data?.message || `Berhasil merapikan ${data?.changed_count || relPaths.length} file audio.`,
+          duration: 4000,
+        });
+        await fetchLibrary();
+      },
+    });
+  }
+
   // 3. Fast ffprobe scan for a playlist folder
   async function probeFolder(folderName, isManual = false) {
     if (probeStatusHint) {
@@ -524,6 +608,7 @@ document.addEventListener('DOMContentLoaded', () => {
       lastClickedIndex = null;
       renderPlaylists();
       applyFiltersAndRenderTable();
+      persistWorkspaceState();
       if (id !== 'ALL' && !probedFolders.has(currentSourceDir + '::' + id)) {
         probeFolder(id);
       }
@@ -533,11 +618,22 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function updatePlaylistSummaryText() {
-    const isRemux = getConvertMode() === 'remux_opus';
+    const convMode = getConvertMode();
+    const isRemux = convMode === 'remux_opus';
+    const isNorm = convMode === 'normalize';
     const targetHz = getTargetRate();
     const targetBr = getTargetBitrate();
+    const normLufs = getNormalizeLufs();
     const rateLabel = targetHz === 44100 ? '44.1 kHz' : '48 kHz';
-    const specLabel = isRemux ? '.opus (Lossless Remux)' : `MP3 ${rateLabel} • ${targetBr} kbps`;
+    let specLabel = '';
+    if (isRemux) {
+      specLabel = '.opus (Lossless Remux)';
+    } else if (isNorm) {
+      specLabel = `EBU R128 ${normLufs || -14} LUFS (Limiter -1.5 dBTP)`;
+    } else {
+      const normPart = normLufs !== null ? ` • ${normLufs} LUFS` : '';
+      specLabel = `MP3 ${rateLabel} • ${targetBr} kbps${normPart}`;
+    }
     const outMode = getOutputMode();
     let outLabel = 'Folder Baru Otomatis';
     if (outMode === 'overwrite') {
@@ -551,7 +647,7 @@ document.addEventListener('DOMContentLoaded', () => {
       activePlaylistSummary.textContent = `Target Output: ${specLabel} → ${outLabel}`;
     }
     if (btnConvertPlaylistText) {
-      const verb = isRemux ? 'Remux' : 'Konversi';
+      const verb = isRemux ? 'Remux' : (isNorm ? 'Normalisasi' : 'Konversi');
       const plLabel = activePlaylist === 'ALL'
         ? 'Semua Koleksi'
         : (activePlaylist === '__ROOT__' ? 'Root Inbox' : activePlaylist);
@@ -735,11 +831,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const qc = f.qc || {};
 
-        // 3. Format / Codec
+        // 3. Format / Codec + Spectral Quality Badge
         const tdFormat = document.createElement('td');
         tdFormat.className = 'mono-cell';
         const codecLabel = qc.codec ? `${f.ext.replace('.', '').toUpperCase()} (${qc.codec})` : f.ext.toUpperCase();
-        tdFormat.textContent = codecLabel;
+        const codecSpan = document.createElement('span');
+        codecSpan.textContent = codecLabel;
+        tdFormat.appendChild(codecSpan);
+
+        const specBadge = createSpectralBadge(qc);
+        if (specBadge) {
+          tdFormat.appendChild(document.createTextNode(' '));
+          tdFormat.appendChild(specBadge);
+        }
         tr.appendChild(tdFormat);
 
         // 4. Bitrate & Size
@@ -778,6 +882,8 @@ document.addEventListener('DOMContentLoaded', () => {
         // 6. Status Konversi
         const tdStatus = document.createElement('td');
         const badge = document.createElement('span');
+        const convMode = getConvertMode();
+        const normLufs = getNormalizeLufs();
         if (isRemux) {
           if (f.ext === '.opus') {
             badge.className = 'badge-safe';
@@ -789,15 +895,24 @@ document.addEventListener('DOMContentLoaded', () => {
             badge.className = 'badge-untested';
             badge.textContent = 'BUKAN .WEBM (LEWATI)';
           }
+        } else if (convMode === 'normalize') {
+          if (isAlreadyMatching(f, targetRateNum, targetBr)) {
+            badge.className = 'badge-safe';
+            badge.textContent = `SUDAH ${normLufs || -14} LUFS`;
+          } else {
+            badge.className = 'badge-warning';
+            badge.textContent = `SIAP → ${normLufs || -14} LUFS (TP -1.5)`;
+          }
         } else if (!sr) {
           badge.className = 'badge-untested';
-          badge.textContent = 'KLIK CEK SAMPLE RATE';
+          badge.textContent = 'KLIK CEK RATE & SPEKTRUM';
         } else if (isAlreadyMatching(f, targetRateNum, targetBr)) {
           badge.className = 'badge-safe';
           badge.textContent = `SUDAH ${targetLabel}`;
         } else {
           badge.className = 'badge-warning';
-          badge.textContent = `SIAP → ${targetLabel}`;
+          const normSuffix = normLufs !== null ? ` • ${normLufs} LUFS` : '';
+          badge.textContent = `SIAP → ${targetLabel}${normSuffix}`;
         }
         tdStatus.appendChild(badge);
         tr.appendChild(tdStatus);
@@ -837,6 +952,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     syncHeaderCheckbox();
     updateSelectionUI();
+    persistWorkspaceState();
   }
 
   function handleRowSelect(idx, relPath, checked, isShift) {
@@ -872,19 +988,40 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function updateSelectionUI() {
     const count = selectedPaths.size;
-    const isRemux = getConvertMode() === 'remux_opus';
+    const convMode = getConvertMode();
+    const isRemux = convMode === 'remux_opus';
+    const isNorm = convMode === 'normalize';
+    const normLufs = getNormalizeLufs();
     const rateLabel = getTargetRate() === 44100 ? '44.1 kHz' : '48 kHz';
     const brLabel = getTargetBitrate() + ' kbps';
-    const specText = isRemux ? '.opus (Lossless)' : `${rateLabel} • ${brLabel}`;
-    const verb = isRemux ? 'Remux' : 'Konversi';
+    let specText = '';
+    if (isRemux) {
+      specText = '.opus (Lossless)';
+    } else if (isNorm) {
+      specText = `${normLufs || -14} LUFS (FOH)`;
+    } else {
+      specText = `${rateLabel} • ${brLabel}${normLufs !== null ? ` • ${normLufs} LUFS` : ''}`;
+    }
+    const verb = isRemux ? 'Remux' : (isNorm ? 'Normalisasi' : 'Konversi');
     if (selectionCounterPill) {
       selectionCounterPill.textContent = `${count} lagu dipilih`;
     }
     if (btnConvertSelectedText) {
-      btnConvertSelectedText.textContent = `${verb} Lagu Terpilih (${count}) → ${specText}`;
+      btnConvertSelectedText.textContent = `${verb} Terpilih (${count}) → ${specText}`;
     }
     if (btnConvertSelected) {
       btnConvertSelected.disabled = count === 0;
+    }
+    if (btnSendToOrganizerText) {
+      btnSendToOrganizerText.textContent = count > 0
+        ? `🏷️ Rapikan / Hapus Terpilih (${count}) →`
+        : '🏷️ Rapikan Nama / Hapus →';
+    }
+    if (btnBatchRenameSelectedText) {
+      btnBatchRenameSelectedText.textContent = `Auto-Number & Rapikan (${count})`;
+    }
+    if (btnBatchRenameSelected) {
+      btnBatchRenameSelected.disabled = count === 0;
     }
     if (btnDeleteSelectedText) {
       btnDeleteSelectedText.textContent = `Hapus Terpilih (${count})`;
@@ -939,6 +1076,14 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   targetBitrateRadios.forEach(radio => {
+    radio.addEventListener('change', () => {
+      updatePlaylistSummaryText();
+      applyFiltersAndRenderTable();
+      updateSelectionUI();
+    });
+  });
+
+  normalizeLufsRadios.forEach(radio => {
     radio.addEventListener('change', () => {
       updatePlaylistSummaryText();
       applyFiltersAndRenderTable();
@@ -1119,6 +1264,19 @@ document.addEventListener('DOMContentLoaded', () => {
     return false;
   }
 
+  if (btnSendToOrganizer) {
+    btnSendToOrganizer.addEventListener('click', () => {
+      persistWorkspaceState();
+      window.location.href = '/organizer';
+    });
+  }
+
+  if (btnBatchRenameSelected) {
+    btnBatchRenameSelected.addEventListener('click', () => {
+      handleBatchRenameSelected();
+    });
+  }
+
   if (btnDeleteSelected) {
     btnDeleteSelected.addEventListener('click', () => {
       handleBatchDeleteSelected();
@@ -1147,10 +1305,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const mode = getConvertMode();
     const targetRate = getTargetRate();
     const targetBitrate = getTargetBitrate();
+    const normalizeLufs = getNormalizeLufs();
     const overwrite = outMode === 'overwrite';
 
     btnConvertSelected.disabled = true;
-    const descTarget = mode === 'remux_opus' ? '.opus (Lossless Remux)' : `${targetRate} Hz • ${targetBitrate} kbps`;
+    const descTarget =
+      mode === 'remux_opus'
+        ? '.opus (Lossless Remux)'
+        : mode === 'normalize'
+          ? `EBU R128 ${normalizeLufs || -14} LUFS`
+          : `${targetRate} Hz • ${targetBitrate} kbps${normalizeLufs !== null ? ` • ${normalizeLufs} LUFS` : ''}`;
     log('info', `[DISPATCH] Menjadwalkan proses ${relPaths.length} lagu terpilih ke ${descTarget}...`);
 
     const ok = await dispatchResampleJob(
@@ -1161,10 +1325,15 @@ document.addEventListener('DOMContentLoaded', () => {
         rel_paths: relPaths,
         target_rate: targetRate,
         target_bitrate: targetBitrate,
+        normalize_lufs: normalizeLufs,
         only_mp3: false,
         overwrite,
       },
-      mode === 'remux_opus' ? 'Remux .opus Masuk Antrian' : 'Konversi Masuk Antrian'
+      mode === 'remux_opus'
+        ? 'Remux .opus Masuk Antrian'
+        : mode === 'normalize'
+          ? 'Normalisasi EBU R128 Masuk Antrian'
+          : 'Konversi Masuk Antrian'
     );
     if (!ok) {
       btnConvertSelected.disabled = false;
@@ -1222,9 +1391,15 @@ document.addEventListener('DOMContentLoaded', () => {
     terminalLogs.replaceChildren();
   });
 
-  // Initialize
-  syncOutputModeUI();
-  fetchLibrary().then(() => {
+  // Initialize (support ?mode=normalize or ?mode=remux_opus from URL)
+  const urlMode = new URLSearchParams(window.location.search).get('mode');
+  if (urlMode === 'normalize' || urlMode === 'remux_opus' || urlMode === 'resample') {
+    convertModeRadios.forEach(r => {
+      r.checked = r.value === urlMode;
+    });
+  }
+  syncConvertModeUI();
+  fetchLibrary(currentSourceDir).then(() => {
     if (allFiles.length > 0 && allFiles.length <= 120) {
       probeFolder('ALL');
     }

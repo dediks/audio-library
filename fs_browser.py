@@ -569,3 +569,208 @@ def delete_fs_entries(
     return True, msg, deleted_files, deleted_folders
 
 
+JUNK_TAG_WORDS = (
+    r"(?:official\s*(?:music\s*)?(?:video|audio|lyric\s*video|lyrics|visualizer|mv)|"
+    r"music\s*video|lyric\s*video|lyrics?|lirik(?:\s*lagu)?|video\s*klip|"
+    r"visualizer|audio\s*only|full\s*album|karaoke(?:\s*version)?|"
+    r"hd|hq|4k(?:\s*uhd)?|1080p|720p|mv|ost)"
+)
+JUNK_TAG_PATTERN = re.compile(
+    rf"(?:[\(\[\{{]\s*{JUNK_TAG_WORDS}\s*[\)\]\}}]|(?:[｜|\-–—]+\s*){JUNK_TAG_WORDS}\b)",
+    flags=re.IGNORECASE,
+)
+YT_ID_SUFFIX_PATTERN = re.compile(r"\s*\[([A-Za-z0-9_-]{11})\]$")
+LEADING_TRACK_NUM_PATTERN = re.compile(r"^\s*\d{1,3}\s*(?:[-._)]+|\s+-)\s*")
+
+
+def clean_and_number_filename(
+    old_name: str,
+    index: int | None = None,
+    pad_width: int = 2,
+    numbering_mode: str = "dash",
+    strip_yt_id: bool = True,
+    strip_junk_tags: bool = True,
+    clean_spaces: bool = True,
+) -> str:
+    """Computes a cleaned and optionally numbered filename while preserving extension."""
+    p = Path(old_name)
+    ext = p.suffix
+    stem = p.stem
+
+    # Capture trailing [11-char YouTube ID] before cleaning so we can either strip or preserve it at the end
+    yt_id_match = YT_ID_SUFFIX_PATTERN.search(stem)
+    yt_id_suffix = ""
+    if yt_id_match:
+        stem = stem[:yt_id_match.start()]
+        if not strip_yt_id:
+            yt_id_suffix = f" [{yt_id_match.group(1)}]"
+
+    if strip_junk_tags:
+        stem = JUNK_TAG_PATTERN.sub(" ", stem)
+
+    if numbering_mode in ("dash", "dot", "strip"):
+        stem = LEADING_TRACK_NUM_PATTERN.sub("", stem)
+
+    if clean_spaces:
+        # Normalize fullwidth pipes/slashes/underscores often inserted by yt-dlp
+        stem = re.sub(r"[｜|]{2,}", " - ", stem)
+        stem = re.sub(r"[｜|]", " - ", stem)
+        stem = stem.replace("_", " ")
+        stem = re.sub(r"\s*-\s*-\s*", " - ", stem)
+        stem = re.sub(r"\s{2,}", " ", stem)
+        stem = stem.strip(" -_|.")
+
+    stem = stem.strip()
+    if not stem:
+        stem = p.stem.strip() or "Track"
+
+    prefix = ""
+    if index is not None and numbering_mode in ("dash", "dot"):
+        num_str = str(index).zfill(max(2, pad_width))
+        prefix = f"{num_str} - " if numbering_mode == "dash" else f"{num_str}. "
+
+    proposed = f"{prefix}{stem}{yt_id_suffix}{ext}"
+    return sanitize_entry_name(proposed)
+
+
+def batch_rename_entries(
+    source_dir: Path,
+    rel_paths: list[str],
+    options: dict | None = None,
+    preview_only: bool = False,
+) -> tuple[bool, str, list[dict]]:
+    """Previews or executes batch track numbering & tag cleaning per folder within source_dir."""
+    base = source_dir.resolve()
+    allowed_roots = get_allowed_roots()
+    if not any(base.is_relative_to(r) for r in allowed_roots):
+        return False, "Akses direktori sumber ditolak.", []
+
+    if not isinstance(rel_paths, list) or not rel_paths:
+        return False, "Tidak ada file audio yang dipilih untuk di-rename.", []
+
+    opts = options or {}
+    numbering_mode = str(opts.get("numbering_mode", "dash")).strip().lower()
+    if numbering_mode not in ("dash", "dot", "strip", "keep"):
+        numbering_mode = "dash"
+    try:
+        start_number = max(1, int(opts.get("start_number", 1)))
+    except (TypeError, ValueError):
+        start_number = 1
+    strip_yt_id = bool(opts.get("strip_yt_id", True))
+    strip_junk_tags = bool(opts.get("strip_junk_tags", True))
+    clean_spaces = bool(opts.get("clean_spaces", True))
+
+    # Validate and group files by parent directory while preserving selection order
+    grouped_by_parent: dict[Path, list[Path]] = {}
+    seen_paths: set[Path] = set()
+    for raw_rel in rel_paths:
+        if not isinstance(raw_rel, str) or not raw_rel.strip():
+            continue
+        clean_rel = raw_rel.strip().lstrip("/\\")
+        if not clean_rel or clean_rel in (".", ".."):
+            continue
+        target_p = (base / clean_rel).resolve()
+        if not target_p.is_relative_to(base) or target_p == base:
+            return False, "Akses jalur ditolak (di luar batas direktori sumber).", []
+        if not target_p.is_file() or target_p.suffix.lower() not in audio_manager.EXTENSIONS:
+            continue
+        if target_p in seen_paths:
+            continue
+        seen_paths.add(target_p)
+        grouped_by_parent.setdefault(target_p.parent, []).append(target_p)
+
+    if not seen_paths:
+        return False, "Tidak ada file audio valid yang ditemukan.", []
+
+    plan: list[dict] = []
+    for parent_dir, folder_files in grouped_by_parent.items():
+        max_num = start_number + len(folder_files) - 1
+        pad_width = 3 if max_num >= 100 else 2
+        reserved_names: set[str] = set()
+        # Pre-populate existing unselected files in the same folder so we never collide with them
+        try:
+            for existing_f in parent_dir.iterdir():
+                if existing_f.is_file() and existing_f not in seen_paths:
+                    reserved_names.add(existing_f.name.lower())
+        except OSError:
+            pass
+
+        for offset, old_p in enumerate(folder_files):
+            seq_idx = start_number + offset
+            proposed_name = clean_and_number_filename(
+                old_p.name,
+                index=seq_idx,
+                pad_width=pad_width,
+                numbering_mode=numbering_mode,
+                strip_yt_id=strip_yt_id,
+                strip_junk_tags=strip_junk_tags,
+                clean_spaces=clean_spaces,
+            )
+
+            # Avoid duplicate target filenames within the same folder
+            candidate_name = proposed_name
+            if candidate_name.lower() != old_p.name.lower() and candidate_name.lower() in reserved_names:
+                c_path = Path(proposed_name)
+                dup_idx = 2
+                while f"{c_path.stem} ({dup_idx}){c_path.suffix}".lower() in reserved_names:
+                    dup_idx += 1
+                candidate_name = f"{c_path.stem} ({dup_idx}){c_path.suffix}"
+
+            reserved_names.add(candidate_name.lower())
+            new_p = (parent_dir / candidate_name).resolve()
+            folder_rel = str(parent_dir.relative_to(base)) if parent_dir != base else ""
+            plan.append({
+                "rel_path": str(old_p.relative_to(base)),
+                "new_rel_path": str(new_p.relative_to(base)),
+                "folder": folder_rel,
+                "old_name": old_p.name,
+                "new_name": candidate_name,
+                "changed": old_p.name != candidate_name,
+                "old_path": str(old_p),
+                "new_path": str(new_p),
+            })
+
+    changed_items = [item for item in plan if item["changed"]]
+    if preview_only:
+        msg = f"Preview siap: {len(changed_items)} dari {len(plan)} file akan diubah namanya."
+        return True, msg, plan
+
+    if not changed_items:
+        return True, "Semua nama file sudah rapi sesuai pengaturan (tidak ada perubahan).", plan
+
+    # Two-phase rename to prevent any collision when swapping numbers (e.g. 02 -> 01 and 01 -> 02)
+    staged: list[tuple[Path, Path, Path, dict]] = []
+    errors: list[str] = []
+    for idx, item in enumerate(changed_items):
+        old_p = Path(item["old_path"])
+        new_p = Path(item["new_path"])
+        tmp_p = old_p.with_name(f".swararia_ren_tmp_{os.getpid()}_{idx}{old_p.suffix}")
+        try:
+            old_p.rename(tmp_p)
+            staged.append((old_p, tmp_p, new_p, item))
+        except OSError as exc:
+            errors.append(f"{old_p.name}: {exc}")
+
+    renamed_count = 0
+    for old_p, tmp_p, new_p, item in staged:
+        try:
+            tmp_p.rename(new_p)
+            renamed_count += 1
+        except OSError as exc:
+            errors.append(f"{old_p.name} -> {new_p.name}: {exc}")
+            try:
+                if tmp_p.exists() and not old_p.exists():
+                    tmp_p.rename(old_p)
+            except OSError:
+                pass
+
+    if renamed_count == 0 and errors:
+        return False, f"Gagal mengubah nama file: {'; '.join(errors[:3])}", plan
+
+    msg = f"Berhasil merapikan & memberi nomor urut pada {renamed_count} file audio."
+    if errors:
+        msg += f" ({len(errors)} gagal)"
+    return True, msg, plan
+
+
+

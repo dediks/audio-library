@@ -93,8 +93,12 @@ class AudioServerHandler(BaseHTTPRequestHandler):
 
         if path in ("/", "/index.html"):
             self.serve_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
+        elif path in ("/qc", "/qc.html"):
+            self.serve_file(STATIC_DIR / "qc.html", "text/html; charset=utf-8")
         elif path in ("/converter", "/converter.html"):
             self.serve_file(STATIC_DIR / "converter.html", "text/html; charset=utf-8")
+        elif path in ("/organizer", "/organizer.html"):
+            self.serve_file(STATIC_DIR / "organizer.html", "text/html; charset=utf-8")
         elif path.startswith("/static/"):
             rel_path = path[len("/static/"):]
             safe_file = (STATIC_DIR / rel_path).resolve()
@@ -150,7 +154,7 @@ class AudioServerHandler(BaseHTTPRequestHandler):
             status, resp = task_manager.enqueue_downloads(payload)
             self.send_json(status, resp)
         elif path == "/api/scan":
-            self._handle_post_scan()
+            self._handle_post_scan(payload)
         elif path == "/api/browse-dirs":
             self._handle_post_browse_dirs(payload)
         elif path == "/api/probe":
@@ -162,14 +166,18 @@ class AudioServerHandler(BaseHTTPRequestHandler):
             self._handle_post_open_folder(payload)
         elif path == "/api/rename":
             self._handle_post_rename(payload)
+        elif path == "/api/batch-rename":
+            self._handle_post_batch_rename(payload)
         elif path == "/api/delete":
             self._handle_post_delete(payload)
         else:
             self.send_error(404, "Endpoint not found")
 
-    def _handle_post_scan(self) -> None:
+    def _handle_post_scan(self, payload: dict | None = None) -> None:
+        raw_src = (payload or {}).get("source_dir")
         try:
-            results = self.scan_library()
+            src_dir = resolve_safe_dir(raw_src, INBOX_DIR, must_exist=True) if raw_src else INBOX_DIR.resolve()
+            results = metadata_cache.scan_library(src_dir)
             self.send_json(200, {"message": "Audit selesai", "results": results})
         except Exception as exc:
             self.send_json(500, {"error": str(exc)})
@@ -212,7 +220,8 @@ class AudioServerHandler(BaseHTTPRequestHandler):
         else:
             target_files = iter_audio_files_safe(source_resolved)
 
-        metadata_cache.probe_files_fast(target_files)
+        include_spectral = bool(payload.get("probe_spectral", True))
+        metadata_cache.probe_files_fast(target_files, include_spectral=include_spectral)
         files_data, playlists_data = self.get_library_files(source_resolved)
         self.send_json(200, {
             "files": files_data,
@@ -275,6 +284,51 @@ class AudioServerHandler(BaseHTTPRequestHandler):
                 "old_name": old_p.name,
                 "new_name": new_p.name,
                 "rel_path": str(new_p.relative_to(src_dir)),
+            })
+        except Exception as exc:
+            self.send_json(400, {"error": str(exc)})
+
+    def _handle_post_batch_rename(self, payload: dict) -> None:
+        raw_src = payload.get("source_dir")
+        rel_paths = payload.get("rel_paths")
+        options = payload.get("options") if isinstance(payload.get("options"), dict) else {}
+        preview_only = bool(payload.get("preview_only", False))
+
+        try:
+            src_dir = resolve_safe_dir(raw_src, INBOX_DIR, must_exist=True) if raw_src else INBOX_DIR.resolve()
+            ok, msg, plan = fs_browser.batch_rename_entries(
+                source_dir=src_dir,
+                rel_paths=rel_paths if isinstance(rel_paths, list) else [],
+                options=options,
+                preview_only=preview_only,
+            )
+            if not ok:
+                self.send_json(400, {"error": msg})
+                return
+
+            if not preview_only:
+                for item in plan:
+                    if item.get("changed"):
+                        metadata_cache.rename_entry(item["old_path"], item["new_path"])
+
+            changed_count = sum(1 for item in plan if item.get("changed"))
+            self.send_json(200, {
+                "ok": True,
+                "message": msg,
+                "preview_only": preview_only,
+                "changed_count": changed_count,
+                "total_count": len(plan),
+                "plan": [
+                    {
+                        "rel_path": item["rel_path"],
+                        "new_rel_path": item["new_rel_path"],
+                        "folder": item["folder"],
+                        "old_name": item["old_name"],
+                        "new_name": item["new_name"],
+                        "changed": item["changed"],
+                    }
+                    for item in plan
+                ],
             })
         except Exception as exc:
             self.send_json(400, {"error": str(exc)})

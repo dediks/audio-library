@@ -18,7 +18,7 @@ import {
   createGroupCollapseController,
 } from './table-groups.js';
 import { renderLogs, createQueueMonitor } from './queue-monitor.js';
-import { openRenameModal, openDeleteModal } from './rename-modal.js';
+import { openRenameModal, openDeleteModal, openBatchRenameModal } from './rename-modal.js';
 
 export {
   createSvgIcon,
@@ -38,15 +38,89 @@ export {
   createQueueMonitor,
   openRenameModal,
   openDeleteModal,
+  openBatchRenameModal,
 };
 
 /**
+ * Creates a compact Spectral Quality Badge element when spectral_status is available.
+ * @param {Record<string, any> | null | undefined} qc
+ * @returns {HTMLSpanElement | null}
+ */
+export function createSpectralBadge(qc) {
+  if (!qc || !qc.spectral_status || qc.spectral_status === 'UNKNOWN') {
+    return null;
+  }
+  const span = document.createElement('span');
+  const status = String(qc.spectral_status).toUpperCase();
+  if (status === 'AUTHENTIC') {
+    span.className = 'spectral-badge authentic';
+    span.textContent = qc.spectral_label || '20 kHz Asli';
+    span.title = 'Spektrum frekuensi tinggi utuh hingga ~20 kHz (Kualitas Asli / Full-Range HQ).';
+  } else if (status === 'FAKE_HQ') {
+    span.className = 'spectral-badge fake';
+    span.textContent = qc.spectral_label || '⚠️ Fake HQ';
+    span.title = 'Terdeteksi cutoff spektrum frekuensi tinggi (<16 kHz) meskipun bitrate tinggi — indikasi hasil upsample/transcode dari sumber bitrate rendah.';
+  } else if (status === 'STANDARD') {
+    span.className = 'spectral-badge standard';
+    span.textContent = qc.spectral_label || '16 kHz Std';
+    span.title = 'Spektrum frekuensi tinggi standar (~16 kHz).';
+  } else {
+    span.className = 'spectral-badge low';
+    span.textContent = qc.spectral_label || '<14 kHz Low';
+    span.title = 'Bandwidth frekuensi tinggi terbatas (<14 kHz).';
+  }
+  return span;
+}
+
+const WORKSPACE_STORAGE_KEY = 'swararia_workspace_state_v1';
+
+/**
+ * Reads shared workspace selection and source directory from sessionStorage.
+ * @returns {{ sourceDir: string, activePlaylist: string, selectedPaths: string[] }}
+ */
+export function getSharedWorkspaceState() {
+  try {
+    const raw = sessionStorage.getItem(WORKSPACE_STORAGE_KEY);
+    if (!raw) return { sourceDir: '', activePlaylist: 'ALL', selectedPaths: [] };
+    const parsed = JSON.parse(raw);
+    return {
+      sourceDir: typeof parsed.sourceDir === 'string' ? parsed.sourceDir : '',
+      activePlaylist: typeof parsed.activePlaylist === 'string' ? parsed.activePlaylist : 'ALL',
+      selectedPaths: Array.isArray(parsed.selectedPaths) ? parsed.selectedPaths : [],
+    };
+  } catch (_e) {
+    return { sourceDir: '', activePlaylist: 'ALL', selectedPaths: [] };
+  }
+}
+
+/**
+ * Persists partial workspace state (sourceDir, activePlaylist, selectedPaths) to sessionStorage.
+ * @param {{ sourceDir?: string, activePlaylist?: string, selectedPaths?: string[] | Set<string> }} partial
+ */
+export function saveSharedWorkspaceState(partial = {}) {
+  try {
+    const prev = getSharedWorkspaceState();
+    const next = {
+      sourceDir: partial.sourceDir !== undefined ? String(partial.sourceDir || '') : prev.sourceDir,
+      activePlaylist: partial.activePlaylist !== undefined ? String(partial.activePlaylist || 'ALL') : prev.activePlaylist,
+      selectedPaths:
+        partial.selectedPaths !== undefined
+          ? Array.from(partial.selectedPaths)
+          : prev.selectedPaths,
+    };
+    sessionStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(next));
+  } catch (_e) {
+    // Ignore storage quota errors
+  }
+}
+
+/**
  * Shared Top Header & Navigation Component.
- * Mounts identical Brand, Navigation Tabs, and System Diagnostics Bar across all pages,
+ * Mounts identical Brand, 4-Stage Workflow Navigation Tabs, and System Diagnostics Bar across all pages,
  * and automatically fetches /api/system to update the status pills.
  *
  * @param {{
- *   activePage?: 'ingest' | 'converter',
+ *   activePage?: 'ingest' | 'qc' | 'converter' | 'organizer',
  *   onSystemData?: (data: any) => void,
  *   onSystemError?: (err: Error) => void
  * }} opts
@@ -83,49 +157,64 @@ export function initAppHeader(opts = {}) {
 
   const brandSubtitle = document.createElement('p');
   brandSubtitle.className = 'brand-subtitle';
-  brandSubtitle.textContent = 'High-Fidelity Ingestion, SoXR Converter & Soundsystem QC';
+  brandSubtitle.textContent = '4-Stage Pro Audio Pipeline: Ingest • QC Lab • DSP Converter • Tag Organizer';
 
   brandInfo.appendChild(brandTitle);
   brandInfo.appendChild(brandSubtitle);
   brand.appendChild(brandIcon);
   brand.appendChild(brandInfo);
 
-  // 2. Navigation Tabs
+  // 2. 4-Stage Pipeline Navigation Tabs
   const nav = document.createElement('nav');
   nav.className = 'app-nav';
   nav.setAttribute('aria-label', 'Main Navigation');
 
-  const tabIngest = document.createElement('a');
-  tabIngest.href = '/';
-  tabIngest.className = 'nav-tab' + (activePage === 'ingest' ? ' active' : '');
-  tabIngest.appendChild(
-    createSvgIcon([
-      { tag: 'path', attrs: { d: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4' } },
-      { tag: 'polyline', attrs: { points: '7 10 12 15 17 10' } },
-      { tag: 'line', attrs: { x1: '12', y1: '15', x2: '12', y2: '3' } },
-    ])
-  );
-  const tabIngestSpan = document.createElement('span');
-  tabIngestSpan.textContent = 'Ingestion & QC';
-  tabIngest.appendChild(tabIngestSpan);
+  function makeNavTab(href, pageKey, labelText, iconShapes) {
+    const a = document.createElement('a');
+    a.href = href;
+    a.className = 'nav-tab' + (activePage === pageKey ? ' active' : '');
+    a.appendChild(createSvgIcon(iconShapes));
+    const span = document.createElement('span');
+    span.textContent = labelText;
+    a.appendChild(span);
+    return a;
+  }
 
-  const tabConverter = document.createElement('a');
-  tabConverter.href = '/converter';
-  tabConverter.className = 'nav-tab' + (activePage === 'converter' ? ' active' : '');
-  tabConverter.appendChild(
-    createSvgIcon([
-      { tag: 'polyline', attrs: { points: '17 1 21 5 17 9' } },
-      { tag: 'path', attrs: { d: 'M3 11V9a4 4 0 0 1 4-4h14' } },
-      { tag: 'polyline', attrs: { points: '7 23 3 19 7 15' } },
-      { tag: 'path', attrs: { d: 'M21 13v2a4 4 0 0 1-4 4H3' } },
-    ])
-  );
-  const tabConverterSpan = document.createElement('span');
-  tabConverterSpan.textContent = 'Sample Rate Converter';
-  tabConverter.appendChild(tabConverterSpan);
+  const tabIngest = makeNavTab('/', 'ingest', '1. Ingest', [
+    { tag: 'path', attrs: { d: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4' } },
+    { tag: 'polyline', attrs: { points: '7 10 12 15 17 10' } },
+    { tag: 'line', attrs: { x1: '12', y1: '15', x2: '12', y2: '3' } },
+  ]);
+
+  const tabQc = makeNavTab('/qc', 'qc', '2. QC & Spectral Lab', [
+    { tag: 'path', attrs: { d: 'M2 10v3' } },
+    { tag: 'path', attrs: { d: 'M6 6v11' } },
+    { tag: 'path', attrs: { d: 'M10 3v18' } },
+    { tag: 'path', attrs: { d: 'M14 8v7' } },
+    { tag: 'path', attrs: { d: 'M18 5v13' } },
+    { tag: 'path', attrs: { d: 'M22 10v3' } },
+  ]);
+
+  const tabConverter = makeNavTab('/converter', 'converter', '3. Converter & Loudness', [
+    { tag: 'polyline', attrs: { points: '17 1 21 5 17 9' } },
+    { tag: 'path', attrs: { d: 'M3 11V9a4 4 0 0 1 4-4h14' } },
+    { tag: 'polyline', attrs: { points: '7 23 3 19 7 15' } },
+    { tag: 'path', attrs: { d: 'M21 13v2a4 4 0 0 1-4 4H3' } },
+  ]);
+
+  const tabOrganizer = makeNavTab('/organizer', 'organizer', '4. Tag & File Organizer', [
+    { tag: 'line', attrs: { x1: '8', y1: '6', x2: '21', y2: '6' } },
+    { tag: 'line', attrs: { x1: '8', y1: '12', x2: '21', y2: '12' } },
+    { tag: 'line', attrs: { x1: '8', y1: '18', x2: '21', y2: '18' } },
+    { tag: 'line', attrs: { x1: '3', y1: '6', x2: '3.01', y2: '6' } },
+    { tag: 'line', attrs: { x1: '3', y1: '12', x2: '3.01', y2: '12' } },
+    { tag: 'line', attrs: { x1: '3', y1: '18', x2: '3.01', y2: '18' } },
+  ]);
 
   nav.appendChild(tabIngest);
+  nav.appendChild(tabQc);
   nav.appendChild(tabConverter);
+  nav.appendChild(tabOrganizer);
 
   // 3. Unified System Diagnostics Bar
   const statusGroup = document.createElement('div');

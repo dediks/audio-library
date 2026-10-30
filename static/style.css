@@ -2368,4 +2368,279 @@ body.dark-theme {
   word-break: break-all;
 }
 
+/* Spectral Quality Badges (Anti-Fake Bitrate / High-Freq Cutoff Detector) */
+.spectral-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.42rem;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  vertical-align: middle;
+  margin-left: 0.25rem;
+}
+
+.spectral-badge.authentic {
+  background: rgba(16, 185, 129, 0.16);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.42);
+}
+
+.spectral-badge.fake {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.55);
+}
+
+.spectral-badge.standard {
+  background: rgba(6, 182, 212, 0.14);
+  color: #38bdf8;
+  border: 1px solid rgba(6, 182, 212, 0.36);
+}
+
+.spectral-badge.low {
+  background: rgba(245, 158, 11, 0.16);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.42);
+}
+
+/* Batch Auto-Numbering & Tag Cleaner Modal Styles */
+.modal-card.modal-batch-rename-card {
+  max-width: 660px;
+}
+
+.batch-rename-controls-grid {
+  display: grid;
+  grid-template-columns: 1fr 125px;
+  gap: 0.65rem;
+}
+
+.batch-rename-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 0.55rem 0.75rem;
+}
+
+.batch-rename-check-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.batch-rename-check-item input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent-cyan);
+  cursor: pointer;
+}
+
+.batch-rename-summary {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--accent-cyan);
+}
+
+.batch-rename-preview-list {
+  max-height: 240px;
+}
+
+.batch-rename-preview-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  padding: 0.35rem 0.45rem;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.02);
+  border-left: 3px solid transparent;
+}
+
+.batch-rename-preview-item.is-changed {
+  border-left-color: var(--accent-green);
+  background: rgba(16, 185, 129, 0.05);
+}
+
+.batch-rename-preview-item.is-unchanged {
+  opacity: 0.65;
+}
+
+.batch-rename-names-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.batch-rename-old {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.batch-rename-new {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+/* ==========================================================================
+   4-Stage Pipeline Hub Cards (Stage 1: Ingest) & QC Diagnostic KPI Grid
+   ========================================================================== */
+.pipeline-stage-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.pipeline-stage-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.9rem 1.05rem;
+  background: var(--bg-core);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  text-decoration: none;
+  color: var(--text-primary);
+  transition: all 0.16s ease;
+}
+
+.pipeline-stage-card:hover {
+  border-color: var(--accent-cyan);
+  background: rgba(255, 255, 255, 0.03);
+  transform: translateY(-1px);
+}
+
+.pipeline-stage-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.pipeline-stage-step {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.pipeline-stage-title {
+  font-family: var(--font-heading);
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.pipeline-stage-desc {
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+  margin: 0;
+  flex: 1;
+}
+
+.pipeline-stage-cta {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--accent-cyan);
+  margin-top: 0.2rem;
+}
+
+/* Stage 2: Soundsystem QC KPI Diagnostic Cards */
+.qc-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 0.85rem;
+}
+
+.qc-kpi-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 0.75rem 0.95rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.qc-kpi-card.safe {
+  border-left: 3px solid #10b981;
+}
+
+.qc-kpi-card.warn {
+  border-left: 3px solid #f59e0b;
+}
+
+.qc-kpi-card.danger {
+  border-left: 3px solid #ef4444;
+}
+
+.qc-kpi-label {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+.qc-kpi-val {
+  font-family: var(--font-heading);
+  font-size: 1.45rem;
+  font-weight: 800;
+  line-height: 1.15;
+  color: var(--text-primary);
+}
+
+.qc-kpi-card.safe .qc-kpi-val {
+  color: #34d399;
+}
+
+.qc-kpi-card.warn .qc-kpi-val {
+  color: #fbbf24;
+}
+
+.qc-kpi-card.danger .qc-kpi-val {
+  color: #f87171;
+}
+
+.qc-kpi-sub {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+/* Stage 4: Organizer Live Diff Preview Box */
+.organizer-live-preview-box {
+  max-height: 245px;
+  min-height: 210px;
+}
+
+@media (max-width: 960px) {
+  .pipeline-stage-grid {
+    grid-template-columns: 1fr;
+  }
+  .qc-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+
+
 

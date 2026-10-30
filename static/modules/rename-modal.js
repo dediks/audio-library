@@ -466,4 +466,346 @@ export function openDeleteModal(opts) {
   });
 }
 
+/* ==========================================================================
+   Safe DOM Batch Auto-Numbering & Tag Cleaner Modal Dialog
+   ========================================================================== */
+
+let batchRenBackdrop = null;
+let batchRenTitle = null;
+let batchRenModeSelect = null;
+let batchRenStartInput = null;
+let batchRenChkYtId = null;
+let batchRenChkJunk = null;
+let batchRenChkSpaces = null;
+let batchRenSummary = null;
+let batchRenPreviewList = null;
+let batchRenError = null;
+let btnBatchRenCancel = null;
+let btnBatchRenApply = null;
+let btnBatchRenClose = null;
+let currentBatchRenResolve = null;
+
+function ensureBatchRenameModalMounted() {
+  if (batchRenBackdrop) return;
+
+  batchRenBackdrop = document.createElement('div');
+  batchRenBackdrop.className = 'modal-backdrop hidden';
+  batchRenBackdrop.setAttribute('role', 'dialog');
+  batchRenBackdrop.setAttribute('aria-modal', 'true');
+  batchRenBackdrop.setAttribute('aria-labelledby', 'batchRenameModalTitle');
+
+  const card = document.createElement('div');
+  card.className = 'modal-card modal-batch-rename-card';
+
+  const header = document.createElement('div');
+  header.className = 'modal-header';
+
+  batchRenTitle = document.createElement('h3');
+  batchRenTitle.id = 'batchRenameModalTitle';
+  batchRenTitle.textContent = '🔢 Auto-Number & Rapikan Nama Lagu';
+
+  btnBatchRenClose = document.createElement('button');
+  btnBatchRenClose.type = 'button';
+  btnBatchRenClose.className = 'btn-text';
+  btnBatchRenClose.textContent = '✕ Tutup';
+  btnBatchRenClose.addEventListener('click', closeBatchRenameModal);
+
+  header.appendChild(batchRenTitle);
+  header.appendChild(btnBatchRenClose);
+
+  const body = document.createElement('div');
+  body.className = 'modal-body';
+
+  // Top Controls Row: Numbering Mode + Start Number
+  const controlsGrid = document.createElement('div');
+  controlsGrid.className = 'batch-rename-controls-grid';
+
+  const modeGroup = document.createElement('div');
+  modeGroup.className = 'field-group compact-field';
+  const modeLabel = document.createElement('label');
+  modeLabel.className = 'field-label';
+  modeLabel.htmlFor = 'batchRenModeSelect';
+  modeLabel.textContent = 'Format Nomor Urut Track (Per Folder)';
+  batchRenModeSelect = document.createElement('select');
+  batchRenModeSelect.id = 'batchRenModeSelect';
+  batchRenModeSelect.className = 'toolbar-select';
+  [
+    { val: 'dash', text: '01 - Judul Lagu (Rekomendasi FOH / CDJ)' },
+    { val: 'dot', text: '01. Judul Lagu' },
+    { val: 'strip', text: 'Hapus Nomor Urut Lama (Tanpa Nomor)' },
+    { val: 'keep', text: 'Biarkan Nomor Urut Saat Ini' },
+  ].forEach(opt => {
+    const o = document.createElement('option');
+    o.value = opt.val;
+    o.textContent = opt.text;
+    batchRenModeSelect.appendChild(o);
+  });
+  modeGroup.appendChild(modeLabel);
+  modeGroup.appendChild(batchRenModeSelect);
+
+  const startGroup = document.createElement('div');
+  startGroup.className = 'field-group compact-field';
+  const startLabel = document.createElement('label');
+  startLabel.className = 'field-label';
+  startLabel.htmlFor = 'batchRenStartInput';
+  startLabel.textContent = 'Mulai Nomor';
+  batchRenStartInput = document.createElement('input');
+  batchRenStartInput.type = 'number';
+  batchRenStartInput.id = 'batchRenStartInput';
+  batchRenStartInput.className = 'toolbar-input';
+  batchRenStartInput.min = '1';
+  batchRenStartInput.max = '999';
+  batchRenStartInput.value = '1';
+  startGroup.appendChild(startLabel);
+  startGroup.appendChild(batchRenStartInput);
+
+  controlsGrid.appendChild(modeGroup);
+  controlsGrid.appendChild(startGroup);
+  body.appendChild(controlsGrid);
+
+  // Checkboxes for Tag Cleaning
+  const checksWrap = document.createElement('div');
+  checksWrap.className = 'batch-rename-checks';
+
+  function createCheckOption(id, labelText, defaultChecked = true) {
+    const lbl = document.createElement('label');
+    lbl.className = 'batch-rename-check-item';
+    const chk = document.createElement('input');
+    chk.type = 'checkbox';
+    chk.id = id;
+    chk.checked = defaultChecked;
+    const span = document.createElement('span');
+    span.textContent = labelText;
+    lbl.appendChild(chk);
+    lbl.appendChild(span);
+    return { lbl, chk };
+  }
+
+  const c1 = createCheckOption(
+    'batchRenChkYtId',
+    'Hapus kode [ID YouTube 11-karakter] di buntut nama file',
+    true
+  );
+  const c2 = createCheckOption(
+    'batchRenChkJunk',
+    'Hapus tag sampah ([Official Video], (Lyrics), [MV], (HD), (Full Album))',
+    true
+  );
+  const c3 = createCheckOption(
+    'batchRenChkSpaces',
+    'Rapikan simbol pipa (｜), underscore (_), dan spasi berlebih',
+    true
+  );
+
+  batchRenChkYtId = c1.chk;
+  batchRenChkJunk = c2.chk;
+  batchRenChkSpaces = c3.chk;
+
+  checksWrap.appendChild(c1.lbl);
+  checksWrap.appendChild(c2.lbl);
+  checksWrap.appendChild(c3.lbl);
+  body.appendChild(checksWrap);
+
+  // Live Preview Header & List
+  batchRenSummary = document.createElement('div');
+  batchRenSummary.className = 'batch-rename-summary';
+  batchRenSummary.textContent = 'Memuat preview perubahan nama...';
+  body.appendChild(batchRenSummary);
+
+  batchRenPreviewList = document.createElement('div');
+  batchRenPreviewList.className = 'delete-target-list batch-rename-preview-list';
+  body.appendChild(batchRenPreviewList);
+
+  batchRenError = document.createElement('div');
+  batchRenError.className = 'rename-error-msg';
+  batchRenError.style.display = 'none';
+  body.appendChild(batchRenError);
+
+  const footer = document.createElement('div');
+  footer.className = 'modal-footer';
+
+  btnBatchRenCancel = document.createElement('button');
+  btnBatchRenCancel.type = 'button';
+  btnBatchRenCancel.className = 'btn-secondary';
+  btnBatchRenCancel.textContent = 'Batal';
+  btnBatchRenCancel.addEventListener('click', closeBatchRenameModal);
+
+  btnBatchRenApply = document.createElement('button');
+  btnBatchRenApply.type = 'button';
+  btnBatchRenApply.className = 'btn-primary';
+  btnBatchRenApply.textContent = 'Terapkan Batch Rename';
+
+  footer.appendChild(btnBatchRenCancel);
+  footer.appendChild(btnBatchRenApply);
+
+  card.appendChild(header);
+  card.appendChild(body);
+  card.appendChild(footer);
+  batchRenBackdrop.appendChild(card);
+
+  batchRenBackdrop.addEventListener('click', (e) => {
+    if (e.target === batchRenBackdrop) {
+      closeBatchRenameModal();
+    }
+  });
+
+  window.addEventListener('keydown', (e) => {
+    if (!batchRenBackdrop || batchRenBackdrop.classList.contains('hidden')) return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeBatchRenameModal();
+    }
+  });
+
+  document.body.appendChild(batchRenBackdrop);
+}
+
+function closeBatchRenameModal() {
+  if (batchRenBackdrop) {
+    batchRenBackdrop.classList.add('hidden');
+  }
+  if (batchRenError) {
+    batchRenError.textContent = '';
+    batchRenError.style.display = 'none';
+  }
+  if (currentBatchRenResolve) {
+    currentBatchRenResolve(false);
+    currentBatchRenResolve = null;
+  }
+}
+
+/**
+ * Opens the Batch Auto-Numbering & Tag Cleaner Modal with Live Preview.
+ *
+ * @param {{
+ *   relPaths: string[],
+ *   sourceDir?: string,
+ *   apiPost: (url: string, body: any) => Promise<{ok: boolean, data: any, error?: string}>,
+ *   onApplied?: (data: any) => Promise<void> | void,
+ * }} opts
+ * @returns {Promise<boolean>}
+ */
+export function openBatchRenameModal(opts) {
+  ensureBatchRenameModalMounted();
+
+  const { relPaths = [], sourceDir = '', apiPost, onApplied } = opts;
+
+  return new Promise((resolve) => {
+    currentBatchRenResolve = resolve;
+    batchRenTitle.textContent = `🔢 Auto-Number & Rapikan Nama (${relPaths.length} Lagu)`;
+    batchRenError.textContent = '';
+    batchRenError.style.display = 'none';
+
+    function collectOptions() {
+      return {
+        numbering_mode: batchRenModeSelect.value || 'dash',
+        start_number: parseInt(batchRenStartInput.value, 10) || 1,
+        strip_yt_id: Boolean(batchRenChkYtId.checked),
+        strip_junk_tags: Boolean(batchRenChkJunk.checked),
+        clean_spaces: Boolean(batchRenChkSpaces.checked),
+      };
+    }
+
+    async function refreshPreview() {
+      const options = collectOptions();
+      batchRenStartInput.disabled = options.numbering_mode === 'strip' || options.numbering_mode === 'keep';
+      batchRenSummary.textContent = 'Menghitung preview nama baru...';
+      btnBatchRenApply.disabled = true;
+
+      const { ok, data, error } = await apiPost('/api/batch-rename', {
+        source_dir: sourceDir || '',
+        rel_paths: relPaths,
+        options,
+        preview_only: true,
+      });
+
+      if (!ok) {
+        batchRenError.textContent = error || 'Gagal memuat preview rename.';
+        batchRenError.style.display = 'block';
+        return;
+      }
+
+      batchRenError.style.display = 'none';
+      const plan = data.plan || [];
+      const changedCount = data.changed_count || 0;
+      batchRenSummary.textContent =
+        changedCount > 0
+          ? `Live Preview: ${changedCount} dari ${plan.length} file akan diperbarui (penomoran direset per folder playlist)`
+          : `Semua ${plan.length} file sudah sesuai dengan format yang dipilih (tidak ada perubahan).`;
+
+      batchRenPreviewList.replaceChildren();
+      plan.forEach((item, idx) => {
+        const row = document.createElement('div');
+        row.className = 'batch-rename-preview-item' + (item.changed ? ' is-changed' : ' is-unchanged');
+
+        const idxBadge = document.createElement('span');
+        idxBadge.className = 'delete-target-idx';
+        idxBadge.textContent = String(idx + 1).padStart(2, '0');
+        row.appendChild(idxBadge);
+
+        const namesCol = document.createElement('div');
+        namesCol.className = 'batch-rename-names-col';
+
+        const oldLine = document.createElement('div');
+        oldLine.className = 'batch-rename-old';
+        oldLine.textContent = (item.folder ? `[${item.folder}] ` : '') + item.old_name;
+
+        const newLine = document.createElement('div');
+        newLine.className = 'batch-rename-new';
+        newLine.textContent = '→ ' + item.new_name;
+
+        namesCol.appendChild(oldLine);
+        namesCol.appendChild(newLine);
+        row.appendChild(namesCol);
+
+        batchRenPreviewList.appendChild(row);
+      });
+
+      btnBatchRenApply.disabled = changedCount === 0;
+      btnBatchRenApply.textContent =
+        changedCount > 0 ? `Terapkan Rename (${changedCount} File)` : 'Tidak Ada Perubahan';
+    }
+
+    batchRenModeSelect.onchange = refreshPreview;
+    batchRenStartInput.oninput = refreshPreview;
+    batchRenChkYtId.onchange = refreshPreview;
+    batchRenChkJunk.onchange = refreshPreview;
+    batchRenChkSpaces.onchange = refreshPreview;
+
+    btnBatchRenApply.onclick = async () => {
+      btnBatchRenApply.disabled = true;
+      btnBatchRenApply.textContent = 'Menerapkan...';
+      batchRenError.style.display = 'none';
+
+      const { ok, data, error } = await apiPost('/api/batch-rename', {
+        source_dir: sourceDir || '',
+        rel_paths: relPaths,
+        options: collectOptions(),
+        preview_only: false,
+      });
+
+      if (!ok) {
+        batchRenError.textContent = error || 'Gagal menerapkan batch rename.';
+        batchRenError.style.display = 'block';
+        btnBatchRenApply.disabled = false;
+        btnBatchRenApply.textContent = 'Terapkan Batch Rename';
+        return;
+      }
+
+      if (typeof onApplied === 'function') {
+        await onApplied(data);
+      }
+
+      const finishResolve = currentBatchRenResolve;
+      currentBatchRenResolve = null;
+      closeBatchRenameModal();
+      if (finishResolve) finishResolve(true);
+    };
+
+    batchRenBackdrop.classList.remove('hidden');
+    refreshPreview();
+  });
+}
+
+
 

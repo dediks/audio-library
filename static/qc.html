@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="SWARARIA AUDIO LAB - Stage 2: Soundsystem QC, True Peak EBU R128 & Spectral Quality Analyzer">
+  <title>SWARARIA AUDIO LAB // 2. QC &amp; Spectral Lab</title>
+  <link rel="icon" type="image/jpeg" href="/static/swararia-logo.jpg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/converter.css">
+</head>
+<body class="dark-theme">
+  <header class="app-header" id="appHeader" data-page="qc"></header>
+
+  <main class="app-container">
+    <!-- Top 4 Acoustic KPI Diagnostic Cards -->
+    <section class="qc-kpi-grid" aria-label="Ringkasan Diagnostik Soundsystem">
+      <div class="qc-kpi-card">
+        <span class="qc-kpi-label">TOTAL KOLEKSI LAGU</span>
+        <div class="qc-kpi-val" id="kpiTotalCount">0</div>
+        <span class="qc-kpi-sub" id="kpiAuditedSub">0 lagu telah dipindai</span>
+      </div>
+
+      <div class="qc-kpi-card safe">
+        <span class="qc-kpi-label">🟢 READY FOR FOH</span>
+        <div class="qc-kpi-val" id="kpiSafeCount">0</div>
+        <span class="qc-kpi-sub">True Peak &le; -1.0 dBTP (Headroom Aman)</span>
+      </div>
+
+      <div class="qc-kpi-card warn">
+        <span class="qc-kpi-label">🟡 TRIM PREAMP (-2 dB)</span>
+        <div class="qc-kpi-val" id="kpiWarnCount">0</div>
+        <span class="qc-kpi-sub">True Peak antara -1.0 s/d 0 dBTP</span>
+      </div>
+
+      <div class="qc-kpi-card danger">
+        <span class="qc-kpi-label">🔴 CLIPPING / FAKE HQ</span>
+        <div class="qc-kpi-val" id="kpiDangerCount">0</div>
+        <span class="qc-kpi-sub">Peak &gt; 0 dBTP atau Spektrum Palsu (&lt;16 kHz)</span>
+      </div>
+    </section>
+
+    <!-- Main QC & Spectral Lab Panel -->
+    <section class="console-card library-panel" aria-labelledby="qcLabHeading">
+      <div class="panel-header">
+        <div class="panel-title-wrap">
+          <span class="icon-chip accent-cyan">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M2 10v3"></path>
+              <path d="M6 6v11"></path>
+              <path d="M10 3v18"></path>
+              <path d="M14 8v7"></path>
+              <path d="M18 5v13"></path>
+              <path d="M22 10v3"></path>
+            </svg>
+          </span>
+          <div>
+            <h2 id="qcLabHeading">2. Soundsystem QC &amp; Spectral Lab</h2>
+            <p class="panel-sub">Evaluasi True Peak (dBTP), Integrated Loudness (LUFS), Dynamic Range (LRA), dan keaslian spektrum frekuensi tinggi</p>
+          </div>
+        </div>
+
+        <div class="library-actions">
+          <button type="button" id="btnOpenExplorer" class="btn-secondary" title="Buka folder sumber di File Explorer">
+            <span>📁 Explorer</span>
+          </button>
+          <button type="button" id="btnProbeSpectral" class="btn-secondary" title="Pindai cepat Codec, Sample Rate, dan keaslian Spektrum 20 kHz">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            <span id="btnProbeSpectralText">Cek Cepat Spektrum</span>
+          </button>
+          <button type="button" id="btnAuditAll" class="btn-accent" title="Hitung EBU R128 LUFS, LRA, True Peak dBTP, dan Spektrum untuk seluruh lagu">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+            </svg>
+            <span id="btnAuditAllText">Jalankan Full QC Audit</span>
+          </button>
+          <button type="button" id="btnSendToNormalizer" class="btn-primary" disabled title="Bawa lagu terpilih ke halaman Converter & Loudness untuk dinormalisasi ke -14 LUFS">
+            <span id="btnSendToNormalizerText">🎚️ Normalisasi Terpilih (0) →</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Source Folder Strip + Playlist Filter Chips -->
+      <div class="source-playlist-bar">
+        <div class="source-location-row">
+          <div class="source-location-info">
+            <span class="source-location-label">📂 Sumber:</span>
+            <code id="activeSourceBadge" class="source-location-badge">library/inbox (Koleksi Default)</code>
+            <input type="hidden" id="sourceDirInput">
+          </div>
+          <div class="source-location-actions">
+            <span class="label-hint" id="qcStatusHint">Pilih lagu di tabel lalu kirim ke Normalizer atau Tag Organizer</span>
+            <button type="button" id="btnBrowseSource" class="btn-chip">📁 Ganti Folder Sumber / USB...</button>
+            <button type="button" id="btnResetInbox" class="btn-chip hidden">↩️ Kembali ke Inbox</button>
+          </div>
+        </div>
+
+        <div class="playlist-selector-grid" id="playlistGrid" aria-label="Filter Folder Playlist"></div>
+      </div>
+
+      <!-- Filter & Group Controls Toolbar -->
+      <div class="converter-toolbar">
+        <div class="toolbar-filters">
+          <input
+            type="search"
+            id="searchInput"
+            class="toolbar-input"
+            placeholder="Cari judul lagu atau playlist..."
+            aria-label="Cari lagu"
+          >
+          <select id="groupByMode" class="toolbar-select" aria-label="Kelompokkan Berdasarkan">
+            <option value="folder">Grup: 📁 Folder Playlist</option>
+            <option value="type">Grup: 🎵 Tipe File (.opus/.webm/.mp3)</option>
+            <option value="folder_type">Grup: 📁 Folder + 🎵 Tipe File</option>
+            <option value="rate">Grup: 🎛️ Sample Rate</option>
+          </select>
+          <select id="filterQcStatus" class="toolbar-select" aria-label="Filter Status QC">
+            <option value="ALL">Semua Status QC</option>
+            <option value="ISSUES">⚠️ Perlu Perhatian (Clipping / Trim / Fake HQ)</option>
+            <option value="CLIPPING">🔴 Clipping Hazard (&gt; 0 dBTP)</option>
+            <option value="TRIM">🟡 Perlu Trim (-1.0 s/d 0 dBTP)</option>
+            <option value="SAFE">🟢 Ready for FOH (&le; -1.0 dBTP)</option>
+            <option value="FAKE_HQ">🔍 Fake HQ / Upsampled (&lt;16 kHz)</option>
+          </select>
+          <select id="filterFormat" class="toolbar-select" aria-label="Filter Format">
+            <option value="ALL">Semua Format</option>
+            <option value=".opus">Opus (.opus)</option>
+            <option value=".webm">WebM (.webm)</option>
+            <option value=".mp3">MP3 (.mp3)</option>
+            <option value=".m4a">AAC (.m4a)</option>
+          </select>
+        </div>
+
+        <div class="toolbar-selection-btns">
+          <span class="selection-counter-pill" id="selectionCounterPill">0 dipilih</span>
+          <button type="button" id="btnCollapseAllGroups" class="btn-chip">Lipat</button>
+          <button type="button" id="btnExpandAllGroups" class="btn-chip">Buka</button>
+          <button type="button" id="btnSelectIssues" class="btn-chip" title="Pilih semua lagu yang mengalami Clipping atau Fake HQ">Pilih Bermasalah</button>
+          <button type="button" id="btnSelectVisible" class="btn-chip">Pilih Semua Tampil</button>
+          <button type="button" id="btnClearSelection" class="btn-chip">Reset Pilih</button>
+        </div>
+      </div>
+
+      <!-- QC DataTable -->
+      <div class="table-responsive">
+        <table class="qc-table converter-table" id="qcTable">
+          <thead>
+            <tr>
+              <th scope="col" class="col-check">
+                <input type="checkbox" id="chkSelectAllVisible" title="Pilih semua lagu yang tampil">
+              </th>
+              <th scope="col">Nama File Audio</th>
+              <th scope="col">Codec &amp; Bitrate</th>
+              <th scope="col">Spektrum Frekuensi</th>
+              <th scope="col">Sample Rate</th>
+              <th scope="col">True Peak (dBTP)</th>
+              <th scope="col">Integrated LUFS</th>
+              <th scope="col">LRA (LU)</th>
+              <th scope="col">Status Soundsystem</th>
+            </tr>
+          </thead>
+          <tbody id="qcTableBody">
+            <tr class="empty-row">
+              <td colspan="9">Memuat data koleksi dari <code>library/inbox</code>...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Acoustic Engineering Legend -->
+      <div class="audio-legend-card">
+        <h4 class="legend-title">Panduan Standar Akustik FOH &amp; Spektrum:</h4>
+        <div class="legend-grid">
+          <div class="legend-item">
+            <span class="legend-badge badge-safe">READY FOR FOH</span>
+            <p>True Peak &le; -1.0 dBTP &amp; Spektrum 20 kHz utuh. Aman dari distorsi inter-sample DAC di panggung besar.</p>
+          </div>
+          <div class="legend-item">
+            <span class="legend-badge badge-warning">TRIM PREAMP</span>
+            <p>True Peak antara -1.0 s/d 0 dBTP. Dianjurkan turunkan input gain -2 dB atau jalankan Normalisasi -14 LUFS.</p>
+          </div>
+          <div class="legend-item">
+            <span class="legend-badge badge-danger">CLIPPING / FAKE HQ</span>
+            <p>True Peak &gt; 0 dBTP (berisiko distorsi klip) atau file 320 kbps palsu hasil upsample dari sumber 128 kbps.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <p>SWARARIA AUDIO LAB &bull; Strictly running on <code>127.0.0.1:8765</code> &bull; Stage 2: EBU R128 &amp; Spectral QC</p>
+  </footer>
+
+  <!-- Interactive Folder Browser Modal -->
+  <div class="modal-backdrop hidden" id="folderModal" role="dialog" aria-modal="true" aria-labelledby="folderModalTitle">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="folderModalTitle">Pilih Folder Sumber</h3>
+        <button type="button" id="btnCloseModal" class="btn-text">✕ Tutup</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-shortcuts" id="modalShortcuts"></div>
+        <div class="modal-current-bar">
+          <button type="button" id="btnModalUp" class="btn-chip">⬆️ Naik 1 Level</button>
+          <code class="modal-current-path" id="modalCurrentPath">/</code>
+        </div>
+        <div class="modal-dir-list" id="modalDirList"></div>
+        <div class="modal-newfolder-bar">
+          <input type="text" id="newFolderNameInput" class="toolbar-input" placeholder="Buat subfolder baru di sini (opsional)...">
+          <button type="button" id="btnCreateSubfolder" class="btn-chip">+ Buat Folder</button>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" id="btnCancelModal" class="btn-secondary">Batal</button>
+        <button type="button" id="btnSelectModalDir" class="btn-primary">Pilih Folder Ini</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/static/qc.js"></script>
+</body>
+</html>
+
