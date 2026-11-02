@@ -157,14 +157,14 @@ export function initAppHeader(opts = {}) {
 
   const brandSubtitle = document.createElement('p');
   brandSubtitle.className = 'brand-subtitle';
-  brandSubtitle.textContent = '4-Stage Pro Audio Pipeline: Ingest • QC Lab • DSP Converter • Tag Organizer';
+  brandSubtitle.textContent = '6-Stage Pro Audio & Video Pipeline: Ingest • QC Lab • DSP Converter • Tag Organizer • Multitrack Split • Video Split';
 
   brandInfo.appendChild(brandTitle);
   brandInfo.appendChild(brandSubtitle);
   brand.appendChild(brandIcon);
   brand.appendChild(brandInfo);
 
-  // 2. 4-Stage Pipeline Navigation Tabs
+  // 2. 6-Stage Pipeline Navigation Tabs
   const nav = document.createElement('nav');
   nav.className = 'app-nav';
   nav.setAttribute('aria-label', 'Main Navigation');
@@ -211,10 +211,35 @@ export function initAppHeader(opts = {}) {
     { tag: 'line', attrs: { x1: '3', y1: '18', x2: '3.01', y2: '18' } },
   ]);
 
+  const tabMultitrack = makeNavTab('/multitrack', 'multitrack', '5. Multitrack Splitter', [
+    { tag: 'line', attrs: { x1: '4', y1: '21', x2: '4', y2: '14' } },
+    { tag: 'line', attrs: { x1: '4', y1: '10', x2: '4', y2: '3' } },
+    { tag: 'line', attrs: { x1: '12', y1: '21', x2: '12', y2: '12' } },
+    { tag: 'line', attrs: { x1: '12', y1: '8', x2: '12', y2: '3' } },
+    { tag: 'line', attrs: { x1: '20', y1: '21', x2: '20', y2: '16' } },
+    { tag: 'line', attrs: { x1: '20', y1: '12', x2: '20', y2: '3' } },
+    { tag: 'circle', attrs: { cx: '4', cy: '12', r: '2' } },
+    { tag: 'circle', attrs: { cx: '12', cy: '10', r: '2' } },
+    { tag: 'circle', attrs: { cx: '20', cy: '14', r: '2' } },
+  ]);
+
+  const tabVideoSplit = makeNavTab('/video-split', 'video-split', '6. Video Splitter', [
+    { tag: 'rect', attrs: { x: '2', y: '2', width: '20', height: '20', rx: '2.18', ry: '2.18' } },
+    { tag: 'line', attrs: { x1: '7', y1: '2', x2: '7', y2: '22' } },
+    { tag: 'line', attrs: { x1: '17', y1: '2', x2: '17', y2: '22' } },
+    { tag: 'line', attrs: { x1: '2', y1: '12', x2: '22', y2: '12' } },
+    { tag: 'line', attrs: { x1: '2', y1: '7', x2: '7', y2: '7' } },
+    { tag: 'line', attrs: { x1: '2', y1: '17', x2: '7', y2: '17' } },
+    { tag: 'line', attrs: { x1: '17', y1: '7', x2: '22', y2: '7' } },
+    { tag: 'line', attrs: { x1: '17', y1: '17', x2: '22', y2: '17' } },
+  ]);
+
   nav.appendChild(tabIngest);
   nav.appendChild(tabQc);
   nav.appendChild(tabConverter);
   nav.appendChild(tabOrganizer);
+  nav.appendChild(tabMultitrack);
+  nav.appendChild(tabVideoSplit);
 
   // 3. Unified System Diagnostics Bar
   const statusGroup = document.createElement('div');

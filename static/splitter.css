@@ -1,0 +1,500 @@
+/* ==========================================================================
+   SWARARIA AUDIO LAB // STAGE 5: MULTITRACK & CONCERT VIDEO SPLITTER STYLES
+   ========================================================================== */
+
+.splitter-source-box {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.65rem 0.75rem;
+  background: #09090b;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.subfolder-chips-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  padding-top: 0.35rem;
+  border-top: 1px dashed rgba(255, 255, 255, 0.08);
+}
+
+.subfolder-chip-label {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  margin-right: 0.2rem;
+}
+
+.splitter-target-selector-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.55rem;
+  padding-top: 0.25rem;
+}
+
+.splitter-target-selector-row.has-two-cols {
+  grid-template-columns: 1.5fr 1fr;
+}
+
+@media (max-width: 720px) {
+  .splitter-target-selector-row.has-two-cols {
+    grid-template-columns: 1fr;
+  }
+}
+
+.target-select-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.mini-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.full-width-select {
+  width: 100%;
+}
+
+.seg-pills.five-cols {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+@media (max-width: 840px) {
+  .seg-pills.five-cols {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .seg-pills.five-cols {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.media-summary-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding-top: 0.3rem;
+}
+
+.summary-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.55rem;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+.summary-pill.accent {
+  background: rgba(0, 229, 255, 0.1);
+  border-color: rgba(0, 229, 255, 0.35);
+  color: var(--accent-cyan);
+}
+
+/* Numeric Detection Tuning Grid */
+.detect-params-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.45rem;
+  margin-top: 0.45rem;
+}
+
+@media (max-width: 780px) {
+  .detect-params-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.param-box {
+  display: flex;
+  flex-direction: column;
+  gap: 0.22rem;
+  background: #09090b;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 0.4rem 0.55rem;
+}
+
+.param-box label {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mono-input {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  padding: 0.28rem 0.45rem;
+  width: 100%;
+}
+
+.dual-mini-inputs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.25rem;
+}
+
+.manual-timestamps-box {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.45rem;
+}
+
+.toolbar-textarea {
+  width: 100%;
+  background: #09090b;
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 0.5rem 0.65rem;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.toolbar-textarea:focus {
+  outline: none;
+  border-color: var(--accent-cyan);
+}
+
+.video-output-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.extract-audio-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  background: #09090b;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 0.4rem 0.65rem;
+}
+
+.dest-picker-inline {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.45rem;
+}
+
+.dest-picker-inline .toolbar-input {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+}
+
+.splitter-cta-row {
+  display: grid;
+  grid-template-columns: 1fr 1.15fr;
+  gap: 0.6rem;
+  margin-top: 0.2rem;
+}
+
+@media (max-width: 680px) {
+  .splitter-cta-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.btn-detect-cta {
+  justify-content: center;
+  font-weight: 700;
+  border-color: rgba(0, 229, 255, 0.4);
+  color: var(--accent-cyan);
+  background: rgba(0, 229, 255, 0.08);
+  padding: 0.62rem 0.9rem;
+}
+
+.btn-detect-cta:hover:not(:disabled) {
+  background: rgba(0, 229, 255, 0.16);
+  border-color: var(--accent-cyan);
+}
+
+.btn-split-cta {
+  justify-content: center;
+  font-weight: 700;
+  padding: 0.62rem 0.9rem;
+}
+
+/* Visual Timeline Bar */
+.timeline-visual-wrap {
+  padding: 0.75rem 1.1rem;
+  background: #09090b;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.timeline-bar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.45rem;
+  font-size: 0.75rem;
+}
+
+.timeline-title-label {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.timeline-total-label {
+  font-family: var(--font-mono);
+  color: var(--accent-cyan);
+  font-weight: 700;
+}
+
+.timeline-segments-track {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  height: 30px;
+  background: #121217;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  gap: 2px;
+}
+
+.timeline-empty-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.timeline-seg-block {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 14px;
+  padding: 0 0.3rem;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  font-weight: 700;
+  color: #ffffff;
+  background: linear-gradient(135deg, rgba(0, 229, 255, 0.32), rgba(16, 185, 129, 0.32));
+  border-right: 1px solid rgba(255, 255, 255, 0.2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: filter 0.15s ease;
+}
+
+.timeline-seg-block:nth-child(even) {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.35), rgba(139, 92, 246, 0.35));
+}
+
+.timeline-seg-block.disabled {
+  opacity: 0.28;
+  filter: grayscale(1);
+}
+
+.timeline-seg-block:hover {
+  filter: brightness(1.25);
+}
+
+/* Editable Segment Table Inputs */
+.splitter-table .col-idx {
+  width: 52px;
+  text-align: center;
+  font-family: var(--font-mono);
+}
+
+.seg-title-input {
+  width: 100%;
+  min-width: 180px;
+  background: #09090b;
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 0.32rem 0.55rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.seg-title-input:focus,
+.seg-time-input:focus {
+  outline: none;
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 0 1px rgba(0, 229, 255, 0.25);
+}
+
+.seg-time-input {
+  width: 112px;
+  background: #09090b;
+  color: var(--accent-cyan);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 0.3rem 0.45rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  text-align: center;
+}
+
+.seg-actions-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.btn-seg-action {
+  padding: 0.24rem 0.5rem;
+  font-size: 0.7rem;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.14s ease;
+}
+
+.btn-seg-action:hover {
+  background: rgba(0, 229, 255, 0.12);
+  border-color: var(--accent-cyan);
+  color: #ffffff;
+}
+
+.btn-seg-action.danger:hover {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: #ef4444;
+  color: #fca5a5;
+}
+
+/* ==========================================================================
+   YOUTUBE CONCERT VIDEO SPLITTER STYLES
+   ========================================================================== */
+
+.source-mode-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem;
+  margin-bottom: 0.55rem;
+}
+
+.source-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0.42rem 0.75rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.source-tab-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+}
+
+.source-tab-btn.active {
+  background: rgba(0, 229, 255, 0.12);
+  border-color: var(--accent-cyan);
+  color: #ffffff;
+  box-shadow: 0 0 10px rgba(0, 229, 255, 0.15);
+}
+
+.youtube-input-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.youtube-url-row {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.youtube-url-input {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  padding: 0.45rem 0.65rem;
+}
+
+.btn-yt-fetch {
+  white-space: nowrap;
+}
+
+.yt-preview-card {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.6rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  align-items: center;
+}
+
+.yt-preview-thumb {
+  width: 120px;
+  height: 68px;
+  border-radius: 4px;
+  object-fit: cover;
+  background: #111;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  flex-shrink: 0;
+}
+
+.yt-preview-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.yt-preview-title {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.yt-preview-uploader {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.yt-preview-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.15rem;
+}
+
+.yt-preview-pills .summary-pill {
+  font-size: 0.68rem;
+  padding: 0.1rem 0.45rem;
+}
+
+

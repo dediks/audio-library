@@ -11,6 +11,7 @@ from pathlib import Path
 
 import audio_manager
 import fs_browser
+import splitter_engine
 
 
 class AudioMetadataCache:
@@ -925,6 +926,182 @@ class TaskQueueManager:
                 stats=stats,
             )
 
+    def enqueue_split(self, payload: dict) -> tuple[int, dict]:
+        """Validates parameters and enqueues a Multitrack WAV or Concert Video split job."""
+        raw_source_dir = payload.get("source_dir")
+        raw_target_rel = payload.get("target_rel")
+        raw_dest_dir = payload.get("dest_dir")
+        target_mode = str(payload.get("target_mode", "auto")).strip().lower()
+        video_cut_mode = str(payload.get("video_cut_mode", "copy")).strip().lower()
+        if video_cut_mode not in ("copy", "reencode"):
+            video_cut_mode = "copy"
+
+        extract_audio_fmt = str(payload.get("extract_audio_fmt", "none")).strip().lower()
+        if extract_audio_fmt not in ("none", "wav", "mp3_320k", "flac", "opus"):
+            extract_audio_fmt = "none"
+
+        multichannel_mode = str(payload.get("multichannel_mode", "keep_multichannel")).strip().lower()
+        if multichannel_mode not in ("keep_multichannel", "explode_mono_stems"):
+            multichannel_mode = "keep_multichannel"
+
+        stem_org_mode = str(payload.get("stem_org_mode", "folder_per_song")).strip().lower()
+        if stem_org_mode not in ("folder_per_song", "prefix_per_song"):
+            stem_org_mode = "folder_per_song"
+
+        try:
+            yt_url = payload.get("youtube_url") or (raw_target_rel if splitter_engine.is_youtube_url(raw_target_rel) else None)
+            if yt_url:
+                if not splitter_engine.is_youtube_url(yt_url):
+                    return 400, {"error": "URL YouTube tidak valid. Pastikan domain youtube.com atau youtu.be."}
+                target_resolved = str(yt_url).strip()
+                dest_resolved = (
+                    fs_browser.resolve_safe_dir(raw_dest_dir, self.inbox_dir, must_exist=False)
+                    if (isinstance(raw_dest_dir, str) and raw_dest_dir.strip())
+                    else None
+                )
+                raw_segments = payload.get("segments", [])
+                validated_segments = splitter_engine.validate_and_normalize_segments(raw_segments)
+                yt_title = str(payload.get("youtube_title") or "Konser YouTube")
+                label = f"Unduh & Potong Video YouTube '{yt_title}' -> {len(validated_segments)} Lagu"
+            else:
+                source_resolved = (
+                    fs_browser.resolve_safe_dir(raw_source_dir, self.inbox_dir, must_exist=True)
+                    if raw_source_dir
+                    else self.inbox_dir.resolve()
+                )
+                if target_mode == "folder_stems" or not raw_target_rel:
+                    target_resolved = source_resolved
+                else:
+                    target_resolved = splitter_engine.validate_safe_file_path(str(raw_target_rel), base_dir=source_resolved)
+
+                dest_resolved = (
+                    fs_browser.resolve_safe_dir(raw_dest_dir, self.inbox_dir, must_exist=False)
+                    if (isinstance(raw_dest_dir, str) and raw_dest_dir.strip())
+                    else None
+                )
+                raw_segments = payload.get("segments", [])
+                validated_segments = splitter_engine.validate_and_normalize_segments(raw_segments)
+
+                if target_resolved.is_dir():
+                    label = f"Potong Folder Multi-Stem '{target_resolved.name}' -> {len(validated_segments)} Lagu"
+                else:
+                    label = f"Potong '{target_resolved.name}' -> {len(validated_segments)} Lagu"
+        except Exception as exc:
+            return 400, {"error": str(exc)}
+
+        job = {
+            "id": f"split_{int(time.time() * 1000)}",
+            "type": "split",
+            "url": label,
+            "target_path": str(target_resolved),
+            "dest_dir": str(dest_resolved) if dest_resolved else None,
+            "target_mode": target_mode,
+            "video_cut_mode": video_cut_mode,
+            "extract_audio_fmt": extract_audio_fmt,
+            "multichannel_mode": multichannel_mode,
+            "stem_org_mode": stem_org_mode,
+            "segments": validated_segments,
+            "status": "QUEUED",
+            "progress": 0,
+            "created_at": time.time(),
+        }
+        with self.lock:
+            self.queue.append(job)
+
+        return 200, {
+            "message": f"Tugas ({label}) ditambahkan ke antrian.",
+            "job_id": job["id"],
+        }
+
+    def execute_split_task(self, task: dict) -> None:
+        """Executes a queued Multitrack WAV or Concert Video split job."""
+        if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+            err_msg = "FFmpeg / FFprobe belum terinstall di PATH sistem."
+            self.finish_task(
+                task,
+                "FAILED",
+                error=err_msg,
+                outcome="FAILED",
+                title="Pemotongan Gagal (FFmpeg Missing)",
+                summary=err_msg,
+            )
+            return
+
+        raw_target = task.get("target_path", "")
+        raw_dest = task.get("dest_dir")
+        try:
+            if splitter_engine.is_youtube_url(raw_target):
+                target_resolved = str(raw_target).strip()
+            else:
+                p_cand = Path(raw_target).resolve()
+                if p_cand.is_dir():
+                    target_resolved = fs_browser.resolve_safe_dir(raw_target, self.inbox_dir, must_exist=True)
+                else:
+                    target_resolved = splitter_engine.validate_safe_file_path(raw_target)
+
+            dest_resolved = (
+                fs_browser.resolve_safe_dir(raw_dest, self.inbox_dir, must_exist=False)
+                if (raw_dest and str(raw_dest).strip())
+                else None
+            )
+            res = splitter_engine.execute_split_job(
+                target_path=target_resolved,
+                segments=task.get("segments", []),
+                out_dir=dest_resolved,
+                split_mode=str(task.get("target_mode", "auto")),
+                video_cut_mode=str(task.get("video_cut_mode", "copy")),
+                extract_audio_fmt=str(task.get("extract_audio_fmt", "none")),
+                multichannel_mode=str(task.get("multichannel_mode", "keep_multichannel")),
+                stem_org_mode=str(task.get("stem_org_mode", "folder_per_song")),
+                on_log=lambda msg: self.append_log(task, msg),
+                on_progress=lambda pct: task.__setitem__("progress", pct),
+            )
+            errors = int(res.get("errors") or 0)
+            created = int(res.get("created_files") or 0)
+            songs = int(res.get("songs_count") or 0)
+            out_dir_str = str(res.get("out_dir") or "")
+
+            if errors == 0 and created > 0:
+                self.finish_task(
+                    task,
+                    "SUCCESS",
+                    progress=100,
+                    outcome="SUCCESS",
+                    title="Pemotongan Per Lagu Selesai",
+                    summary=f"Berhasil memotong {songs} lagu ({created} file dibuat) ke '{Path(out_dir_str).name}'.",
+                    stats={"converted": created, "skipped": 0, "errors": 0, "out_dir": out_dir_str},
+                )
+            elif created > 0 and errors > 0:
+                self.finish_task(
+                    task,
+                    "SUCCESS",
+                    progress=100,
+                    outcome="WARNING",
+                    title="Pemotongan Selesai Sebagian",
+                    summary=f"{created} file berhasil dibuat untuk {songs} lagu, namun ada {errors} error.",
+                    stats={"converted": created, "skipped": 0, "errors": errors, "out_dir": out_dir_str},
+                )
+            else:
+                self.finish_task(
+                    task,
+                    "FAILED",
+                    progress=100,
+                    outcome="FAILED",
+                    title="Pemotongan Gagal",
+                    summary="Gagal memotong file target. Periksa log terminal untuk detail.",
+                    stats={"converted": 0, "skipped": 0, "errors": errors},
+                )
+        except Exception as exc:
+            self.append_log(task, f"[SPLIT ERROR] {exc}")
+            self.finish_task(
+                task,
+                "FAILED",
+                error=str(exc),
+                outcome="FAILED",
+                title="Pemotongan Gagal",
+                summary=str(exc),
+            )
+
     def run_worker_loop(self) -> None:
         """Background worker processing tasks from self.queue sequentially."""
         while True:
@@ -946,6 +1123,8 @@ class TaskQueueManager:
 
             if task.get("type") == "resample":
                 self.execute_resample_task(task)
+            elif task.get("type") == "split":
+                self.execute_split_task(task)
             else:
                 self.execute_download_task(task)
 

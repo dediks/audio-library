@@ -227,9 +227,10 @@ def browse_directory(
         try:
             if not d.is_dir():
                 continue
+            media_exts = audio_manager.EXTENSIONS | {".mp4", ".mkv", ".mov", ".ts", ".m4v", ".avi", ".rf64", ".w64"}
             audio_cnt = sum(
                 1 for f in d.iterdir()
-                if not f.name.startswith(".") and f.suffix.lower() in audio_manager.EXTENSIONS and f.is_file()
+                if not f.name.startswith(".") and f.suffix.lower() in media_exts and f.is_file()
             )
         except OSError:
             continue

@@ -18,6 +18,14 @@ import sys
 from pathlib import Path
 from typing import Callable
 
+_VENDOR_DIR = Path(__file__).resolve().parent / ".vendor"
+if _VENDOR_DIR.is_dir() and str(_VENDOR_DIR) not in sys.path:
+    sys.path.insert(0, str(_VENDOR_DIR))
+    os.environ["PYTHONPATH"] = str(_VENDOR_DIR) + (os.pathsep + os.environ.get("PYTHONPATH", "") if os.environ.get("PYTHONPATH") else "")
+    local_bin = _VENDOR_DIR / "bin"
+    if local_bin.is_dir():
+        os.environ["PATH"] = str(local_bin) + os.pathsep + os.environ.get("PATH", "")
+
 EXTENSIONS = {".mp3", ".m4a", ".aac", ".opus", ".ogg", ".webm", ".flac",
               ".wav", ".aif", ".aiff", ".mka", ".wma", ".alac"}
 LOSSLESS = {"flac", "alac", "wavpack", "ape", "tta", "pcm_s16le", "pcm_s24le",
@@ -525,6 +533,16 @@ def scan(args) -> int:
     return 0
 
 
+def get_ytdlp_base_cmd() -> list[str]:
+    """Returns the base command to run yt-dlp, preferring system binary or vendored package."""
+    if shutil.which("yt-dlp"):
+        return ["yt-dlp"]
+    vendor_dir = Path(__file__).resolve().parent / ".vendor"
+    if (vendor_dir / "yt_dlp").is_dir():
+        return [sys.executable, "-m", "yt_dlp"]
+    return ["yt-dlp"]
+
+
 def build_ytdlp_command(
     url: str,
     output_template: str,
@@ -541,7 +559,7 @@ def build_ytdlp_command(
     if norm_format == "mp3":
         norm_format = "mp3_320k"
 
-    cmd = ["yt-dlp"]
+    cmd = list(get_ytdlp_base_cmd())
     if norm_format == "opus":
         # Prioritize 774 (Premium Opus 256k) then 251 (Public High Opus 160k),
         # extract to .opus via lossless stream copy (-c:a copy), and embed metadata
@@ -1175,6 +1193,66 @@ def resample(args) -> int:
     return 0 if errors == 0 else 1
 
 
+def split_cli(args) -> int:
+    """CLI handler for automatic or timestamp-based splitting of Multitrack WAVs, Concert Videos, or YouTube URLs."""
+    import splitter_engine
+
+    if splitter_engine.is_youtube_url(args.target):
+        target = str(args.target).strip()
+    else:
+        target = Path(args.target).expanduser().resolve()
+        if not target.exists():
+            raise RuntimeError(f"Path target tidak ditemukan: {target}")
+
+    out_dir = Path(args.out_dir).expanduser().resolve() if getattr(args, "out_dir", None) else None
+    manual_text = None
+    if getattr(args, "timestamps_file", None):
+        ts_path = Path(args.timestamps_file).expanduser().resolve()
+        if not ts_path.is_file():
+            raise RuntimeError(f"File daftar timestamp tidak ditemukan: {ts_path}")
+        manual_text = ts_path.read_text(encoding="utf-8", errors="ignore")
+
+    print(f"[SPLITTER] Menganalisis target: {target} ...", flush=True)
+    det = splitter_engine.detect_song_segments(
+        target_path=target,
+        mode="manual" if manual_text else args.detect_mode,
+        noise_db=float(args.noise_db),
+        min_silence_s=float(args.min_silence),
+        min_song_s=float(args.min_song),
+        pad_before_s=float(args.pad_before),
+        pad_after_s=float(args.pad_after),
+        trim_silence_edges=not bool(args.continuous),
+        reference_stem=args.reference_stem,
+        manual_timestamps=manual_text,
+    )
+    segments = det.get("segments", [])
+    print(f"[SPLITTER] {det.get('detection_note')}", flush=True)
+    for seg in segments:
+        st_lbl = splitter_engine.format_timestamp(seg["start_s"])
+        et_lbl = splitter_engine.format_timestamp(seg["end_s"])
+        print(f"  #{seg['index']:02d}  {st_lbl} -> {et_lbl}  ({seg['duration_s']:6.1f}s)  {seg['title']}", flush=True)
+
+    if getattr(args, "dry_run", False):
+        print("[DRY-RUN] Preview titik potong selesai (tidak ada file yang dipotong).", flush=True)
+        return 0
+
+    res = splitter_engine.execute_split_job(
+        target_path=target,
+        segments=segments,
+        out_dir=out_dir,
+        video_cut_mode=args.video_mode,
+        extract_audio_fmt=args.extract_audio,
+        multichannel_mode=args.multichannel_mode,
+        stem_org_mode=args.stem_org,
+    )
+    print(
+        f"[SELESAI] Status: {res['status']} | Lagu: {res['songs_count']} | "
+        f"File dibuat: {res['created_files']} | Error: {res['errors']} | Output: {res['out_dir']}",
+        flush=True,
+    )
+    return 0 if res["errors"] == 0 else 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Authorized download + local audio quality audit")
     sub = parser.add_subparsers(dest="action", required=True)
@@ -1208,12 +1286,46 @@ def main() -> int:
     r.add_argument("--out-dir", default=None,
                    help="Folder tujuan khusus untuk menyimpan hasil konversi")
     r.add_argument("--scan", action="store_true", help="Audit ulang folder setelah konversi selesai")
+    sp = sub.add_parser("split", help="Potong otomatis file Multitrack WAV atau Video Konser panjang per lagu")
+    sp.add_argument("target", help="Path ke folder Multi-Stem WAV, file Multichannel WAV, atau Video Konser")
+    sp.add_argument("--detect-mode", choices=["auto", "silence", "adaptive", "chapters"], default="auto",
+                    help="Metode deteksi batas lagu otomatis (default: auto)")
+    sp.add_argument("--noise-db", type=float, default=-32.0,
+                    help="Ambang desibel jeda antar lagu dalam dB (default: -32.0)")
+    sp.add_argument("--min-silence", type=float, default=2.5,
+                    help="Durasi hening/jeda minimum antar lagu dalam detik (default: 2.5)")
+    sp.add_argument("--min-song", type=float, default=60.0,
+                    help="Durasi minimum sebuah lagu dalam detik (default: 60.0)")
+    sp.add_argument("--pad-before", type=float, default=0.5,
+                    help="Lead-in (padding sebelum lagu mulai) dalam detik (default: 0.5)")
+    sp.add_argument("--pad-after", type=float, default=1.0,
+                    help="Lead-out (padding setelah lagu selesai) dalam detik (default: 1.0)")
+    sp.add_argument("--continuous", action="store_true",
+                    help="Potong menyambung tanpa membuang bagian jeda hening di tengah")
+    sp.add_argument("--reference-stem", default=None,
+                    help="Nama file stem referensi saat memotong folder Multi-Stem WAV")
+    sp.add_argument("--timestamps-file", default=None,
+                    help="File teks berisi daftar timestamp manual per lagu (opsional)")
+    sp.add_argument("--video-mode", choices=["copy", "reencode"], default="copy",
+                    help="Mode pemotongan video konser: 'copy' (lossless cepat) atau 'reencode' (presisi frame)")
+    sp.add_argument("--extract-audio", choices=["none", "wav", "mp3_320k", "flac", "opus"], default="none",
+                    help="Sekaligus ekstrak audio per lagu saat memotong video konser")
+    sp.add_argument("--multichannel-mode", choices=["keep_multichannel", "explode_mono_stems"], default="keep_multichannel",
+                    help="Untuk file WAV multichannel (X-Live): simpan multichannel per lagu atau pecah ke mono WAV per channel")
+    sp.add_argument("--stem-org", choices=["folder_per_song", "prefix_per_song"], default="folder_per_song",
+                    help="Organisasi output untuk folder Multi-Stem WAV")
+    sp.add_argument("--out-dir", default=None,
+                    help="Folder tujuan output hasil pemotongan")
+    sp.add_argument("--dry-run", action="store_true",
+                    help="Hanya tampilkan preview titik potong lagu tanpa mengeksekusi pemotongan")
     args = parser.parse_args()
     try:
         if args.action == "download":
             return download(args)
         if args.action == "resample":
             return resample(args)
+        if args.action == "split":
+            return split_cli(args)
         return scan(args)
     except RuntimeError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
