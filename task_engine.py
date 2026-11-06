@@ -742,7 +742,7 @@ class TaskQueueManager:
         self.inbox_dir.mkdir(parents=True, exist_ok=True)
         self.archive_file.parent.mkdir(parents=True, exist_ok=True)
 
-        if not shutil.which("yt-dlp"):
+        if not audio_manager.is_ytdlp_available():
             err_msg = "yt-dlp belum terinstall di sistem. Jalankan: pip install yt-dlp"
             self.finish_task(
                 task,

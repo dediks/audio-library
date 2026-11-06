@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# SWARARIA AUDIO LAB — Unified Runner Script for Linux & macOS
+# SWARARIA AUDIO LAB — Unified Desktop & Web Runner Script (Linux & macOS)
 # ==============================================================================
 set -e
 
@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 echo "=================================================================="
-echo "  SWARARIA AUDIO LAB — Initializing Environment"
+echo "  SWARARIA AUDIO LAB — Initializing Desktop Workstation"
 echo "=================================================================="
 
 # 1. Check Python installation
@@ -28,7 +28,11 @@ fi
 PY_VER=$($PYTHON_BIN -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
 echo "✓ Python terdeteksi: $PYTHON_BIN (v$PY_VER)"
 
-# 2. Check FFmpeg & FFprobe
+# 2. Check FFmpeg & FFprobe (including .vendor/bin)
+if [ -d "$SCRIPT_DIR/.vendor/bin" ]; then
+    export PATH="$SCRIPT_DIR/.vendor/bin:$PATH"
+fi
+
 MISSING_FFMPEG=0
 if ! command -v ffmpeg &>/dev/null; then
     MISSING_FFMPEG=1
@@ -75,26 +79,20 @@ if [ -f "requirements.txt" ]; then
     echo "📦 Memeriksa & menginstall dependencies dari requirements.txt..."
     python -m pip install --quiet --upgrade pip
     python -m pip install --quiet -r requirements.txt
-    echo "✓ Dependencies siap (yt-dlp)."
+    echo "✓ Dependencies siap."
 fi
 
-# 5. Open browser automatically in background (if desktop GUI is active)
-if [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ] || [[ "$OSTYPE" == "darwin"* ]]; then
-    (
-        sleep 1.5
-        if command -v xdg-open &>/dev/null; then
-            xdg-open "http://127.0.0.1:8765" &>/dev/null || true
-        elif command -v open &>/dev/null; then
-            open "http://127.0.0.1:8765" &>/dev/null || true
-        fi
-    ) &
+# 5. Launch Desktop App (or Web-only server if --web is passed)
+if [[ "${1:-}" == "--web" ]]; then
+    echo "=================================================================="
+    echo "  🚀 Menjalankan Web Server di http://127.0.0.1:8765"
+    echo "  Tekan Ctrl+C untuk menghentikan server."
+    echo "=================================================================="
+    exec python web_ui.py
+else
+    echo "=================================================================="
+    echo "  🚀 Meluncurkan SWARARIA AUDIO LAB Desktop App"
+    echo "  Tutup jendela aplikasi (atau tekan Ctrl+C) untuk keluar."
+    echo "=================================================================="
+    exec python desktop_app.py
 fi
-
-echo "=================================================================="
-echo "  🚀 Menjalankan SWARARIA AUDIO LAB di http://127.0.0.1:8765"
-echo "  Tekan Ctrl+C untuk menghentikan server."
-echo "=================================================================="
-
-# 6. Start Web UI
-exec python web_ui.py
-

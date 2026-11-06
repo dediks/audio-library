@@ -1,11 +1,11 @@
 @echo off
 setlocal enabledelayedexpansion
-title SWARARIA AUDIO LAB Workstation
+title SWARARIA AUDIO LAB — Desktop Workstation
 
 cd /d "%~dp0"
 
 echo ==================================================================
-echo   SWARARIA AUDIO LAB - Inisialisasi Sistem (Windows)
+echo   SWARARIA AUDIO LAB - Inisialisasi Desktop App (Windows)
 echo ==================================================================
 
 :: 1. Verifikasi Instalasi Python
@@ -29,7 +29,10 @@ if %ERRORLEVEL% neq 0 (
 
 for /f "tokens=*" %%v in ('%PY_CMD% --version 2^>^&1') do echo [OK] %%v terdeteksi.
 
-:: 2. Verifikasi Instalasi FFmpeg & ffprobe
+:: 2. Verifikasi Instalasi FFmpeg & ffprobe (Cek di .vendor\bin atau Sistem PATH)
+if exist ".vendor\bin\ffmpeg.exe" (
+    set "PATH=%~dp0.vendor\bin;%PATH%"
+)
 where ffmpeg >nul 2>nul
 if %ERRORLEVEL% neq 0 (
     echo.
@@ -40,7 +43,7 @@ if %ERRORLEVEL% neq 0 (
     echo   winget install Gyan.FFmpeg
     echo Atau download manual dari: https://www.gyan.dev/ffmpeg/builds/
     echo ------------------------------------------------------------------
-    set /p "CONT=Tetap lanjutkan membuka server? (y/n): "
+    set /p "CONT=Tetap lanjutkan membuka aplikasi? (y/n): "
     if /i "!CONT!" neq "y" (
         echo Dibatalkan oleh pengguna. Silakan pasang FFmpeg terlebih dahulu.
         pause
@@ -64,34 +67,31 @@ if not exist ".venv" (
 
 call .venv\Scripts\activate.bat
 
-:: 4. Install / Update Dependencies
+:: 4. Install / Update Dependencies (yt-dlp & pywebview)
 if exist "requirements.txt" (
     echo.
-    echo [2/3] Memeriksa & menginstall dependencies (yt-dlp)...
+    echo [2/3] Memeriksa ^& menginstall dependencies (yt-dlp ^& pywebview)...
     python -m pip install --quiet --upgrade pip
     python -m pip install --quiet -r requirements.txt
     if %ERRORLEVEL% neq 0 (
-        echo [PERINGATAN] Gagal memperbarui dependencies, mencoba tetap menjalankan server...
+        echo [PERINGATAN] Gagal memperbarui dependencies, mencoba tetap menjalankan aplikasi...
     ) else (
         echo [OK] Dependencies siap.
     )
 )
 
-:: 5. Jalankan Web UI & Buka Browser
+:: 5. Jalankan Desktop Application
 echo.
-echo [3/3] Membuka browser ke http://127.0.0.1:8765 ...
-start "" http://127.0.0.1:8765
-
+echo [3/3] Meluncurkan Jendela Desktop SWARARIA AUDIO LAB...
 echo ==================================================================
-echo   SWARARIA AUDIO LAB berjalan di http://127.0.0.1:8765
-echo   Tekan Ctrl+C di jendela ini untuk mematikan server.
+echo   SWARARIA AUDIO LAB Desktop App sedang berjalan.
+echo   Tutup jendela aplikasi (atau tekan Ctrl+C) untuk keluar.
 echo ==================================================================
 
-python web_ui.py
+python desktop_app.py
 
 if %ERRORLEVEL% neq 0 (
     echo.
-    echo Server terhenti dengan kode error: %ERRORLEVEL%
+    echo Aplikasi berhenti dengan kode error: %ERRORLEVEL%
     pause
 )
-

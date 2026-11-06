@@ -5,13 +5,46 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import string
 import subprocess
+import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
 import audio_manager
 
-BASE_DIR = Path(__file__).resolve().parent
+
+def _determine_app_dirs() -> tuple[Path, Path]:
+    """Returns (RESOURCE_DIR, BASE_DIR) supporting normal execution and PyInstaller frozen bundles."""
+    here = Path(__file__).resolve().parent
+    if getattr(sys, "frozen", False):
+        resource_dir = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent)).resolve()
+        exe_dir = Path(sys.executable).resolve().parent
+        candidates = [
+            exe_dir,
+            (Path.home() / "SwarariaAudioLab").resolve(),
+            here,
+            Path("/tmp/SwarariaAudioLab").resolve(),
+        ]
+        for cand in candidates:
+            try:
+                (cand / "library" / "inbox").mkdir(parents=True, exist_ok=True)
+                probe_file = cand / "library" / ".write_test"
+                probe_file.write_text("ok", encoding="utf-8")
+                probe_file.unlink(missing_ok=True)
+                return resource_dir, cand
+            except OSError:
+                continue
+        return resource_dir, exe_dir
+
+    try:
+        (here / "library" / "inbox").mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    return here, here
+
+
+RESOURCE_DIR, BASE_DIR = _determine_app_dirs()
 INBOX_DIR = BASE_DIR / "library" / "inbox"
 
 SKIP_SYSTEM_DIRS = {
@@ -43,22 +76,44 @@ ALLOWED_YOUTUBE_DOMAINS = (
 
 def get_allowed_roots() -> list[Path]:
     """Returns allowed base directories for local folder browsing and conversion."""
-    roots = [BASE_DIR.resolve(), Path.home().resolve(), Path("/tmp").resolve()]
-    for extra in ("/media", "/mnt", "/run/media"):
-        ep = Path(extra)
-        if ep.exists():
-            roots.append(ep.resolve())
+    roots = [BASE_DIR.resolve(), RESOURCE_DIR.resolve(), Path.home().resolve()]
+    if os.name == "nt":
+        for letter in string.ascii_uppercase:
+            drive_root = Path(f"{letter}:\\")
+            try:
+                if drive_root.exists():
+                    roots.append(drive_root.resolve())
+            except OSError:
+                pass
+    else:
+        for extra in ("/tmp", "/media", "/mnt", "/run/media", "/Volumes"):
+            ep = Path(extra)
+            try:
+                if ep.exists():
+                    roots.append(ep.resolve())
+            except OSError:
+                pass
     return roots
 
 
 def normalize_windows_or_wsl_path(raw_path: str) -> str:
-    """Translates Windows paths like 'C:\\Users\\...' or 'D:/Music' to WSL '/mnt/c/...'."""
+    """Normalizes paths across Native Windows, WSL (/mnt/<drive>), and POSIX systems."""
     cleaned = raw_path.strip().strip('"').strip("'")
+    if os.name == "nt":
+        mnt_match = re.match(r"^/mnt/([a-zA-Z])(?:/(.*))?$", cleaned)
+        if mnt_match:
+            drive = mnt_match.group(1).upper()
+            rest = (mnt_match.group(2) or "").replace("/", "\\")
+            return f"{drive}:\\{rest}" if rest else f"{drive}:\\"
+        return cleaned
+
     win_match = re.match(r"^([a-zA-Z]):(?:[\\/](.*))?$", cleaned)
     if win_match:
         drive = win_match.group(1).lower()
         rest = (win_match.group(2) or "").replace("\\", "/").strip("/")
-        return f"/mnt/{drive}/{rest}" if rest else f"/mnt/{drive}"
+        wsl_drive = Path(f"/mnt/{drive}")
+        if wsl_drive.exists():
+            return f"/mnt/{drive}/{rest}" if rest else f"/mnt/{drive}"
     return cleaned
 
 
@@ -107,14 +162,37 @@ def iter_audio_files_safe(root_dir: Path, allowed_exts: set[str] | None = None) 
 
 
 def get_windows_shortcuts(default_inbox: Path = INBOX_DIR) -> list[dict]:
-    """Builds quick-access shortcuts for WSL + Windows drives and the active Windows user folders."""
+    """Builds quick-access shortcuts for Native Windows, macOS, Linux, and WSL environments."""
+    home_dir = Path.home().resolve()
     shortcuts = [
         {"label": "📥 Inbox Proyek", "path": str(default_inbox.resolve())},
-        {"label": "🏠 WSL Home", "path": str(Path.home().resolve())},
+        {"label": "🏠 Home User" if os.name == "nt" else "🏠 WSL/Linux Home", "path": str(home_dir)},
     ]
-    wsl_music = Path.home() / "Music"
-    if wsl_music.is_dir():
-        shortcuts.append({"label": "🎵 WSL Music", "path": str(wsl_music.resolve())})
+
+    for sub_label, sub_name in (
+        ("🎵 Music", "Music"),
+        ("⬇️ Downloads", "Downloads"),
+        ("🖥️ Desktop", "Desktop"),
+    ):
+        sub_p = home_dir / sub_name
+        try:
+            if sub_p.is_dir():
+                shortcuts.append({"label": sub_label, "path": str(sub_p.resolve())})
+        except OSError:
+            pass
+
+    if os.name == "nt":
+        for letter in string.ascii_uppercase:
+            drive_p = Path(f"{letter}:\\")
+            try:
+                if drive_p.exists():
+                    shortcuts.append({
+                        "label": f"💽 Drive {letter}:",
+                        "path": str(drive_p.resolve()),
+                    })
+            except OSError:
+                pass
+        return shortcuts
 
     mnt_root = Path("/mnt")
     if mnt_root.is_dir():
@@ -188,7 +266,7 @@ def get_windows_shortcuts(default_inbox: Path = INBOX_DIR) -> list[dict]:
         except OSError:
             pass
 
-    for m_root in ("/media", "/run/media"):
+    for m_root in ("/media", "/run/media", "/Volumes"):
         mp = Path(m_root)
         if mp.is_dir():
             shortcuts.append({"label": f"💾 {m_root}", "path": str(mp.resolve())})
@@ -260,8 +338,11 @@ def validate_url(url_str: str) -> bool:
 
 
 def to_windows_path(linux_path: Path | str) -> str:
-    """Converts a Linux/WSL path to a Windows-compatible path (Drive or UNC)."""
+    """Converts a Linux/WSL path to a Windows-compatible path (or returns native Windows path)."""
     p_str = str(linux_path).strip()
+    if os.name == "nt":
+        return str(Path(p_str).resolve())
+
     wslpath_bin = shutil.which("wslpath")
     if wslpath_bin:
         try:
@@ -290,6 +371,14 @@ def open_in_file_manager(target_path: Path) -> tuple[bool, str]:
         return False, f"Jalur tidak ditemukan di sistem: {target_path}"
 
     win_path = to_windows_path(target_path)
+
+    # Native Windows fast path
+    if os.name == "nt" and target_path.is_dir() and hasattr(os, "startfile"):
+        try:
+            os.startfile(str(target_path))  # type: ignore[attr-defined]
+            return True, f"Membuka di Windows Explorer: {win_path}"
+        except Exception:
+            pass
 
     # 1. Search for explorer.exe or Windows launch binaries in PATH and standard locations
     explorer_candidates = [

@@ -18,13 +18,39 @@ import sys
 from pathlib import Path
 from typing import Callable
 
-_VENDOR_DIR = Path(__file__).resolve().parent / ".vendor"
-if _VENDOR_DIR.is_dir() and str(_VENDOR_DIR) not in sys.path:
-    sys.path.insert(0, str(_VENDOR_DIR))
-    os.environ["PYTHONPATH"] = str(_VENDOR_DIR) + (os.pathsep + os.environ.get("PYTHONPATH", "") if os.environ.get("PYTHONPATH") else "")
-    local_bin = _VENDOR_DIR / "bin"
-    if local_bin.is_dir():
-        os.environ["PATH"] = str(local_bin) + os.pathsep + os.environ.get("PATH", "")
+def _setup_bundled_environment() -> Path:
+    """Prepends bundled/vendored binary and module directories to PATH and sys.path."""
+    candidate_roots = [Path(__file__).resolve().parent]
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            candidate_roots.insert(0, Path(meipass).resolve())
+        exe_parent = Path(sys.executable).resolve().parent
+        if exe_parent not in candidate_roots:
+            candidate_roots.append(exe_parent)
+
+    primary_vendor = candidate_roots[0] / ".vendor"
+    for root in candidate_roots:
+        vendor = root / ".vendor"
+        if vendor.is_dir():
+            primary_vendor = vendor
+            if str(vendor) not in sys.path:
+                sys.path.insert(0, str(vendor))
+            os.environ["PYTHONPATH"] = str(vendor) + (
+                os.pathsep + os.environ["PYTHONPATH"] if os.environ.get("PYTHONPATH") else ""
+            )
+        for bin_dir in (root / ".vendor" / "bin", root / "bin", root):
+            if bin_dir.is_dir():
+                has_ff = (bin_dir / "ffmpeg").is_file() or (bin_dir / "ffmpeg.exe").is_file()
+                has_yt = (bin_dir / "yt-dlp").is_file() or (bin_dir / "yt-dlp.exe").is_file()
+                if has_ff or has_yt or bin_dir.name == "bin":
+                    current_path = os.environ.get("PATH", "")
+                    if str(bin_dir) not in current_path.split(os.pathsep):
+                        os.environ["PATH"] = str(bin_dir) + (os.pathsep + current_path if current_path else "")
+    return primary_vendor
+
+
+_VENDOR_DIR = _setup_bundled_environment()
 
 EXTENSIONS = {".mp3", ".m4a", ".aac", ".opus", ".ogg", ".webm", ".flac",
               ".wav", ".aif", ".aiff", ".mka", ".wma", ".alac"}
@@ -268,7 +294,22 @@ def _run_ytdlp_with_tier_log(cmd: list[str], env: dict[str, str] | None = None) 
     return run_ytdlp_process(cmd, env=env)["returncode"]
 
 
+def is_ytdlp_available() -> bool:
+    """Checks if yt-dlp is available either as a binary in PATH or as an importable Python module."""
+    if shutil.which("yt-dlp") is not None:
+        return True
+    try:
+        import yt_dlp  # noqa: F401
+        return True
+    except ImportError:
+        return (_VENDOR_DIR / "yt_dlp").is_dir()
+
+
 def require(program: str) -> None:
+    if program == "yt-dlp":
+        if not is_ytdlp_available():
+            raise RuntimeError("'yt-dlp' tidak ditemukan. Silakan install yt-dlp terlebih dahulu.")
+        return
     if shutil.which(program) is None:
         raise RuntimeError(f"'{program}' tidak ditemukan di PATH. Silakan install terlebih dahulu.")
 
@@ -534,11 +575,15 @@ def scan(args) -> int:
 
 
 def get_ytdlp_base_cmd() -> list[str]:
-    """Returns the base command to run yt-dlp, preferring system binary or vendored package."""
+    """Returns the base command to run yt-dlp, preferring system binary or bundled/vendored package."""
     if shutil.which("yt-dlp"):
         return ["yt-dlp"]
-    vendor_dir = Path(__file__).resolve().parent / ".vendor"
-    if (vendor_dir / "yt_dlp").is_dir():
+    try:
+        import yt_dlp  # noqa: F401
+        return [sys.executable, "-m", "yt_dlp"]
+    except ImportError:
+        pass
+    if (_VENDOR_DIR / "yt_dlp").is_dir():
         return [sys.executable, "-m", "yt_dlp"]
     return ["yt-dlp"]
 

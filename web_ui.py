@@ -20,9 +20,10 @@ import fs_browser
 import splitter_engine
 from task_engine import AudioMetadataCache, TaskQueueManager
 
-BASE_DIR = Path(__file__).resolve().parent
-STATIC_DIR = BASE_DIR / "static"
-INBOX_DIR = BASE_DIR / "library" / "inbox"
+BASE_DIR = fs_browser.BASE_DIR
+RESOURCE_DIR = fs_browser.RESOURCE_DIR
+STATIC_DIR = RESOURCE_DIR / "static"
+INBOX_DIR = fs_browser.INBOX_DIR
 ARCHIVE_FILE = BASE_DIR / "library" / "downloaded_ids.txt"
 COOKIES_FILE = BASE_DIR / "library" / "cookies.txt"
 
@@ -58,7 +59,7 @@ def check_system_binaries() -> dict:
     """Verifies available system binaries required for audio operations."""
     return {
         "python": sys.version.split()[0],
-        "yt_dlp": shutil.which("yt-dlp") is not None,
+        "yt_dlp": audio_manager.is_ytdlp_available(),
         "ffmpeg": shutil.which("ffmpeg") is not None,
         "ffprobe": shutil.which("ffprobe") is not None,
         "cookies_present": COOKIES_FILE.is_file(),
@@ -494,18 +495,47 @@ class AudioServerHandler(BaseHTTPRequestHandler):
         return metadata_cache.scan_library(INBOX_DIR)
 
 
+_worker_started = False
+_worker_lock = threading.Lock()
+
+
+def ensure_worker_started() -> None:
+    """Starts the background FIFO task worker thread once."""
+    global _worker_started
+    with _worker_lock:
+        if not _worker_started:
+            worker_thread = threading.Thread(target=run_worker, daemon=True)
+            worker_thread.start()
+            _worker_started = True
+
+
+def create_server(host: str = "127.0.0.1", port: int = 8765) -> tuple[ThreadingHTTPServer, int]:
+    """Starts the background worker and creates the HTTP server, falling back to a free port if needed."""
+    ensure_worker_started()
+    try:
+        server = ThreadingHTTPServer((host, port), AudioServerHandler)
+    except OSError:
+        server = ThreadingHTTPServer((host, 0), AudioServerHandler)
+    actual_port = int(server.server_address[1])
+    return server, actual_port
+
+
 def main():
+    if len(sys.argv) >= 3 and sys.argv[1] == "-m" and sys.argv[2] == "yt_dlp":
+        sys.argv = ["yt-dlp"] + sys.argv[3:]
+        import yt_dlp
+
+        yt_dlp.main()
+        return
+
     host = "127.0.0.1"  # Bound strictly to localhost for security
     port = 8765
 
-    worker_thread = threading.Thread(target=run_worker, daemon=True)
-    worker_thread.start()
-
-    server = ThreadingHTTPServer((host, port), AudioServerHandler)
+    server, actual_port = create_server(host, port)
     print("=" * 65)
     print("  SWARARIA AUDIO LAB // BATCH INGESTION & SOUNDSYSTEM QC ENGINE")
     print("=" * 65)
-    print(f"  Server running locally at: http://{host}:{port}")
+    print(f"  Server running locally at: http://{host}:{actual_port}")
     print(f"  Inbox Folder: {INBOX_DIR}")
     print("  Press Ctrl+C to stop.")
     print("=" * 65)

@@ -94,9 +94,13 @@ Untuk menghindari penumpukan tombol dan kebingungan kognitif (_cognitive overloa
 
 ```text
 audio-library-starter/
-├── run.bat                   # 1-Click Runner Script untuk Windows (Auto .venv, pip, verify FFmpeg & launch)
+├── desktop_app.py            # Launcher aplikasi desktop mandiri (pywebview Native Window + App-Mode fallback)
+├── build_desktop.py          # Script builder otomatis menuju aplikasi desktop portable (.exe / .app)
+├── SwarariaAudioLab.spec     # Konfigurasi bundling PyInstaller (menyertakan static/, yt-dlp, & FFmpeg)
+├── installer.iss             # Konfigurasi Inno Setup untuk membuat installer Windows (SwarariaAudioLab_Setup.exe)
+├── run.bat                   # 1-Click Runner Script untuk Windows (Auto .venv, pip, verify FFmpeg & launch Desktop)
 ├── run.sh                    # 1-Command Runner Script untuk Linux & macOS (Auto .venv, pip, verify FFmpeg & launch)
-├── requirements.txt          # Spesifikasi dependensi Python resmi (yt-dlp)
+├── requirements.txt          # Spesifikasi dependensi Python resmi (yt-dlp & pywebview)
 ├── audio_manager.py          # Engine inti FFmpeg: QC EBU R128, Spectral Analyzer, SoXR Resampler, Normalizer, & CLI
 ├── task_engine.py            # Worker antrian FIFO latar belakang, caching metadata/QC, & orkestrasi batch
 ├── fs_browser.py             # Operasi filesystem aman: rename, batch auto-number/clean, delete, & directory picker
@@ -131,20 +135,11 @@ audio-library-starter/
 
 ---
 
-## 5. Prasyarat & Instalasi
+## 5. Prasyarat, Instalasi & Packaging Desktop App
 
-### Kebutuhan Perangkat Lunak
+### A. Menjalankan Langsung dari Source Code (1-Klik)
 
-- **Sistem Operasi:** Linux (Ubuntu, Debian, Fedora, Arch, dsb.), Windows 10/11, atau macOS.
-- **Python:** Versi 3.10 atau lebih baru (saat instalasi di Windows, pastikan opsi _"Add Python to PATH"_ dicentang).
-- **FFmpeg & ffprobe:** Terpasang di `PATH` (dengan dukungan `libmp3lame`, `libopus`, `aresample=resampler=soxr`, dan filter `ebur128`/`loudnorm`).
-  - _Windows:_ `winget install Gyan.FFmpeg`
-  - _macOS:_ `brew install ffmpeg`
-  - _Linux:_ `sudo apt update && sudo apt install -y ffmpeg`
-
-### Cara Menjalankan di Laptop Lain (Best Practice 1-Klik)
-
-Proyek ini telah dilengkapi dengan script inisialisasi cerdas yang secara otomatis mengisolasi environment Python (`.venv`), memasang dependensi dari `requirements.txt`, memvalidasi FFmpeg, dan langsung membuka antarmuka web:
+Proyek ini telah dilengkapi dengan script inisialisasi cerdas yang secara otomatis mengisolasi environment Python (`.venv`), memasang dependensi dari `requirements.txt`, memvalidasi FFmpeg, dan meluncurkan jendela **Desktop App**:
 
 - **Di Windows:**
   Cukup klik ganda **`run.bat`** di File Explorer, atau ketik di Command Prompt/PowerShell:
@@ -154,20 +149,40 @@ Proyek ini telah dilengkapi dengan script inisialisasi cerdas yang secara otomat
 - **Di Linux / macOS:**
   Jalankan script bash di terminal:
   ```bash
-  ./run.sh
+  ./run.sh          # Meluncurkan Desktop App Window
+  ./run.sh --web    # Meluncurkan mode Web Server saja (127.0.0.1:8765)
   ```
 
-### Menjalankan Manual (Tanpa Script Runner)
+### B. Membuat Aplikasi Desktop Mandiri (`.exe` / Installer) untuk Orang Awam
 
-Jika ingin menjalankan tanpa script pembungkus:
+Agar pengguna akhir (Sound Engineer, DJ, Event Organizer) dapat menjalankan aplikasi **tanpa perlu menginstall Python maupun FFmpeg**, gunakan builder otomatis:
+
+1. **Jalankan Builder Otomatis:**
+   ```bash
+   python build_desktop.py --install-deps
+   ```
+   Script ini akan:
+   - Menyalin binary `ffmpeg` dan `ffprobe` ke dalam `.vendor/bin/`.
+   - Mengkompilasi seluruh aplikasi Python, `yt-dlp`, `pywebview`, dan aset `static/` menggunakan `SwarariaAudioLab.spec`.
+   - Menghasilkan folder aplikasi mandiri di **`dist/SwarariaAudioLab/`**.
+
+2. **Opsi Distribusi 1 — Portable ZIP:**
+   Kompres folder `dist/SwarariaAudioLab` menjadi `.zip`. Pengguna cukup mengekstrak dan klik 2x `SwarariaAudioLab.exe`.
+
+3. **Opsi Distribusi 2 — Windows Setup Installer (`SwarariaAudioLab_Setup.exe`):**
+   - Buka file **`installer.iss`** menggunakan [Inno Setup Compiler](https://jrsoftware.org/isdl.php).
+   - Klik **Build $\rightarrow$ Compile**.
+   - File installer tunggal `dist\SwarariaAudioLab_Setup.exe` siap dibagikan (lengkap dengan pembuatan shortcut Desktop, Start Menu, dan Uninstaller resmi).
+
+### C. Menjalankan Manual (Mode Developer)
 
 ```bash
 # 1. Pasang dependensi
 pip install -r requirements.txt
 
-# 2. Jalankan server
-python3 web_ui.py
-# (atau 'python web_ui.py' di Windows)
+# 2. Jalankan Desktop App ATAU Web Server
+python3 desktop_app.py   # Jendela Desktop Mandiri
+python3 web_ui.py        # Web Server Lokal (http://127.0.0.1:8765)
 ```
 
 ---

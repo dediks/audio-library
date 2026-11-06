@@ -37,38 +37,49 @@ Workstation lokal berbasis web & CLI untuk **Audio Engineer**, **Operator FOH / 
 
 ---
 
-## 🚀 Menjalankan Web Workstation (Cara 1-Klik / 1-Command)
+## 🚀 Menjalankan Aplikasi (Desktop App & Web Workstation)
 
-Untuk kemudahan pemindahan ke laptop lain, gunakan script otomatis yang akan membuat isolasi virtual environment (`.venv`), memasang dependensi dari `requirements.txt`, dan langsung membuka antarmuka web:
+Aplikasi ini dapat dijalankan dalam **2 mode**:
+1. **Desktop App Mode (`desktop_app.py`)**: Membuka jendela aplikasi desktop mandiri (*Native OS Window* via `pywebview` atau *Standalone App Window*).
+2. **Web Server Mode (`web_ui.py`)**: Menjalankan server lokal di `http://127.0.0.1:8765` untuk diakses lewat browser.
 
-### 🪟 Windows:
-Cukup **klik 2x file `run.bat`** (atau ketik di Command Prompt/PowerShell):
-```cmd
-run.bat
-```
-
-### 🍎 macOS & 🐧 Linux:
-Jalankan script di terminal:
-```bash
-./run.sh
-```
+### Cara 1-Klik (Otomatis Setup `.venv` + Dependencies + Buka Jendela Desktop):
+* **🪟 Windows**: Cukup **klik 2x file `run.bat`** (atau ketik `run.bat` di CMD/PowerShell).
+* **🍎 macOS & 🐧 Linux**: Jalankan `./run.sh` di terminal (atau `./run.sh --web` untuk mode browser saja).
 
 ---
 
-### Alternatif Manual (Jika Tidak Menggunakan Script):
+## 📦 Membuat Installer / Aplikasi Desktop Mandiri untuk Orang Awam (`.exe` / `.app`)
+
+Jika Anda ingin membagikan aplikasi ini ke **orang awam** agar mereka **tidak perlu menginstall Python maupun FFmpeg**, Anda dapat mem-build aplikasi ini menjadi paket Desktop Mandiri (*Standalone Executable*):
+
 ```bash
-# 1. Buat & aktifkan virtual environment (opsional tapi disarankan)
+# Otomatis menyalin FFmpeg/ffprobe ke dalam bundle & mem-build aplikasi dengan PyInstaller:
+python build_desktop.py --install-deps
+```
+
+Hasil build akan tersedia di folder **`dist/SwarariaAudioLab/`**:
+- **Windows**: Klik 2x `dist\SwarariaAudioLab\SwarariaAudioLab.exe` (langsung jalan tanpa perlu install Python/FFmpeg!).
+- **Membuat File Setup Installer (`SwarariaAudioLab_Setup.exe`)**:
+  Buka file **`installer.iss`** menggunakan [Inno Setup Compiler](https://jrsoftware.org/isdl.php) di Windows lalu klik **Compile**. Anda akan mendapatkan 1 file installer `dist\SwarariaAudioLab_Setup.exe` lengkap dengan shortcut Desktop & Start Menu!
+
+---
+
+### Alternatif Manual (Mode Developer):
+```bash
+# 1. Buat & aktifkan virtual environment
 python3 -m venv .venv
 source .venv/bin/activate       # Di Windows: .venv\Scripts\activate.bat
 
 # 2. Pasang dependensi
 pip install -r requirements.txt
 
-# 3. Jalankan server
-python3 web_ui.py               # Di Windows: python web_ui.py
+# 3. Jalankan sebagai Desktop App ATAU Web Server
+python3 desktop_app.py          # Mode Jendela Desktop
+python3 web_ui.py               # Mode Server Browser (http://127.0.0.1:8765)
 ```
 
-Buka di browser:
+Halaman Workstation:
 - **Stage 1 — Ingest**: `http://127.0.0.1:8765/`
 - **Stage 2 — QC & Spectral Lab**: `http://127.0.0.1:8765/qc`
 - **Stage 3 — Converter & Loudness**: `http://127.0.0.1:8765/converter`
