@@ -1,0 +1,4 @@
+# SWARARIA AUDIO LAB - Python Dependencies
+# Engine ekstraksi audio berizin (mendukung Smart Fallback, thumbnail, & metadata)
+yt-dlp[default]>=2024.0.0
+

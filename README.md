@@ -27,29 +27,45 @@ Workstation lokal berbasis web & CLI untuk **Audio Engineer**, **Operator FOH / 
 
 ---
 
-## 🛠️ Prasyarat & Instalasi
+## 🛠️ Prasyarat
 
-- **Python 3.10+**
+- **Python 3.10+** (Centang *"Add Python to PATH"* saat instalasi di Windows)
 - **FFmpeg & ffprobe** terpasang di `PATH`: https://ffmpeg.org/download.html
-- **yt-dlp** (opsional, untuk fitur Ingest):
-  ```bash
-  python3 -m pip install -U "yt-dlp[default]"
-  ```
+  - *Windows*: `winget install Gyan.FFmpeg`
+  - *macOS*: `brew install ffmpeg`
+  - *Linux (Ubuntu/Debian)*: `sudo apt update && sudo apt install -y ffmpeg`
 
-Periksa instalasi di terminal:
+---
+
+## 🚀 Menjalankan Web Workstation (Cara 1-Klik / 1-Command)
+
+Untuk kemudahan pemindahan ke laptop lain, gunakan script otomatis yang akan membuat isolasi virtual environment (`.venv`), memasang dependensi dari `requirements.txt`, dan langsung membuka antarmuka web:
+
+### 🪟 Windows:
+Cukup **klik 2x file `run.bat`** (atau ketik di Command Prompt/PowerShell):
+```cmd
+run.bat
+```
+
+### 🍎 macOS & 🐧 Linux:
+Jalankan script di terminal:
 ```bash
-python3 --version
-ffmpeg -version
-ffprobe -version
-yt-dlp --version
+./run.sh
 ```
 
 ---
 
-## 🚀 Menjalankan Web Workstation (`127.0.0.1:8765`)
-
+### Alternatif Manual (Jika Tidak Menggunakan Script):
 ```bash
-python3 web_ui.py
+# 1. Buat & aktifkan virtual environment (opsional tapi disarankan)
+python3 -m venv .venv
+source .venv/bin/activate       # Di Windows: .venv\Scripts\activate.bat
+
+# 2. Pasang dependensi
+pip install -r requirements.txt
+
+# 3. Jalankan server
+python3 web_ui.py               # Di Windows: python web_ui.py
 ```
 
 Buka di browser:
