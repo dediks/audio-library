@@ -39,7 +39,7 @@
       <div class="qc-kpi-card danger">
         <span class="qc-kpi-label">🔴 CLIPPING / FAKE HQ</span>
         <div class="qc-kpi-val" id="kpiDangerCount">0</div>
-        <span class="qc-kpi-sub">Peak &gt; 0 dBTP atau Spektrum Palsu (&lt;16 kHz)</span>
+        <span class="qc-kpi-sub">Peak &gt; 0 dBTP atau Fake HQ Spectrum (&lt;16 kHz)</span>
       </div>
     </section>
 
@@ -59,7 +59,7 @@
           </span>
           <div>
             <h2 id="qcLabHeading">2. Soundsystem QC &amp; Spectral Lab</h2>
-            <p class="panel-sub">Evaluasi True Peak (dBTP), Integrated Loudness (LUFS), Dynamic Range (LRA), dan keaslian spektrum frekuensi tinggi</p>
+            <p class="panel-sub">Evaluasi True Peak (dBTP), Integrated Loudness (LUFS), Dynamic Range (LRA), dan keaslian High-Frequency Spectrum</p>
           </div>
         </div>
 
@@ -67,14 +67,14 @@
           <button type="button" id="btnOpenExplorer" class="btn-secondary" title="Buka folder sumber di File Explorer">
             <span>📁 Explorer</span>
           </button>
-          <button type="button" id="btnProbeSpectral" class="btn-secondary" title="Pindai cepat Codec, Sample Rate, dan keaslian Spektrum 20 kHz">
+          <button type="button" id="btnProbeSpectral" class="btn-secondary" title="Fast Probe untuk Codec, Sample Rate, dan 20 kHz Frequency Spectrum">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
               <circle cx="11" cy="11" r="8"></circle>
               <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
             </svg>
-            <span id="btnProbeSpectralText">Cek Cepat Spektrum</span>
+            <span id="btnProbeSpectralText">Fast Spectrum Probe</span>
           </button>
-          <button type="button" id="btnAuditAll" class="btn-accent" title="Hitung EBU R128 LUFS, LRA, True Peak dBTP, dan Spektrum untuk seluruh lagu">
+          <button type="button" id="btnAuditAll" class="btn-accent" title="Hitung EBU R128 LUFS, LRA, True Peak dBTP, dan Frequency Spectrum untuk seluruh tracks">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
               <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
             </svg>
@@ -155,14 +155,14 @@
               <th scope="col" class="col-check">
                 <input type="checkbox" id="chkSelectAllVisible" title="Pilih semua lagu yang tampil">
               </th>
-              <th scope="col">Nama File Audio</th>
+              <th scope="col">Audio Track</th>
               <th scope="col">Codec &amp; Bitrate</th>
-              <th scope="col">Spektrum Frekuensi</th>
+              <th scope="col">Frequency Spectrum</th>
               <th scope="col">Sample Rate</th>
               <th scope="col">True Peak (dBTP)</th>
               <th scope="col">Integrated LUFS</th>
               <th scope="col">LRA (LU)</th>
-              <th scope="col">Status Soundsystem</th>
+              <th scope="col">FOH Status</th>
             </tr>
           </thead>
           <tbody id="qcTableBody">
@@ -175,11 +175,11 @@
 
       <!-- Acoustic Engineering Legend -->
       <div class="audio-legend-card">
-        <h4 class="legend-title">Panduan Standar Akustik FOH &amp; Spektrum:</h4>
+        <h4 class="legend-title">Panduan Standar FOH Headroom &amp; Frequency Spectrum:</h4>
         <div class="legend-grid">
           <div class="legend-item">
             <span class="legend-badge badge-safe">READY FOR FOH</span>
-            <p>True Peak &le; -1.0 dBTP &amp; Spektrum 20 kHz utuh. Aman dari distorsi inter-sample DAC di panggung besar.</p>
+            <p>True Peak &le; -1.0 dBTP &amp; 20 kHz Full-Range Spectrum. Aman dari inter-sample DAC clipping di panggung besar.</p>
           </div>
           <div class="legend-item">
             <span class="legend-badge badge-warning">TRIM PREAMP</span>

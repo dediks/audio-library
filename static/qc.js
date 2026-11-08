@@ -561,8 +561,8 @@ document.addEventListener('DOMContentLoaded', () => {
   if (btnProbeSpectral) {
     btnProbeSpectral.addEventListener('click', async () => {
       btnProbeSpectral.disabled = true;
-      if (btnProbeSpectralText) btnProbeSpectralText.textContent = 'Memindai Spektrum...';
-      if (qcStatusHint) qcStatusHint.textContent = 'Menganalisis frekuensi tinggi 16 kHz / 20 kHz...';
+      if (btnProbeSpectralText) btnProbeSpectralText.textContent = 'Probing Spectrum...';
+      if (qcStatusHint) qcStatusHint.textContent = 'Analyzing 16 kHz / 20 kHz high-frequency spectrum...';
       try {
         const payload = { probe_spectral: true };
         if (activePlaylist !== 'ALL') payload.folder = activePlaylist;
@@ -577,22 +577,22 @@ document.addEventListener('DOMContentLoaded', () => {
           applyFiltersAndRenderTable();
           notify({
             type: 'success',
-            title: 'Spektrum Frekuensi Diperbarui',
-            message: `Berhasil memeriksa keaslian spektrum pada ${visibleFiles.length} lagu.`,
+            title: 'Frequency Spectrum Updated',
+            message: `Berhasil memeriksa High-Frequency Spectrum pada ${visibleFiles.length} tracks.`,
             duration: 3800,
           });
         } else {
           notify({
             type: 'error',
-            title: 'Gagal Memindai Spektrum',
-            message: error || 'Terjadi kesalahan saat memindai spektrum.',
+            title: 'Spectrum Probe Failed',
+            message: error || 'Terjadi kesalahan saat menganalisis Frequency Spectrum.',
             playSound: true,
           });
         }
       } finally {
         btnProbeSpectral.disabled = false;
-        if (btnProbeSpectralText) btnProbeSpectralText.textContent = 'Cek Cepat Spektrum';
-        if (qcStatusHint) qcStatusHint.textContent = 'Pilih lagu di tabel lalu kirim ke Normalizer atau Tag Organizer';
+        if (btnProbeSpectralText) btnProbeSpectralText.textContent = 'Fast Spectrum Probe';
+        if (qcStatusHint) qcStatusHint.textContent = 'Pilih track di tabel lalu kirim ke Normalizer atau Tag Organizer';
       }
     });
   }
@@ -603,8 +603,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (isAuditRunning) return;
       isAuditRunning = true;
       btnAuditAll.disabled = true;
-      if (btnAuditAllText) btnAuditAllText.textContent = 'Mengaudit EBU R128...';
-      if (qcStatusHint) qcStatusHint.textContent = 'Menghitung True Peak (dBTP), LUFS, LRA, dan Spektrum...';
+      if (btnAuditAllText) btnAuditAllText.textContent = 'Auditing EBU R128...';
+      if (qcStatusHint) qcStatusHint.textContent = 'Calculating True Peak (dBTP), LUFS, LRA, and Frequency Spectrum...';
 
       const { ok, data, error } = await apiPost('/api/scan', {
         source_dir: currentSourceDir || null,
@@ -645,8 +645,8 @@ document.addEventListener('DOMContentLoaded', () => {
           await fetchLibrary();
           notify({
             type: 'success',
-            title: 'Audit QC Soundsystem Selesai',
-            message: 'Seluruh nilai True Peak (dBTP), LUFS, dan Spektrum berhasil diperbarui.',
+            title: 'FOH QC Audit Complete',
+            message: 'Seluruh nilai True Peak (dBTP), LUFS, dan Frequency Spectrum berhasil diperbarui.',
             playSound: true,
           });
         }

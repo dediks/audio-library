@@ -65,13 +65,13 @@ export function groupFiles(files, mode = 'folder') {
     } else if (mode === 'rate') {
       const sr = f.qc && f.qc.sample_rate_hz ? String(f.qc.sample_rate_hz) : '';
       key = `rate::${sr || 'unprobed'}`;
-      if (sr === '48000') label = '48.0 kHz (48000 Hz — Standar FOH / Native)';
-      else if (sr === '44100') label = '44.1 kHz (44100 Hz — Standar CDJ / USB)';
+      if (sr === '48000') label = '48.0 kHz (48000 Hz — FOH / Native Standard)';
+      else if (sr === '44100') label = '44.1 kHz (44100 Hz — CDJ / Red Book Standard)';
       else if (sr) label = `Sample Rate ${sr} Hz`;
-      else label = 'Sample Rate Belum Dipindai';
+      else label = 'Sample Rate Unprobed';
     } else {
       key = folder || '__ROOT__';
-      label = folder ? folder : 'File di Root (Inbox)';
+      label = folder ? folder : 'Root (Inbox)';
       isRoot = !folder;
     }
 
@@ -170,7 +170,7 @@ export function createGroupHeaderBar(group, isCollapsed, opts = {}) {
 
   const countPill = document.createElement('span');
   countPill.className = 'group-meta-pill';
-  countPill.textContent = `${group.files.length} lagu • ${group.totalSizeMb} MB`;
+  countPill.textContent = `${group.files.length} tracks • ${group.totalSizeMb} MB`;
   left.appendChild(countPill);
 
   if (group.extSummary) {

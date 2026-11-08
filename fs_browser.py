@@ -863,4 +863,52 @@ def batch_rename_entries(
     return True, msg, plan
 
 
+AUDIO_MIME_TYPES: dict[str, str] = {
+    ".opus": "audio/ogg",
+    ".ogg": "audio/ogg",
+    ".webm": "audio/webm",
+    ".mp3": "audio/mpeg",
+    ".m4a": "audio/mp4",
+    ".wav": "audio/wav",
+    ".flac": "audio/flac",
+}
+
+
+def resolve_safe_audio_file(
+    raw_source_dir: str | None,
+    rel_path: str | None,
+    default_inbox: Path = INBOX_DIR,
+) -> tuple[Path, str]:
+    """Strictly validates and resolves a local audio file within source_dir for playback streaming."""
+    if not rel_path or not isinstance(rel_path, str) or not rel_path.strip():
+        raise ValueError("Jalur file audio tidak boleh kosong.")
+
+    source_dir = resolve_safe_dir(raw_source_dir, default_inbox, must_exist=True)
+    clean_rel = rel_path.strip().replace("\\", "/").lstrip("/")
+    if not clean_rel or clean_rel in (".", ".."):
+        raise ValueError("Jalur file audio tidak valid.")
+
+    target_path = (source_dir / clean_rel).resolve()
+    if not target_path.is_relative_to(source_dir) or target_path == source_dir:
+        raise ValueError("Akses jalur file ditolak (di luar batas direktori sumber).")
+
+    rel_parts = target_path.relative_to(source_dir).parts
+    if any(part in (".", "..") or part.startswith(".") or part.startswith("$") or part in SKIP_SYSTEM_DIRS for part in rel_parts):
+        raise ValueError("Tidak diizinkan mengakses file sistem atau tersembunyi.")
+
+    if target_path.is_symlink():
+        raise ValueError("Tidak diizinkan memutar symbolic link.")
+
+    if not target_path.is_file():
+        raise FileNotFoundError(f"File audio tidak ditemukan: {clean_rel}")
+
+    ext = target_path.suffix.lower()
+    if ext not in audio_manager.EXTENSIONS:
+        raise ValueError(f"Format file '{ext}' tidak didukung untuk pemutaran audio.")
+
+    mime_type = AUDIO_MIME_TYPES.get(ext, "application/octet-stream")
+    return target_path, mime_type
+
+
+
 

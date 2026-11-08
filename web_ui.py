@@ -85,6 +85,7 @@ class AudioServerHandler(BaseHTTPRequestHandler):
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
             "font-src 'self' https://fonts.gstatic.com; "
             "img-src 'self' data:; "
+            "media-src 'self' blob:; "
             "connect-src 'self'; "
             "frame-ancestors 'none';",
         )
@@ -105,6 +106,8 @@ class AudioServerHandler(BaseHTTPRequestHandler):
             self.serve_file(STATIC_DIR / "multitrack.html", "text/html; charset=utf-8")
         elif path in ("/video-split", "/video-split.html", "/videosplit", "/videosplit.html"):
             self.serve_file(STATIC_DIR / "video-split.html", "text/html; charset=utf-8")
+        elif path in ("/player", "/player.html"):
+            self.serve_file(STATIC_DIR / "player.html", "text/html; charset=utf-8")
         elif path.startswith("/static/"):
             rel_path = path[len("/static/"):]
             safe_file = (STATIC_DIR / rel_path).resolve()
@@ -135,6 +138,17 @@ class AudioServerHandler(BaseHTTPRequestHandler):
                     "source_dir": str(src_dir),
                     "default_inbox": str(INBOX_DIR.resolve()),
                 })
+            except Exception as exc:
+                self.send_json(400, {"error": str(exc)})
+        elif path == "/api/stream":
+            qs = parse_qs(parsed.query)
+            raw_src = qs.get("source_dir", [None])[0]
+            rel_path = qs.get("rel_path", [None])[0]
+            try:
+                target_file, mime_type = fs_browser.resolve_safe_audio_file(raw_src, rel_path, INBOX_DIR)
+                self.serve_audio_stream(target_file, mime_type)
+            except FileNotFoundError as exc:
+                self.send_json(404, {"error": str(exc)})
             except Exception as exc:
                 self.send_json(400, {"error": str(exc)})
         else:
@@ -479,6 +493,74 @@ class AudioServerHandler(BaseHTTPRequestHandler):
             self.wfile.write(content)
         except Exception as exc:
             self.send_error(500, f"Error reading file: {exc}")
+
+    def serve_audio_stream(self, file_path: Path, content_type: str):
+        """Streams an audio file with HTTP Range (206 Partial Content) support for instant seeking."""
+        try:
+            file_size = file_path.stat().st_size
+        except OSError:
+            self.send_error(404, "Audio file not found")
+            return
+
+        range_header = self.headers.get("Range")
+        start = 0
+        end = max(0, file_size - 1)
+        is_partial = False
+
+        if range_header and range_header.strip().startswith("bytes=") and file_size > 0:
+            raw_range = range_header.strip()[len("bytes="):].split(",")[0].strip()
+            if "-" in raw_range:
+                start_str, end_str = raw_range.split("-", 1)
+                try:
+                    if start_str == "":
+                        suffix_len = int(end_str)
+                        start = max(0, file_size - suffix_len)
+                        end = file_size - 1
+                    else:
+                        start = int(start_str)
+                        end = int(end_str) if end_str else (file_size - 1)
+                    if 0 <= start <= end < file_size:
+                        is_partial = True
+                    else:
+                        self.send_response(416)
+                        self.send_security_headers(content_type)
+                        self.send_header("Content-Range", f"bytes */{file_size}")
+                        self.end_headers()
+                        return
+                except ValueError:
+                    is_partial = False
+
+        content_length = (end - start + 1) if file_size > 0 else 0
+        try:
+            with open(file_path, "rb") as f:
+                if is_partial:
+                    self.send_response(206)
+                    self.send_security_headers(content_type)
+                    self.send_header("Accept-Ranges", "bytes")
+                    self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
+                    self.send_header("Content-Length", str(content_length))
+                    self.end_headers()
+                    f.seek(start)
+                else:
+                    self.send_response(200)
+                    self.send_security_headers(content_type)
+                    self.send_header("Accept-Ranges", "bytes")
+                    self.send_header("Content-Length", str(file_size))
+                    self.end_headers()
+
+                remaining = content_length
+                chunk_size = 65536
+                while remaining > 0:
+                    chunk = f.read(min(chunk_size, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            # Normal when browser/WebView seeks or switches tracks mid-stream
+            return
+        except Exception as exc:
+            sys.stderr.write(f"[Stream Error] {exc}\n")
 
     def send_json(self, status: int, data: dict):
         body = json.dumps(data).encode("utf-8")

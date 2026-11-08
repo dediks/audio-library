@@ -61,7 +61,7 @@ document.addEventListener('DOMContentLoaded', () => {
           noticeCode.textContent = 'python3 -m pip install -U "yt-dlp[default]"';
         } else if (!data.ffmpeg) {
           noticeTitle.textContent = 'FFmpeg Diperlukan untuk QC True Peak & EBU R128';
-          noticeDesc.textContent = 'Pasang FFmpeg agar sistem dapat mengaudit headroom True Peak dan spektrum:';
+          noticeDesc.textContent = 'Pasang FFmpeg agar sistem dapat mengaudit headroom True Peak (dBTP) dan Frequency Spectrum:';
           noticeCode.textContent = 'sudo apt-get install ffmpeg  # atau download static binary';
         }
       } else {

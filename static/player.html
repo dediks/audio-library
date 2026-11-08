@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="SWARARIA AUDIO LAB - Stage 7: FOH Live Player, Soundcheck RTA & Instant Cue Deck">
+  <title>SWARARIA AUDIO LAB // 7. FOH Live Player &amp; Cue Deck</title>
+  <link rel="icon" type="image/jpeg" href="/static/swararia-logo.jpg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/converter.css">
+  <link rel="stylesheet" href="/static/player.css">
+</head>
+<body class="dark-theme">
+  <header class="app-header" id="appHeader" data-page="player"></header>
+
+  <main class="app-container player-page-stack">
+    <!-- Top FOH Console Grid: Left = Transport & Timecode Deck, Right = RTA Analyzer & DSP Rack -->
+    <div class="player-console-grid">
+      <!-- Left Deck: Master Transport, Unified OLED Display & Cue Mode -->
+      <section class="console-card player-transport-card" aria-labelledby="transportHeading">
+        <div class="panel-header player-card-header">
+          <div class="panel-title-wrap">
+            <span class="icon-chip accent-cyan">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polygon points="5 3 19 12 5 21 5 3"></polygon>
+              </svg>
+            </span>
+            <div>
+              <h2 id="transportHeading">FOH Master Transport</h2>
+              <p class="panel-sub">High-precision stage playback control dengan Auto-Stop Cue &amp; Smooth Fade-Out</p>
+            </div>
+          </div>
+          <div class="transport-status-badges">
+            <span class="foh-state-pill standby" id="playerStateBadge">STANDBY</span>
+            <span class="panel-badge" id="activePlayModeBadge">CUE (AUTO-STOP)</span>
+          </div>
+        </div>
+
+        <!-- Unified Studio OLED Display (Track Info + QC Pill + Digital Timecode + Seekbar) -->
+        <div class="foh-deck-screen" id="nowPlayingBox">
+          <div class="now-playing-top">
+            <span class="now-playing-index" id="nowPlayingIndex">--</span>
+            <div class="now-playing-title-wrap">
+              <div class="now-playing-header-line">
+                <h3 class="now-playing-title" id="nowPlayingTitle">Select a track from Setlist or Cue Pad</h3>
+                <div class="now-playing-qc-banner neutral" id="nowPlayingQcBanner">
+                  <span id="nowPlayingQcText">Ready to Cue</span>
+                </div>
+              </div>
+              <div class="now-playing-meta-row" id="nowPlayingMetaRow">
+                <span class="meta-chip">No track loaded</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Digital Timecode Readout (Elapsed + Remaining Countdown + Total) -->
+          <div class="timecode-grid" aria-label="Playback Timecode Readout">
+            <div class="timecode-box">
+              <span class="timecode-label">ELAPSED</span>
+              <div class="timecode-val elapsed" id="timeElapsed">00:00.0</div>
+            </div>
+            <div class="timecode-box countdown-box" id="countdownBox">
+              <span class="timecode-label">REMAINING</span>
+              <div class="timecode-val remaining" id="timeRemaining">-00:00.0</div>
+            </div>
+            <div class="timecode-box">
+              <span class="timecode-label">DURATION</span>
+              <div class="timecode-val duration" id="timeDuration">00:00.0</div>
+            </div>
+          </div>
+
+          <!-- Precision Seekbar & Nudge Strip -->
+          <div class="seekbar-section">
+            <input
+              type="range"
+              id="seekSlider"
+              class="foh-seek-slider"
+              min="0"
+              max="1000"
+              step="1"
+              value="0"
+              aria-label="Track Seekbar"
+              disabled
+            >
+            <div class="seek-nudge-row">
+              <div class="seek-nudge-btns">
+                <button type="button" id="btnCueZero" class="btn-nudge" title="Return to 00:00.0 Cue Point">00:00</button>
+                <button type="button" id="btnSeekBack10" class="btn-nudge" title="Seek Back -10s">-10s</button>
+                <button type="button" id="btnSeekBack5" class="btn-nudge" title="Seek Back -5s">-5s</button>
+                <button type="button" id="btnSeekFwd5" class="btn-nudge" title="Seek Forward +5s">+5s</button>
+                <button type="button" id="btnSeekFwd10" class="btn-nudge" title="Seek Forward +10s">+10s</button>
+              </div>
+              <span class="next-cue-hint" id="nextCueHint">Next: —</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Primary Hardware-Style Transport Buttons -->
+        <div class="foh-transport-controls">
+          <button type="button" id="btnPrevTrack" class="btn-transport" title="Previous Track">
+            <span>|&#9664; Prev</span>
+          </button>
+          <button type="button" id="btnPlayPause" class="btn-transport btn-transport-play" title="Play / Pause [Shortcut: Space]">
+            <span id="btnPlayPauseText">&#9654; PLAY CUE</span>
+          </button>
+          <button type="button" id="btnStopReset" class="btn-transport btn-transport-stop" title="Stop &amp; Reset to 00:00.0 Cue Point [Shortcut: S]">
+            <span>&#9632; STOP</span>
+          </button>
+          <button type="button" id="btnNextTrack" class="btn-transport" title="Next Track">
+            <span>Next &#9654;|</span>
+          </button>
+          <button type="button" id="btnFadeOut3" class="btn-transport btn-transport-fade" title="Smooth 3s Fade-Out to Pause [Shortcut: F]">
+            <span>Fade 3s</span>
+          </button>
+          <button type="button" id="btnFadeOut5" class="btn-transport btn-transport-fade" title="Smooth 5s Fade-Out to Pause">
+            <span>Fade 5s</span>
+          </button>
+        </div>
+
+        <!-- Play Mode Segmented Bar & Keyboard Shortcuts -->
+        <div class="play-mode-strip" role="group" aria-label="Playback Mode">
+          <div class="play-mode-buttons">
+            <button type="button" class="btn-mode active" id="modeBtnCue" data-mode="cue" title="Auto-Stop after 1 track finishes (Stage Cue Mode)">
+              Cue (Auto-Stop)
+            </button>
+            <button type="button" class="btn-mode" id="modeBtnContinuous" data-mode="continuous" title="Auto-advance to next track (BGM Continuous Playback)">
+              BGM (Auto-Next)
+            </button>
+            <button type="button" class="btn-mode" id="modeBtnLoop" data-mode="loop" title="Repeat current track continuously (Loop 1 Track)">
+              Loop 1 Track
+            </button>
+          </div>
+          <div class="shortcut-hint-row" aria-label="Keyboard Hotkeys">
+            <span><kbd>Space</kbd> Play</span>
+            <span><kbd>S</kbd> Stop</span>
+            <span><kbd>F</kbd> Fade</span>
+            <span><kbd>1-8</kbd> Pad</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right Deck: Real-Time RTA Analyzer, Master Faders & Tabbed DSP Rack -->
+      <section class="console-card player-dsp-card" aria-labelledby="dspHeading">
+        <div class="panel-header player-card-header">
+          <div class="panel-title-wrap">
+            <span class="icon-chip accent-amber">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M2 10v3"></path>
+                <path d="M6 6v11"></path>
+                <path d="M10 3v18"></path>
+                <path d="M14 8v7"></path>
+                <path d="M18 5v13"></path>
+                <path d="M22 10v3"></path>
+              </svg>
+            </span>
+            <div>
+              <h2 id="dspHeading">Real-Time RTA &amp; Master Section</h2>
+              <p class="panel-sub">Real-time Frequency Spectrum, Stereo Output Metering &amp; DSP Rack</p>
+            </div>
+          </div>
+          <div class="meter-header-stats">
+            <span class="mono-stat peak-readout" id="meterPeakText">PEAK: -&#8734; dBFS</span>
+            <button type="button" id="btnResetPeak" class="btn-nudge" title="Reset Peak Hold Readout">Reset</button>
+          </div>
+        </div>
+
+        <!-- RTA Spectrum Canvas + L/R Stereo VU Bars -->
+        <div class="rta-visualizer-wrap">
+          <canvas id="rtaCanvas" width="600" height="140" aria-label="Real-Time Spectrum Analyzer &amp; L/R Meter"></canvas>
+          <div class="rta-freq-scale">
+            <span>31Hz</span>
+            <span>63Hz</span>
+            <span>125Hz</span>
+            <span>250Hz</span>
+            <span>500Hz</span>
+            <span>1kHz</span>
+            <span>2kHz</span>
+            <span>4kHz</span>
+            <span>8kHz</span>
+            <span>16kHz</span>
+            <span>L / R</span>
+          </div>
+        </div>
+
+        <!-- Primary Gain Controls: Master Volume + Digital Preamp Trim -->
+        <div class="gain-controls-grid">
+          <div class="fader-box">
+            <div class="fader-label-row">
+              <label for="volumeSlider">Master Fader</label>
+              <div class="fader-right-meta">
+                <span class="mono-stat fader-val" id="volumeValText">100%</span>
+                <button type="button" id="btnMute" class="btn-nudge">Mute</button>
+              </div>
+            </div>
+            <input type="range" id="volumeSlider" class="foh-fader" min="0" max="100" step="1" value="100">
+          </div>
+
+          <div class="fader-box">
+            <div class="fader-label-row">
+              <label for="preampSlider">Preamp Trim</label>
+              <div class="fader-right-meta">
+                <span class="mono-stat fader-val" id="preampValText">0.0 dB</span>
+                <button type="button" id="btnResetPreamp" class="btn-nudge">0 dB</button>
+              </div>
+            </div>
+            <input type="range" id="preampSlider" class="foh-fader" min="-12" max="6" step="0.5" value="0">
+          </div>
+        </div>
+
+        <!-- Clean Studio Collapsible DSP Rack (3-Band EQ | Phase Matrix | Output & Auto-Trim) -->
+        <div class="dsp-rack-container">
+          <div class="dsp-rack-tabs" role="tablist" aria-label="DSP Rack &amp; Signal Routing">
+            <button type="button" class="dsp-rack-tab active" data-dsp-tab="eq" role="tab" aria-selected="true">
+              <span class="dsp-tab-name">3-Band EQ</span>
+              <span class="dsp-tab-badge" id="eqTabBadge">Flat</span>
+            </button>
+            <button type="button" class="dsp-rack-tab" data-dsp-tab="routing" role="tab" aria-selected="false">
+              <span class="dsp-tab-name">Phase &amp; Matrix</span>
+              <span class="dsp-tab-badge" id="routingStatusLabel">Stereo</span>
+            </button>
+            <button type="button" class="dsp-rack-tab" data-dsp-tab="output" role="tab" aria-selected="false">
+              <span class="dsp-tab-name">Auto-Trim &amp; Output</span>
+              <span class="dsp-tab-badge accent" id="outputTabBadge">Auto -14 LUFS</span>
+            </button>
+          </div>
+
+          <div class="dsp-rack-body" id="dspRackBody">
+            <!-- Tab Pane 1: 3-Band Tone EQ -->
+            <div class="dsp-rack-pane" id="dspPaneEq" data-dsp-pane="eq">
+              <div class="eq-strip">
+                <div class="eq-knob-group">
+                  <div class="eq-label-row">
+                    <label for="eqLowSlider">LOW 80Hz</label>
+                    <span id="eqLowVal">0 dB</span>
+                  </div>
+                  <input type="range" id="eqLowSlider" class="foh-fader eq-slider" min="-12" max="6" step="0.5" value="0">
+                </div>
+                <div class="eq-knob-group">
+                  <div class="eq-label-row">
+                    <label for="eqMidSlider">MID 1kHz</label>
+                    <span id="eqMidVal">0 dB</span>
+                  </div>
+                  <input type="range" id="eqMidSlider" class="foh-fader eq-slider" min="-12" max="6" step="0.5" value="0">
+                </div>
+                <div class="eq-knob-group">
+                  <div class="eq-label-row">
+                    <label for="eqHighSlider">HIGH 10kHz</label>
+                    <span id="eqHighVal">0 dB</span>
+                  </div>
+                  <input type="range" id="eqHighSlider" class="foh-fader eq-slider" min="-12" max="6" step="0.5" value="0">
+                </div>
+                <button type="button" id="btnResetEq" class="btn-nudge eq-reset-btn" title="Reset 3-Band EQ to Flat (0 dB)">Flat EQ</button>
+              </div>
+            </div>
+
+            <!-- Tab Pane 2: Channel Routing & Phase Matrix -->
+            <div class="dsp-rack-pane hidden" id="dspPaneRouting" data-dsp-pane="routing">
+              <div class="routing-btn-grid">
+                <button type="button" class="btn-route active" data-route="stereo" title="Normal Stereo L/R Output">
+                  Stereo (L/R)
+                </button>
+                <button type="button" class="btn-route" data-route="mono" title="Sum L+R to Mono on both channels (Subwoofer / Mono PA Phase Check)">
+                  Mono Sum (L+R)
+                </button>
+                <button type="button" class="btn-route" data-route="left" title="Solo Left Channel Only">
+                  Left Only
+                </button>
+                <button type="button" class="btn-route" data-route="right" title="Solo Right Channel Only">
+                  Right Only
+                </button>
+                <button type="button" class="btn-route" data-route="invert" title="Invert Right Channel 180° Polarity (Phase Cancellation Check)">
+                  &#216; Phase 180&#176;
+                </button>
+              </div>
+            </div>
+
+            <!-- Tab Pane 3: Auto-Trim Headroom & Audio Output Device -->
+            <div class="dsp-rack-pane hidden" id="dspPaneOutput" data-dsp-pane="output">
+              <div class="autotrim-output-strip">
+                <label class="autotrim-check-wrap" title="Automatically adjust Digital Preamp Trim based on True Peak (dBTP) &amp; Integrated LUFS to prevent clipping">
+                  <input type="checkbox" id="chkAutoTrim" checked>
+                  <span>Auto-Trim Headroom (-14 LUFS / -1.0 dBTP)</span>
+                </label>
+
+                <div class="output-device-row">
+                  <label for="outputDeviceSelect" class="output-device-label">Output:</label>
+                  <select id="outputDeviceSelect" class="toolbar-select output-device-select">
+                    <option value="">Default System Audio</option>
+                  </select>
+                  <button type="button" id="btnRefreshDevices" class="btn-nudge" title="Refresh Audio Output Devices">Refresh</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Middle Card: Collapsible 8 Instant FOH Cue Pads (Hotkeys 1 - 8) -->
+    <section class="console-card cue-pads-card" id="cuePadsCard" aria-labelledby="cuePadsHeading">
+      <div class="cue-pads-bar">
+        <div class="cue-pads-title-group">
+          <span class="icon-chip">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="7" height="7"></rect>
+              <rect x="14" y="3" width="7" height="7"></rect>
+              <rect x="14" y="14" width="7" height="7"></rect>
+              <rect x="3" y="14" width="7" height="7"></rect>
+            </svg>
+          </span>
+          <div class="cue-pads-heading-inline">
+            <h2 id="cuePadsHeading">Instant Cue Pads</h2>
+            <span class="cue-pads-count-badge" id="cuePadsCountBadge">0 / 8 Assigned</span>
+            <span class="cue-pads-hint-text">Hotkeys 1 – 8 untuk Instant Cue, Jingle, Bumper &amp; Reference Tracks</span>
+          </div>
+        </div>
+        <div class="library-actions">
+          <button type="button" id="btnAssignCurrentToPad" class="btn-secondary btn-sm" title="Assign active track to next empty Cue Pad slot">
+            <span>+ Assign Active Track</span>
+          </button>
+          <button type="button" id="btnClearAllPads" class="btn-nudge" title="Clear all Cue Pad slots 1–8">
+            <span>Reset</span>
+          </button>
+          <button type="button" id="btnToggleCuePads" class="btn-nudge" aria-expanded="true" title="Collapse or expand Instant Cue Pads">
+            <span id="btnToggleCuePadsText">Hide Pads</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="cue-pads-body" id="cuePadsBody">
+        <div class="cue-pads-grid" id="cuePadsGrid" aria-label="8 Instant Cue Pads"></div>
+      </div>
+    </section>
+
+    <!-- Bottom Card: Setlist & Library Browser Table -->
+    <section class="console-card library-panel" aria-labelledby="setlistHeading">
+      <div class="panel-header player-card-header">
+        <div class="panel-title-wrap">
+          <span class="icon-chip accent-cyan">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="8" y1="6" x2="21" y2="6"></line>
+              <line x1="8" y1="12" x2="21" y2="12"></line>
+              <line x1="8" y1="18" x2="21" y2="18"></line>
+              <line x1="3" y1="6" x2="3.01" y2="6"></line>
+              <line x1="3" y1="12" x2="3.01" y2="12"></line>
+              <line x1="3" y1="18" x2="3.01" y2="18"></line>
+            </svg>
+          </span>
+          <div>
+            <h2 id="setlistHeading">FOH Setlist &amp; Audio Library</h2>
+            <p class="panel-sub">Klik Play untuk instant playback, Cue untuk standby di 00:00.0, atau +Pad untuk assign ke Hotkey Pad</p>
+          </div>
+        </div>
+
+        <div class="library-actions">
+          <button type="button" id="btnOpenExplorer" class="btn-secondary" title="Buka folder sumber di File Explorer">
+            <span>Buka Explorer</span>
+          </button>
+          <button type="button" id="btnQuickAuditSetlist" class="btn-accent" title="Scan True Peak (dBTP) &amp; Integrated LUFS across all tracks for accurate Auto-Trim Headroom">
+            <span id="btnQuickAuditText">QC Audit &amp; Auto-Trim</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Unified Source Folder, Playlist Chips & Filter Toolbar -->
+      <div class="setlist-filter-shell">
+        <div class="source-location-row">
+          <div class="source-location-info">
+            <span class="source-location-label">Source Directory:</span>
+            <code id="activeSourceBadge" class="source-location-badge">library/inbox</code>
+            <input type="hidden" id="sourceDirInput">
+            <span class="label-hint" id="playerCountSummary">0 tracks ready</span>
+          </div>
+          <div class="source-location-actions">
+            <button type="button" id="btnBrowseSource" class="btn-chip">Browse Source Folder...</button>
+            <button type="button" id="btnResetInbox" class="btn-chip hidden">Reset to Inbox</button>
+          </div>
+        </div>
+
+        <div class="playlist-selector-grid" id="playlistGrid" aria-label="Playlist Folders"></div>
+
+        <div class="converter-toolbar player-toolbar">
+          <div class="toolbar-filters">
+            <input
+              type="search"
+              id="searchInput"
+              class="toolbar-input"
+              placeholder="Search track title or playlist folder..."
+              aria-label="Search tracks"
+            >
+            <select id="groupByMode" class="toolbar-select" aria-label="Group Tracks By">
+              <option value="folder">Group: Playlist Folder</option>
+              <option value="type">Group: Audio Codec (.opus/.mp3)</option>
+              <option value="folder_type">Group: Folder + Codec</option>
+              <option value="rate">Group: Sample Rate (Hz)</option>
+            </select>
+            <select id="filterQcStatus" class="toolbar-select" aria-label="Filter QC Status">
+              <option value="ALL">QC Status: All</option>
+              <option value="SAFE">FOH Ready (&le; -1.0 dBTP)</option>
+              <option value="TRIM">Preamp Trim (-1.0 to 0 dBTP)</option>
+              <option value="CLIPPING">Clipping (&gt; 0 dBTP)</option>
+              <option value="FAKE_HQ">Fake HQ (&lt;16 kHz Cutoff)</option>
+            </select>
+            <select id="filterFormat" class="toolbar-select" aria-label="Filter Audio Format">
+              <option value="ALL">Audio Format: All</option>
+              <option value=".opus">Opus (.opus)</option>
+              <option value=".webm">WebM (.webm)</option>
+              <option value=".mp3">MP3 (.mp3)</option>
+              <option value=".m4a">AAC (.m4a)</option>
+              <option value=".wav">WAV (.wav)</option>
+              <option value=".flac">FLAC (.flac)</option>
+            </select>
+          </div>
+
+          <div class="toolbar-selection-btns">
+            <button type="button" id="btnCollapseAllGroups" class="btn-chip">Collapse Groups</button>
+            <button type="button" id="btnExpandAllGroups" class="btn-chip">Expand Groups</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Setlist DataTable -->
+      <div class="table-responsive">
+        <table class="qc-table converter-table player-table" id="playerTable">
+          <thead>
+            <tr>
+              <th scope="col" class="col-play-actions">FOH Transport</th>
+              <th scope="col">Audio Track</th>
+              <th scope="col">Codec &amp; Sample Rate</th>
+              <th scope="col">Spectrum</th>
+              <th scope="col">True Peak (dBTP)</th>
+              <th scope="col">Loudness (LUFS)</th>
+              <th scope="col">Auto-Trim</th>
+              <th scope="col">FOH Status</th>
+            </tr>
+          </thead>
+          <tbody id="playerTableBody">
+            <tr class="empty-row">
+              <td colspan="8">Loading audio tracks from source directory...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <p>SWARARIA AUDIO LAB &bull; Strictly running on <code>127.0.0.1:8765</code> &bull; Stage 7: FOH Live Player &amp; Soundcheck Engine</p>
+  </footer>
+
+  <!-- Interactive Folder Browser Modal -->
+  <div class="modal-backdrop hidden" id="folderModal" role="dialog" aria-modal="true" aria-labelledby="folderModalTitle">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="folderModalTitle">Pilih Folder Sumber</h3>
+        <button type="button" id="btnCloseModal" class="btn-text">&#10005; Tutup</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-shortcuts" id="modalShortcuts"></div>
+        <div class="modal-current-bar">
+          <button type="button" id="btnModalUp" class="btn-chip">Naik 1 Level</button>
+          <code class="modal-current-path" id="modalCurrentPath">/</code>
+        </div>
+        <div class="modal-dir-list" id="modalDirList"></div>
+        <div class="modal-newfolder-bar">
+          <input type="text" id="newFolderNameInput" class="toolbar-input" placeholder="Buat subfolder baru di sini (opsional)...">
+          <button type="button" id="btnCreateSubfolder" class="btn-chip">+ Buat Folder</button>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" id="btnCancelModal" class="btn-secondary">Batal</button>
+        <button type="button" id="btnSelectModalDir" class="btn-primary">Pilih Folder Ini</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hidden HTML5 Audio Element (Routed through Web Audio API Graph) -->
+  <audio id="fohAudioElement" preload="metadata" crossorigin="anonymous"></audio>
+
+  <script type="module" src="/static/player.js"></script>
+</body>
+</html>

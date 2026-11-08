@@ -52,22 +52,28 @@ export function createSpectralBadge(qc) {
   }
   const span = document.createElement('span');
   const status = String(qc.spectral_status).toUpperCase();
+  const rawLabel = String(qc.spectral_label || '')
+    .replace(/Asli\s*\(Full HQ\)/gi, 'Full-Range')
+    .replace(/\bAsli\b/gi, 'Full-Range')
+    .replace(/\(Standar\)/gi, 'Standard')
+    .replace(/\bSpektrum\b/gi, 'Spectrum');
+
   if (status === 'AUTHENTIC') {
     span.className = 'spectral-badge authentic';
-    span.textContent = qc.spectral_label || '20 kHz Asli';
-    span.title = 'Spektrum frekuensi tinggi utuh hingga ~20 kHz (Kualitas Asli / Full-Range HQ).';
+    span.textContent = rawLabel || '20 kHz Full-Range';
+    span.title = 'Full-Range High-Frequency Spectrum (~20 kHz Authentic Lossless / HQ).';
   } else if (status === 'FAKE_HQ') {
     span.className = 'spectral-badge fake';
-    span.textContent = qc.spectral_label || '⚠️ Fake HQ';
-    span.title = 'Terdeteksi cutoff spektrum frekuensi tinggi (<16 kHz) meskipun bitrate tinggi — indikasi hasil upsample/transcode dari sumber bitrate rendah.';
+    span.textContent = rawLabel || '⚠️ Fake HQ';
+    span.title = 'High-frequency spectral cutoff detected (<16 kHz) despite high bitrate — indicates upsampled/transcoded lossy source.';
   } else if (status === 'STANDARD') {
     span.className = 'spectral-badge standard';
-    span.textContent = qc.spectral_label || '16 kHz Std';
-    span.title = 'Spektrum frekuensi tinggi standar (~16 kHz).';
+    span.textContent = rawLabel || '16 kHz Standard';
+    span.title = 'Standard high-frequency spectrum bandwidth (~16 kHz).';
   } else {
     span.className = 'spectral-badge low';
-    span.textContent = qc.spectral_label || '<14 kHz Low';
-    span.title = 'Bandwidth frekuensi tinggi terbatas (<14 kHz).';
+    span.textContent = rawLabel || '<14 kHz Low-BW';
+    span.title = 'Limited high-frequency bandwidth (<14 kHz).';
   }
   return span;
 }
@@ -76,26 +82,27 @@ const WORKSPACE_STORAGE_KEY = 'swararia_workspace_state_v1';
 
 /**
  * Reads shared workspace selection and source directory from sessionStorage.
- * @returns {{ sourceDir: string, activePlaylist: string, selectedPaths: string[] }}
+ * @returns {{ sourceDir: string, activePlaylist: string, selectedPaths: string[], activeTrackRelPath: string }}
  */
 export function getSharedWorkspaceState() {
   try {
     const raw = sessionStorage.getItem(WORKSPACE_STORAGE_KEY);
-    if (!raw) return { sourceDir: '', activePlaylist: 'ALL', selectedPaths: [] };
+    if (!raw) return { sourceDir: '', activePlaylist: 'ALL', selectedPaths: [], activeTrackRelPath: '' };
     const parsed = JSON.parse(raw);
     return {
       sourceDir: typeof parsed.sourceDir === 'string' ? parsed.sourceDir : '',
       activePlaylist: typeof parsed.activePlaylist === 'string' ? parsed.activePlaylist : 'ALL',
       selectedPaths: Array.isArray(parsed.selectedPaths) ? parsed.selectedPaths : [],
+      activeTrackRelPath: typeof parsed.activeTrackRelPath === 'string' ? parsed.activeTrackRelPath : '',
     };
   } catch (_e) {
-    return { sourceDir: '', activePlaylist: 'ALL', selectedPaths: [] };
+    return { sourceDir: '', activePlaylist: 'ALL', selectedPaths: [], activeTrackRelPath: '' };
   }
 }
 
 /**
- * Persists partial workspace state (sourceDir, activePlaylist, selectedPaths) to sessionStorage.
- * @param {{ sourceDir?: string, activePlaylist?: string, selectedPaths?: string[] | Set<string> }} partial
+ * Persists partial workspace state (sourceDir, activePlaylist, selectedPaths, activeTrackRelPath) to sessionStorage.
+ * @param {{ sourceDir?: string, activePlaylist?: string, selectedPaths?: string[] | Set<string>, activeTrackRelPath?: string }} partial
  */
 export function saveSharedWorkspaceState(partial = {}) {
   try {
@@ -107,6 +114,10 @@ export function saveSharedWorkspaceState(partial = {}) {
         partial.selectedPaths !== undefined
           ? Array.from(partial.selectedPaths)
           : prev.selectedPaths,
+      activeTrackRelPath:
+        partial.activeTrackRelPath !== undefined
+          ? String(partial.activeTrackRelPath || '')
+          : prev.activeTrackRelPath,
     };
     sessionStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(next));
   } catch (_e) {
@@ -157,14 +168,14 @@ export function initAppHeader(opts = {}) {
 
   const brandSubtitle = document.createElement('p');
   brandSubtitle.className = 'brand-subtitle';
-  brandSubtitle.textContent = '6-Stage Pro Audio & Video Pipeline: Ingest • QC Lab • DSP Converter • Tag Organizer • Multitrack Split • Video Split';
+  brandSubtitle.textContent = 'Pro Audio & Video Production Suite';
 
   brandInfo.appendChild(brandTitle);
   brandInfo.appendChild(brandSubtitle);
   brand.appendChild(brandIcon);
   brand.appendChild(brandInfo);
 
-  // 2. 6-Stage Pipeline Navigation Tabs
+  // 2. 7-Stage Pipeline Navigation Tabs
   const nav = document.createElement('nav');
   nav.className = 'app-nav';
   nav.setAttribute('aria-label', 'Main Navigation');
@@ -186,7 +197,7 @@ export function initAppHeader(opts = {}) {
     { tag: 'line', attrs: { x1: '12', y1: '15', x2: '12', y2: '3' } },
   ]);
 
-  const tabQc = makeNavTab('/qc', 'qc', '2. QC & Spectral Lab', [
+  const tabQc = makeNavTab('/qc', 'qc', '2. QC Lab', [
     { tag: 'path', attrs: { d: 'M2 10v3' } },
     { tag: 'path', attrs: { d: 'M6 6v11' } },
     { tag: 'path', attrs: { d: 'M10 3v18' } },
@@ -195,14 +206,14 @@ export function initAppHeader(opts = {}) {
     { tag: 'path', attrs: { d: 'M22 10v3' } },
   ]);
 
-  const tabConverter = makeNavTab('/converter', 'converter', '3. Converter & Loudness', [
+  const tabConverter = makeNavTab('/converter', 'converter', '3. Converter', [
     { tag: 'polyline', attrs: { points: '17 1 21 5 17 9' } },
     { tag: 'path', attrs: { d: 'M3 11V9a4 4 0 0 1 4-4h14' } },
     { tag: 'polyline', attrs: { points: '7 23 3 19 7 15' } },
     { tag: 'path', attrs: { d: 'M21 13v2a4 4 0 0 1-4 4H3' } },
   ]);
 
-  const tabOrganizer = makeNavTab('/organizer', 'organizer', '4. Tag & File Organizer', [
+  const tabOrganizer = makeNavTab('/organizer', 'organizer', '4. Organizer', [
     { tag: 'line', attrs: { x1: '8', y1: '6', x2: '21', y2: '6' } },
     { tag: 'line', attrs: { x1: '8', y1: '12', x2: '21', y2: '12' } },
     { tag: 'line', attrs: { x1: '8', y1: '18', x2: '21', y2: '18' } },
@@ -211,7 +222,7 @@ export function initAppHeader(opts = {}) {
     { tag: 'line', attrs: { x1: '3', y1: '18', x2: '3.01', y2: '18' } },
   ]);
 
-  const tabMultitrack = makeNavTab('/multitrack', 'multitrack', '5. Multitrack Splitter', [
+  const tabMultitrack = makeNavTab('/multitrack', 'multitrack', '5. Multitrack', [
     { tag: 'line', attrs: { x1: '4', y1: '21', x2: '4', y2: '14' } },
     { tag: 'line', attrs: { x1: '4', y1: '10', x2: '4', y2: '3' } },
     { tag: 'line', attrs: { x1: '12', y1: '21', x2: '12', y2: '12' } },
@@ -223,7 +234,7 @@ export function initAppHeader(opts = {}) {
     { tag: 'circle', attrs: { cx: '20', cy: '14', r: '2' } },
   ]);
 
-  const tabVideoSplit = makeNavTab('/video-split', 'video-split', '6. Video Splitter', [
+  const tabVideoSplit = makeNavTab('/video-split', 'video-split', '6. Video Split', [
     { tag: 'rect', attrs: { x: '2', y: '2', width: '20', height: '20', rx: '2.18', ry: '2.18' } },
     { tag: 'line', attrs: { x1: '7', y1: '2', x2: '7', y2: '22' } },
     { tag: 'line', attrs: { x1: '17', y1: '2', x2: '17', y2: '22' } },
@@ -234,12 +245,17 @@ export function initAppHeader(opts = {}) {
     { tag: 'line', attrs: { x1: '17', y1: '17', x2: '22', y2: '17' } },
   ]);
 
+  const tabPlayer = makeNavTab('/player', 'player', '7. FOH Player', [
+    { tag: 'polygon', attrs: { points: '5 3 19 12 5 21 5 3' } },
+  ]);
+
   nav.appendChild(tabIngest);
   nav.appendChild(tabQc);
   nav.appendChild(tabConverter);
   nav.appendChild(tabOrganizer);
   nav.appendChild(tabMultitrack);
   nav.appendChild(tabVideoSplit);
+  nav.appendChild(tabPlayer);
 
   // 3. Unified System Diagnostics Bar
   const statusGroup = document.createElement('div');

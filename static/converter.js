@@ -905,7 +905,7 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         } else if (!sr) {
           badge.className = 'badge-untested';
-          badge.textContent = 'KLIK CEK RATE & SPEKTRUM';
+          badge.textContent = 'PROBE RATE & SPECTRUM';
         } else if (isAlreadyMatching(f, targetRateNum, targetBr)) {
           badge.className = 'badge-safe';
           badge.textContent = `SUDAH ${targetLabel}`;

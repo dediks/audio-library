@@ -440,7 +440,7 @@ def analyze_spectral_quality(
         return {
             "spectral_status": "UNKNOWN",
             "spectral_cutoff_khz": 0,
-            "spectral_label": "Spektrum N/A",
+            "spectral_label": "Spectrum N/A",
         }
 
     mid_rms = ordered[0].get("rms", -100.0)
@@ -470,7 +470,7 @@ def analyze_spectral_quality(
         return {
             "spectral_status": "AUTHENTIC",
             "spectral_cutoff_khz": 20,
-            "spectral_label": "20 kHz Asli (Full HQ)",
+            "spectral_label": "20 kHz Full-Range",
         }
     if cutoff_khz == 16:
         if claims_hq:
@@ -482,7 +482,7 @@ def analyze_spectral_quality(
         return {
             "spectral_status": "STANDARD",
             "spectral_cutoff_khz": 16,
-            "spectral_label": "16 kHz (Standar)",
+            "spectral_label": "16 kHz Standard",
         }
 
     if claims_hq or br >= 190.0:
