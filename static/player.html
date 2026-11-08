@@ -17,6 +17,39 @@
   <header class="app-header" id="appHeader" data-page="player"></header>
 
   <main class="app-container player-page-stack">
+    <!-- FOH Wireless Remote Mode Banner & Handheld Tab Switcher (Active when opened on Smartphone / ?remote=1) -->
+    <div class="remote-mode-banner hidden" id="remoteModeBanner" role="status" aria-live="polite">
+      <div class="remote-banner-top-row">
+        <div class="remote-banner-left">
+          <span class="remote-banner-pill">FOH REMOTE</span>
+          <span class="remote-conn-status" id="remoteConnStatus">Menghubungkan ke Master Deck...</span>
+        </div>
+        <div class="remote-banner-actions">
+          <button type="button" id="btnRemotePinPrompt" class="btn-nudge remote-pin-btn" title="Masukkan atau ubah PIN Keamanan 4-Digit">
+            <span id="remotePinBtnText">PIN: ----</span>
+          </button>
+          <button type="button" id="btnExitRemoteSim" class="btn-nudge hidden" title="Kembali ke Mode Master Deck (Laptop)">
+            <span>Mode Laptop</span>
+          </button>
+        </div>
+      </div>
+
+      <nav class="remote-mobile-tabs" id="remoteMobileTabs" aria-label="Menu Kontroler HP">
+        <button type="button" class="remote-mobile-tab active" data-remote-view="deck">
+          <span>Deck &amp; Vol</span>
+        </button>
+        <button type="button" class="remote-mobile-tab" data-remote-view="pads">
+          <span>Cue Pads (8)</span>
+        </button>
+        <button type="button" class="remote-mobile-tab" data-remote-view="setlist">
+          <span>Pilih Lagu</span>
+        </button>
+        <button type="button" class="remote-mobile-tab" data-remote-view="dsp">
+          <span>RTA &amp; EQ</span>
+        </button>
+      </nav>
+    </div>
+
     <!-- Top FOH Console Grid: Left = Transport & Timecode Deck, Right = RTA Analyzer & DSP Rack -->
     <div class="player-console-grid">
       <!-- Left Deck: Master Transport, Unified OLED Display & Cue Mode -->
@@ -34,6 +67,10 @@
             </div>
           </div>
           <div class="transport-status-badges">
+            <button type="button" class="btn-remote-trigger" id="btnOpenRemoteModal" title="Kontrol FOH Player secara nirkabel menggunakan HP (Wi-Fi / Hotspot)">
+              <span class="remote-dot" id="remoteHeaderDot"></span>
+              <span id="remoteHeaderLabel">HP Remote</span>
+            </button>
             <span class="foh-state-pill standby" id="playerStateBadge">STANDBY</span>
             <span class="panel-badge" id="activePlayModeBadge">CUE (AUTO-STOP)</span>
           </div>
@@ -508,6 +545,133 @@
       </div>
       <div class="modal-footer">
         <button type="button" id="btnCancelPadPicker" class="btn-secondary">Batal</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- FOH Wireless Mobile Remote Modal -->
+  <div class="modal-backdrop hidden" id="remoteModal" role="dialog" aria-modal="true" aria-labelledby="remoteModalTitle">
+    <div class="modal-card remote-modal-card">
+      <div class="modal-header">
+        <div>
+          <h3 id="remoteModalTitle">FOH Wireless Remote — Kontrol dari HP</h3>
+          <p class="pad-picker-subtitle">Kendalikan Transport, Master Fader, 3-Band EQ, Phase, Cue Pads &amp; Setlist dari smartphone Anda</p>
+        </div>
+        <button type="button" id="btnCloseRemoteModal" class="btn-text">&#10005; Tutup</button>
+      </div>
+      <div class="modal-body remote-modal-body">
+        <!-- Master Deck Pairing Panel (Shown on Laptop/PC) -->
+        <div id="remoteMasterSetupPanel">
+          <div class="remote-status-strip">
+            <div class="remote-status-info">
+              <span class="remote-status-title">Status Akses Jaringan Lokal (Wi-Fi / Hotspot)</span>
+              <span class="remote-status-sub" id="remoteModalClientCount">0 HP Terhubung</span>
+            </div>
+            <label class="autotrim-check-wrap">
+              <input type="checkbox" id="chkRemoteEnabled" checked>
+              <span>Aktifkan HP Remote</span>
+            </label>
+          </div>
+
+          <!-- WSL2 Port Forwarding & Windows Firewall Helper Banner (Auto-shown on WSL2) -->
+          <div class="remote-wsl-bridge-box hidden" id="remoteWslBridgeBox">
+            <div class="remote-wsl-bridge-top">
+              <div class="remote-wsl-bridge-info">
+                <strong id="remoteWslBridgeTitle">Mode WSL2 Terdeteksi: Perlu Izin Port Windows &rarr; WSL2</strong>
+                <p id="remoteWslBridgeDesc">
+                  Karena aplikasi berjalan di dalam WSL2 (Linux di atas Windows), Windows secara default memblokir akses dari HP ke dalam WSL2. Klik tombol di kanan untuk membuka jembatan port 8765 secara otomatis.
+                </p>
+              </div>
+              <div class="remote-wsl-bridge-actions">
+                <button type="button" id="btnEnableWslBridge" class="btn-accent btn-sm">
+                  <span id="btnEnableWslBridgeText">Aktifkan Akses HP (1-Klik)</span>
+                </button>
+                <button type="button" id="btnDisableWslBridge" class="btn-nudge hidden" title="Hapus kembali aturan portproxy &amp; firewall Windows setelah selesai digunakan">
+                  Tutup Port
+                </button>
+                <button type="button" id="btnCopyWslCmd" class="btn-nudge" title="Salin perintah PowerShell Administrator jika ingin dijalankan manual">
+                  Salin Cmd PowerShell
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="remote-pairing-grid">
+            <div class="remote-qr-card">
+              <div class="remote-qr-frame">
+                <canvas id="remoteQrCanvas" width="180" height="180" aria-label="QR Code FOH Mobile Remote"></canvas>
+              </div>
+              <span class="remote-qr-caption" id="remoteQrCaption">Scan QR dengan Kamera HP</span>
+            </div>
+
+            <div class="remote-pairing-right">
+              <div class="remote-pin-card">
+                <div class="remote-pin-info">
+                  <span class="remote-pin-label">PIN Keamanan 4-Digit (Otomatis masuk via QR)</span>
+                  <strong class="remote-pin-code" id="remotePinDisplay">----</strong>
+                </div>
+                <button type="button" id="btnRegenRemotePin" class="btn-nudge" title="Buat PIN 4-Digit baru dan perbarui QR Code">
+                  Acak PIN Baru
+                </button>
+              </div>
+
+              <div class="remote-url-section">
+                <div class="remote-url-header">
+                  <span class="remote-url-title">Daftar IP Terdeteksi (Klik untuk tampilkan di QR):</span>
+                  <button type="button" id="btnRefreshRemoteIps" class="btn-nudge">Refresh IP</button>
+                </div>
+                <div class="remote-url-list" id="remoteUrlList"></div>
+
+                <div class="remote-manual-ip-row">
+                  <input
+                    type="text"
+                    id="remoteManualIpInput"
+                    class="toolbar-input remote-manual-ip-input"
+                    placeholder="Ketik IP Wi-Fi Laptop manual (mis. 192.168.1.20)..."
+                    aria-label="IP Wi-Fi Laptop Manual"
+                  >
+                  <button type="button" id="btnApplyManualIp" class="btn-nudge">Gunakan IP Ini</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="remote-steps-box">
+            <h4>Cara Menghubungkan HP ke Master Deck:</h4>
+            <ol class="remote-steps-list">
+              <li>Pastikan <strong>HP dan Laptop/PC ini terhubung ke Wi-Fi yang sama</strong> (atau nyalakan <em>Hotspot Pribadi / Tethering</em> di HP lalu sambungkan Laptop ke Hotspot HP tersebut — <strong>100% offline tanpa kuota internet</strong>).</li>
+              <li><strong>Scan QR Code</strong> di atas menggunakan aplikasi Kamera HP / Google Lens (atau ketik URL di Chrome / Safari HP). Link QR sudah otomatis menyertakan PIN 4-Digit.</li>
+              <li>Audio tetap keluar secara murni dari <strong>Soundcard / Mixer di Laptop/PC</strong>, sementara layar HP berubah menjadi <strong>Wireless Remote Controller</strong> lengkap dengan Live RTA &amp; Timecode!</li>
+            </ol>
+          </div>
+        </div>
+
+        <!-- Client PIN Entry Panel (Shown when opened on Smartphone or Sim Tab) -->
+        <div id="remoteClientPinPanel" class="hidden">
+          <div class="remote-pin-entry-box">
+            <label for="remotePinInput" class="remote-pin-label">Masukkan 4-Digit PIN yang tampil di layar Laptop (Master Deck):</label>
+            <div class="remote-pin-input-row">
+              <input
+                type="text"
+                id="remotePinInput"
+                class="toolbar-input remote-pin-input"
+                maxlength="4"
+                inputmode="numeric"
+                pattern="[0-9]*"
+                placeholder="0000"
+                autocomplete="off"
+              >
+              <button type="button" id="btnSaveRemotePin" class="btn-primary">Hubungkan ke Master Deck</button>
+            </div>
+            <p class="remote-pin-feedback" id="remotePinFeedback">Lihat PIN 4-digit melalui tombol "HP Remote" di pojok kanan atas panel FOH Master Transport pada Laptop Anda.</p>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer remote-modal-footer">
+        <button type="button" id="btnOpenRemoteSimTab" class="btn-chip accent" title="Buka tab baru untuk mencoba tampilan HP Remote di browser ini">
+          Buka Tab Simulasi Remote
+        </button>
+        <button type="button" id="btnCancelRemoteModal" class="btn-secondary">Tutup</button>
       </div>
     </div>
   </div>

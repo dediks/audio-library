@@ -6,11 +6,19 @@ Listens strictly on 127.0.0.1 for maximum local security.
 """
 from __future__ import annotations
 
+import base64
+import hmac
 import json
 import mimetypes
+import os
+import re
+import secrets
 import shutil
+import socket
+import subprocess
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -66,10 +74,685 @@ def check_system_binaries() -> dict:
     }
 
 
+_cached_lan_ips: list[str] = []
+_cached_interfaces: list[dict] = []
+_cached_lan_ips_ts: float = 0.0
+_lan_ips_lock = threading.Lock()
+_is_wsl_cached: bool | None = None
+
+
+def is_wsl_environment() -> bool:
+    """Returns True if running inside Windows Subsystem for Linux (WSL/WSL2)."""
+    global _is_wsl_cached
+    if _is_wsl_cached is not None:
+        return _is_wsl_cached
+    if os.name == "nt":
+        _is_wsl_cached = False
+        return False
+    try:
+        proc_ver = Path("/proc/version").read_text(encoding="utf-8", errors="ignore").lower()
+        if "microsoft" in proc_ver or "wsl" in proc_ver:
+            _is_wsl_cached = True
+            return True
+    except Exception:
+        pass
+    _is_wsl_cached = bool(os.environ.get("WSL_DISTRO_NAME"))
+    return _is_wsl_cached
+
+
+def _is_valid_lan_ipv4(candidate: str) -> bool:
+    c = candidate.strip()
+    if not c or ":" in c:
+        return False
+    if c.startswith("127.") or c.startswith("169.254.") or c == "0.0.0.0":
+        return False
+    parts = c.split(".")
+    return len(parts) == 4 and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts)
+
+
+def _find_windows_sys32_bin(exe_name: str) -> str | None:
+    """Locates a Windows System32 executable from WSL or native Windows."""
+    found = shutil.which(exe_name)
+    if found:
+        return found
+    for prefix in ("/mnt/c/Windows/System32", "/mnt/c/WINDOWS/system32", "/mnt/c/Windows/Sysnative"):
+        cand = f"{prefix}/{exe_name}"
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+    return None
+
+
+def _parse_windows_ipconfig() -> list[dict]:
+    """Runs ipconfig.exe (from Windows or WSL2) and extracts real Wi-Fi / LAN adapters."""
+    ipconfig_bin = _find_windows_sys32_bin("ipconfig.exe")
+    if not ipconfig_bin:
+        return []
+    try:
+        raw = subprocess.check_output(
+            [ipconfig_bin],
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=2.0,
+        )
+    except Exception:
+        return []
+
+    adapters: list[dict] = []
+    curr_name = "Windows Network"
+    curr_ips: list[str] = []
+    curr_gw = ""
+
+    def _flush_adapter() -> None:
+        nonlocal curr_ips, curr_gw
+        if not curr_ips:
+            return
+        low = curr_name.lower()
+        is_virtual = any(
+            k in low
+            for k in ("wsl", "hyper-v", "vethernet", "docker", "vmware", "virtualbox", "loopback", "bluetooth")
+        )
+        is_wifi = any(
+            k in low
+            for k in ("wi-fi", "wireless", "wlan", "local area connection*", "hotspot")
+        )
+        short_name = re.sub(
+            r"^(Wireless LAN adapter|Ethernet adapter)\s+",
+            "",
+            curr_name,
+            flags=re.IGNORECASE,
+        ).strip() or curr_name
+        for ip in curr_ips:
+            if not _is_valid_lan_ipv4(ip):
+                continue
+            if is_virtual:
+                kind = "virtual"
+                label = f"Virtual Adapter ({short_name})"
+                reachable = False
+                priority = 90
+            elif is_wifi:
+                kind = "wifi"
+                label = f"Wi-Fi / Hotspot Laptop ({short_name})"
+                reachable = True
+                priority = 1 if curr_gw else 2
+            else:
+                kind = "lan"
+                label = f"LAN Ethernet Laptop ({short_name})"
+                reachable = True
+                priority = 3 if curr_gw else 4
+            adapters.append({
+                "ip": ip,
+                "adapter": curr_name,
+                "label": label,
+                "kind": kind,
+                "has_gateway": bool(curr_gw),
+                "reachable_from_hp": reachable,
+                "priority": priority,
+            })
+        curr_ips = []
+        curr_gw = ""
+
+    for raw_line in raw.splitlines():
+        line = raw_line.rstrip()
+        if not line:
+            continue
+        if not line[0].isspace() and line.endswith(":"):
+            _flush_adapter()
+            curr_name = line[:-1].strip()
+            continue
+        ip_match = re.search(r"IPv4[^:]*:\s*(\d{1,3}(?:\.\d{1,3}){3})", line, re.IGNORECASE)
+        if ip_match:
+            curr_ips.append(ip_match.group(1))
+            continue
+        gw_match = re.search(r"Default Gateway[^:]*:\s*(\d{1,3}(?:\.\d{1,3}){3})", line, re.IGNORECASE)
+        if gw_match:
+            curr_gw = gw_match.group(1)
+
+    _flush_adapter()
+    adapters.sort(key=lambda item: item["priority"])
+    return adapters
+
+
+def _get_linux_internal_ips() -> list[str]:
+    ips: list[str] = []
+
+    def _add(c: str) -> None:
+        c = c.strip()
+        if _is_valid_lan_ipv4(c) and c not in ips:
+            ips.append(c)
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.settimeout(0.2)
+            s.connect(("10.255.255.255", 1))
+            _add(s.getsockname()[0])
+    except Exception:
+        pass
+
+    try:
+        _, _, host_ips = socket.gethostbyname_ex(socket.gethostname())
+        for ip in host_ips:
+            _add(ip)
+    except Exception:
+        pass
+
+    if sys.platform.startswith("linux"):
+        try:
+            out = subprocess.check_output(["hostname", "-I"], text=True, timeout=1.0)
+            for token in out.split():
+                _add(token)
+        except Exception:
+            pass
+    return ips
+
+
+def get_network_interfaces_detail(force_refresh: bool = False) -> list[dict]:
+    """Returns detailed network interface list prioritizing real Wi-Fi/Hotspot IPs over WSL2 virtual IPs."""
+    global _cached_lan_ips, _cached_interfaces, _cached_lan_ips_ts
+    now = time.time()
+    with _lan_ips_lock:
+        if not force_refresh and _cached_interfaces and (now - _cached_lan_ips_ts) < 10.0:
+            return list(_cached_interfaces)
+
+    is_wsl = is_wsl_environment()
+    interfaces: list[dict] = []
+    seen_ips: set[str] = set()
+
+    if is_wsl or os.name == "nt":
+        for item in _parse_windows_ipconfig():
+            ip = item["ip"]
+            if ip not in seen_ips:
+                seen_ips.add(ip)
+                interfaces.append(item)
+
+    linux_ips = _get_linux_internal_ips()
+    for ip in linux_ips:
+        if ip in seen_ips:
+            continue
+        seen_ips.add(ip)
+        if is_wsl:
+            interfaces.append({
+                "ip": ip,
+                "adapter": "WSL2 eth0",
+                "label": "WSL2 Virtual IP (Internal Linux di dalam Laptop — Bukan IP Wi-Fi)",
+                "kind": "wsl_internal",
+                "has_gateway": True,
+                "reachable_from_hp": False,
+                "priority": 95,
+            })
+        else:
+            interfaces.append({
+                "ip": ip,
+                "adapter": "Local Network",
+                "label": "Wi-Fi / LAN Laptop",
+                "kind": "wifi",
+                "has_gateway": True,
+                "reachable_from_hp": True,
+                "priority": 1,
+            })
+
+    interfaces.sort(key=lambda x: x["priority"])
+    # Prefer reachable Wi-Fi/LAN IPs for the main list; fall back to all only if none found
+    reachable_ifaces = [x for x in interfaces if x["reachable_from_hp"]]
+    visible_interfaces = reachable_ifaces if reachable_ifaces else interfaces
+    primary_ips = [x["ip"] for x in visible_interfaces]
+
+    with _lan_ips_lock:
+        _cached_interfaces = list(visible_interfaces)
+        _cached_lan_ips = list(primary_ips)
+        _cached_lan_ips_ts = now
+    return list(visible_interfaces)
+
+
+def get_local_lan_ips(force_refresh: bool = False) -> list[str]:
+    """Detects local Wi-Fi / LAN IPv4 addresses for FOH Mobile Remote connectivity."""
+    get_network_interfaces_detail(force_refresh=force_refresh)
+    with _lan_ips_lock:
+        return list(_cached_lan_ips)
+
+
+def _verify_windows_http_reachable(ip: str, port: int) -> bool:
+    """Tests from the Windows host side (via curl.exe) whether http://ip:port/api/system returns HTTP 200."""
+    if not ip:
+        return False
+    curl_bin = _find_windows_sys32_bin("curl.exe")
+    if not curl_bin:
+        return False
+    try:
+        out = subprocess.check_output(
+            [
+                curl_bin,
+                "-s",
+                "-o",
+                "NUL",
+                "-w",
+                "%{http_code}",
+                "--max-time",
+                "1.5",
+                f"http://{ip}:{port}/api/system",
+            ],
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=2.5,
+        ).strip()
+        return out == "200"
+    except Exception:
+        return False
+
+
+def _get_wsl_remote_bridge_port(server_port: int) -> int:
+    """Uses server_port + 1 (8766) on Windows host for WSL2 portproxy so port 8765 (wslrelay) is never hijacked."""
+    return (server_port + 1) if is_wsl_environment() else server_port
+
+
+def _cleanup_stale_wsl_listen_port(port: int) -> None:
+    """If an old netsh portproxy rule is listening on `port` (8765), removes it before server bind so wslrelay works."""
+    if not is_wsl_environment():
+        return
+    netsh_bin = _find_windows_sys32_bin("netsh.exe")
+    ps_bin = _find_windows_sys32_bin("powershell.exe")
+    if not netsh_bin or not ps_bin:
+        return
+    stale_listen_ips: list[str] = []
+    try:
+        out = subprocess.check_output(
+            [netsh_bin, "interface", "portproxy", "show", "v4tov4"],
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=2.0,
+        )
+        for line in out.splitlines():
+            m = re.match(
+                r"^\s*(\d{1,3}(?:\.\d{1,3}){3}|\*)\s+(\d+)\s+(\d{1,3}(?:\.\d{1,3}){3}|\*)\s+(\d+)",
+                line,
+            )
+            if m and int(m.group(2)) == port:
+                stale_listen_ips.append(m.group(1))
+    except Exception:
+        return
+
+    if not stale_listen_ips:
+        return
+
+    print("=" * 65)
+    print(f"  [WSL2 Auto-Heal] Membersihkan aturan portproxy lama di port {port}")
+    print("  Silakan klik 'Yes' pada jendela konfirmasi Windows yang muncul...")
+    print("=" * 65)
+    del_cmds = [
+        f"netsh interface portproxy delete v4tov4 listenport={port} listenaddress={lip} | Out-Null;"
+        for lip in stale_listen_ips
+    ]
+    inner_script = " ".join(del_cmds)
+    inner_b64 = base64.b64encode(inner_script.encode("utf-16le")).decode("ascii")
+    outer_cmd = (
+        f"Start-Process powershell.exe -Verb RunAs -WindowStyle Hidden "
+        f"-Wait -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand','{inner_b64}'"
+    )
+    outer_b64 = base64.b64encode(outer_cmd.encode("utf-16le")).decode("ascii")
+    try:
+        subprocess.run(
+            [ps_bin, "-NoProfile", "-NonInteractive", "-EncodedCommand", outer_b64],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=30.0,
+            check=False,
+        )
+    except Exception:
+        pass
+
+
+def get_wsl_bridge_status(port: int) -> dict:
+    """Checks if Windows portproxy is forwarding Wi-Fi IP:8766 -> 127.0.0.1:8765 (wslrelay) into WSL2."""
+    if not is_wsl_environment():
+        return {"is_wsl": False, "bridge_active": True, "bridge_port": port}
+
+    bridge_port = _get_wsl_remote_bridge_port(port)
+    wsl_ips = _get_linux_internal_ips()
+    wsl_ip = wsl_ips[0] if wsl_ips else ""
+    lan_ips = get_local_lan_ips(force_refresh=False)
+    wifi_ip = lan_ips[0] if lan_ips else ""
+
+    netsh_bin = _find_windows_sys32_bin("netsh.exe")
+    has_rule = False
+    if netsh_bin:
+        try:
+            out = subprocess.check_output(
+                [netsh_bin, "interface", "portproxy", "show", "v4tov4"],
+                text=True,
+                encoding="utf-8",
+                errors="ignore",
+                timeout=2.0,
+            )
+            for line in out.splitlines():
+                m = re.match(
+                    r"^\s*(\d{1,3}(?:\.\d{1,3}){3}|\*)\s+(\d+)\s+(\d{1,3}(?:\.\d{1,3}){3}|\*)\s+(\d+)",
+                    line,
+                )
+                if m and int(m.group(2)) == bridge_port and int(m.group(4)) == port:
+                    has_rule = True
+                    break
+        except Exception:
+            pass
+
+    if wifi_ip and _find_windows_sys32_bin("curl.exe"):
+        bridge_active = has_rule and _verify_windows_http_reachable(wifi_ip, bridge_port)
+    else:
+        bridge_active = has_rule
+
+    listen_addr = wifi_ip if wifi_ip else "0.0.0.0"
+    ps_cmd = (
+        f"Start-Service iphlpsvc -ErrorAction SilentlyContinue; "
+        f"netsh interface portproxy delete v4tov4 listenport={port} listenaddress=0.0.0.0; "
+        f"netsh interface portproxy delete v4tov4 listenport={port} listenaddress={listen_addr}; "
+        f"netsh interface portproxy delete v4tov4 listenport={bridge_port} listenaddress=0.0.0.0; "
+        f"netsh interface portproxy delete v4tov4 listenport={bridge_port} listenaddress={listen_addr}; "
+        f"netsh interface portproxy add v4tov4 listenport={bridge_port} listenaddress=0.0.0.0 connectport={port} connectaddress=127.0.0.1; "
+        f"netsh advfirewall firewall delete rule name=\"Swararia FOH Remote {bridge_port}\"; "
+        f"netsh advfirewall firewall add rule name=\"Swararia FOH Remote {bridge_port}\" dir=in action=allow protocol=TCP localport={bridge_port} profile=any"
+    )
+    return {
+        "is_wsl": True,
+        "wsl_ip": wsl_ip,
+        "wifi_ip": wifi_ip,
+        "bridge_port": bridge_port,
+        "bridge_active": bridge_active,
+        "powershell_admin_cmd": ps_cmd,
+    }
+
+
+def enable_wsl_port_bridge(port: int) -> tuple[bool, str, dict]:
+    """Launches an elevated Windows PowerShell UAC prompt to bridge Windows Wi-Fi port 8766 -> 127.0.0.1:8765 (wslrelay)."""
+    status = get_wsl_bridge_status(port)
+    if not status.get("is_wsl"):
+        return True, "Bukan lingkungan WSL2 (tidak memerlukan bridge).", status
+    bridge_port = _get_wsl_remote_bridge_port(port)
+    wsl_ip = status.get("wsl_ip") or ""
+
+    lan_ips = get_local_lan_ips(force_refresh=True)
+    wifi_ip = lan_ips[0] if lan_ips else ""
+    listen_addr = wifi_ip if wifi_ip else "0.0.0.0"
+
+    ps_bin = _find_windows_sys32_bin("powershell.exe")
+    if not ps_bin:
+        return False, "powershell.exe tidak ditemukan dari WSL2.", status
+
+    inner_lines = [
+        "Set-Service iphlpsvc -StartupType Automatic -ErrorAction SilentlyContinue;",
+        "Start-Service iphlpsvc -ErrorAction SilentlyContinue;",
+        # Always remove any old rules on `port` (8765) so wslrelay on 127.0.0.1:8765 is never blocked
+        f"netsh interface portproxy delete v4tov4 listenport={port} listenaddress=0.0.0.0 | Out-Null;",
+        f"netsh interface portproxy delete v4tov4 listenport={port} listenaddress={listen_addr} | Out-Null;",
+        f"netsh interface portproxy delete v4tov4 listenport={bridge_port} listenaddress=0.0.0.0 | Out-Null;",
+        f"netsh interface portproxy delete v4tov4 listenport={bridge_port} listenaddress={listen_addr} | Out-Null;",
+        f"netsh advfirewall firewall delete rule name=\"Swararia FOH Remote {port}\" | Out-Null;",
+        f"netsh advfirewall firewall delete rule name=\"Swararia FOH Remote {bridge_port}\" | Out-Null;",
+        f"netsh advfirewall firewall add rule name=\"Swararia FOH Remote {bridge_port}\" dir=in action=allow protocol=TCP localport={bridge_port} profile=any | Out-Null;",
+        # Primary path: 0.0.0.0:8766 -> 127.0.0.1:8765 (uses wslrelay AF_VSOCK, immune to Hyper-V firewall & server restarts)
+        f"netsh interface portproxy add v4tov4 listenport={bridge_port} listenaddress=0.0.0.0 connectport={port} connectaddress=127.0.0.1 | Out-Null;",
+    ]
+    if wifi_ip and wsl_ip:
+        inner_lines.extend([
+            f"$code = (& curl.exe -s -o NUL -w '%{{http_code}}' --max-time 2 'http://{wifi_ip}:{bridge_port}/api/system');",
+            "if ($code -ne '200') {",
+            f"  try {{ New-NetFirewallHyperVRule -Name 'SwarariaFOH{port}' -DisplayName 'Swararia FOH Remote {port}' -Direction Inbound -VMCreatorId '{{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}}' -Protocol TCP -LocalPorts {port} -Action Allow -ErrorAction SilentlyContinue | Out-Null; }} catch {{}}",
+            f"  netsh interface portproxy delete v4tov4 listenport={bridge_port} listenaddress=0.0.0.0 | Out-Null;",
+            f"  netsh interface portproxy add v4tov4 listenport={bridge_port} listenaddress=0.0.0.0 connectport={port} connectaddress={wsl_ip} | Out-Null;",
+            "}",
+        ])
+
+    inner_script = " ".join(inner_lines)
+    inner_b64 = base64.b64encode(inner_script.encode("utf-16le")).decode("ascii")
+    outer_cmd = (
+        f"Start-Process powershell.exe -Verb RunAs -WindowStyle Hidden "
+        f"-Wait -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand','{inner_b64}'"
+    )
+    outer_b64 = base64.b64encode(outer_cmd.encode("utf-16le")).decode("ascii")
+    try:
+        subprocess.run(
+            [ps_bin, "-NoProfile", "-NonInteractive", "-EncodedCommand", outer_b64],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=35.0,
+            check=False,
+        )
+    except Exception as exc:
+        return False, f"Gagal menjalankan PowerShell UAC: {exc}", get_wsl_bridge_status(port)
+
+    updated = get_wsl_bridge_status(port)
+    if updated.get("bridge_active"):
+        return (
+            True,
+            f"Jembatan Port {bridge_port} ({listen_addr}:{bridge_port} -> WSL2:{port}) berhasil diaktifkan & terverifikasi!",
+            updated,
+        )
+    return (
+        False,
+        "Jembatan belum merespons HTTP 200 (Pastikan Anda klik 'Yes' pada jendela konfirmasi Admin Windows).",
+        updated,
+    )
+
+
+def disable_wsl_port_bridge(port: int) -> tuple[bool, str, dict]:
+    """Removes the Windows portproxy rule and firewall rules for the specified port."""
+    status = get_wsl_bridge_status(port)
+    if not status.get("is_wsl"):
+        return True, "Bukan lingkungan WSL2.", status
+
+    bridge_port = _get_wsl_remote_bridge_port(port)
+    lan_ips = get_local_lan_ips(force_refresh=True)
+    wifi_ip = lan_ips[0] if lan_ips else ""
+    ps_bin = _find_windows_sys32_bin("powershell.exe")
+    if not ps_bin:
+        return False, "powershell.exe tidak ditemukan.", status
+
+    inner_lines = [
+        f"netsh interface portproxy delete v4tov4 listenport={port} listenaddress=0.0.0.0 | Out-Null;",
+        f"netsh interface portproxy delete v4tov4 listenport={bridge_port} listenaddress=0.0.0.0 | Out-Null;",
+        f"netsh advfirewall firewall delete rule name=\"Swararia FOH Remote {port}\" | Out-Null;",
+        f"netsh advfirewall firewall delete rule name=\"Swararia FOH Remote {bridge_port}\" | Out-Null;",
+        "try {",
+        f"  Remove-NetFirewallHyperVRule -Name 'SwarariaFOH{port}' -ErrorAction SilentlyContinue;",
+        "  Set-NetFirewallHyperVVMSetting -Name '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' -DefaultInboundAction Block -ErrorAction SilentlyContinue | Out-Null;",
+        "} catch {}",
+    ]
+    if wifi_ip:
+        inner_lines.insert(
+            1,
+            f"netsh interface portproxy delete v4tov4 listenport={port} listenaddress={wifi_ip} | Out-Null;",
+        )
+        inner_lines.insert(
+            2,
+            f"netsh interface portproxy delete v4tov4 listenport={bridge_port} listenaddress={wifi_ip} | Out-Null;",
+        )
+
+    inner_script = " ".join(inner_lines)
+    inner_b64 = base64.b64encode(inner_script.encode("utf-16le")).decode("ascii")
+    outer_cmd = (
+        f"Start-Process powershell.exe -Verb RunAs -WindowStyle Hidden "
+        f"-Wait -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand','{inner_b64}'"
+    )
+    outer_b64 = base64.b64encode(outer_cmd.encode("utf-16le")).decode("ascii")
+    try:
+        subprocess.run(
+            [ps_bin, "-NoProfile", "-NonInteractive", "-EncodedCommand", outer_b64],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=30.0,
+            check=False,
+        )
+    except Exception as exc:
+        return False, f"Gagal menutup jembatan port: {exc}", get_wsl_bridge_status(port)
+
+    updated = get_wsl_bridge_status(port)
+    return True, f"Jembatan Port {bridge_port} & aturan Firewall telah dihapus kembali (Tertutup Rapat).", updated
+
+
+ALLOWED_REMOTE_ACTIONS = {
+    "play_pause",
+    "play",
+    "pause",
+    "stop",
+    "prev",
+    "next",
+    "fade",
+    "seek_ratio",
+    "nudge",
+    "cue_zero",
+    "set_play_mode",
+    "set_volume",
+    "toggle_mute",
+    "set_preamp",
+    "set_eq",
+    "reset_eq",
+    "set_routing",
+    "set_autotrim",
+    "reset_peak",
+    "trigger_pad",
+    "restart_pad",
+    "clear_pad",
+    "assign_pad",
+    "load_track",
+    "select_playlist",
+}
+
+
+class RemotePlayerHub:
+    """Thread-safe synchronization hub between Master FOH Deck (Laptop/PC) and HP Wireless Remotes."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.enabled: bool = True
+        self.pin: str = f"{secrets.randbelow(9000) + 1000:04d}"
+        self.master_state: dict = {
+            "track": None,
+            "is_playing": False,
+            "transport_state": "STOPPED",
+            "current_time": 0.0,
+            "duration": 0.0,
+            "play_mode": "single_stop",
+            "volume": 100,
+            "is_muted": False,
+            "preamp_db": 0.0,
+            "eq_low_db": 0.0,
+            "eq_mid_db": 0.0,
+            "eq_high_db": 0.0,
+            "routing_mode": "stereo",
+            "auto_trim": False,
+            "peak_db": -100.0,
+            "rta_bands": [],
+            "vu_l": 0.0,
+            "vu_r": 0.0,
+            "cue_pads": [None] * 8,
+            "source_dir": "",
+            "active_playlist": "__ALL__",
+        }
+        self.master_updated_at: float = 0.0
+        self.command_queue: list[dict] = []
+        self.next_cmd_id: int = 1
+        self.remote_clients: dict[str, float] = {}
+
+    def _prune_clients_unlocked(self, now: float) -> None:
+        stale = [cid for cid, ts in self.remote_clients.items() if (now - ts) > 10.0]
+        for cid in stale:
+            self.remote_clients.pop(cid, None)
+
+    def verify_pin(self, candidate: str | None) -> bool:
+        clean = str(candidate or "").strip()
+        if not clean:
+            return False
+        with self.lock:
+            return hmac.compare_digest(clean, self.pin)
+
+    def regenerate_pin(self) -> str:
+        with self.lock:
+            self.pin = f"{secrets.randbelow(9000) + 1000:04d}"
+            self.remote_clients.clear()
+            return self.pin
+
+    def set_enabled(self, flag: bool) -> bool:
+        with self.lock:
+            self.enabled = bool(flag)
+            if not self.enabled:
+                self.command_queue.clear()
+                self.remote_clients.clear()
+            return self.enabled
+
+    def get_active_remotes_count(self) -> int:
+        now = time.time()
+        with self.lock:
+            self._prune_clients_unlocked(now)
+            return len(self.remote_clients)
+
+    def update_master_state(self, state_payload: dict | None) -> tuple[list[dict], int, str, bool]:
+        now = time.time()
+        with self.lock:
+            if isinstance(state_payload, dict) and state_payload:
+                self.master_state = state_payload
+                self.master_updated_at = now
+            self._prune_clients_unlocked(now)
+            pending = list(self.command_queue)
+            self.command_queue.clear()
+            return pending, len(self.remote_clients), self.pin, self.enabled
+
+    def get_remote_state(self, client_id: str) -> dict:
+        now = time.time()
+        with self.lock:
+            self.remote_clients[client_id] = now
+            self._prune_clients_unlocked(now)
+            return {
+                "ok": True,
+                "enabled": self.enabled,
+                "master_online": (now - self.master_updated_at) < 5.0,
+                "master_updated_at": self.master_updated_at,
+                "active_remotes_count": len(self.remote_clients),
+                "state": self.master_state,
+            }
+
+    def enqueue_command(self, action: str, params: dict | None, client_id: str) -> dict:
+        now = time.time()
+        with self.lock:
+            self.remote_clients[client_id] = now
+            self._prune_clients_unlocked(now)
+            cmd = {
+                "id": self.next_cmd_id,
+                "action": action,
+                "params": params if isinstance(params, dict) else {},
+                "created_at": now,
+            }
+            self.next_cmd_id += 1
+            self.command_queue.append(cmd)
+            if len(self.command_queue) > 50:
+                self.command_queue = self.command_queue[-50:]
+            return cmd
+
+
+remote_hub = RemotePlayerHub()
+
+
 class AudioServerHandler(BaseHTTPRequestHandler):
-    """Secure HTTP Request Handler binding to 127.0.0.1."""
+    """Secure HTTP Request Handler with FOH Mobile Remote LAN Gate."""
+
+    def is_localhost_client(self) -> bool:
+        client_ip = str(self.client_address[0])
+        if client_ip not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+            return False
+        host_hdr = (self.headers.get("Host") or "").split(":")[0].strip().lower()
+        if host_hdr and host_hdr not in ("127.0.0.1", "localhost", "[::1]", "::1"):
+            return False
+        return True
 
     def log_message(self, format, *args):
+        # Suppress noisy polling logs for /api/remote/state
+        if "/api/remote/state" in getattr(self, "path", ""):
+            return
         sys.stderr.write(f"[{self.log_date_time_string()}] {format % args}\n")
 
     def send_security_headers(self, content_type: str = "application/json"):
@@ -93,6 +776,29 @@ class AudioServerHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
+        is_local = self.is_localhost_client()
+
+        # Security Gate for LAN / Wi-Fi devices (Smartphone Remote)
+        if not is_local:
+            if not remote_hub.enabled:
+                self.send_json(403, {"error": "FOH Mobile Remote sedang dinonaktifkan di Master Deck."})
+                return
+            if path in ("/", "/index.html"):
+                self.send_response(302)
+                self.send_header("Location", "/player?remote=1")
+                self.end_headers()
+                return
+            allowed_lan_get = path in (
+                "/player",
+                "/player.html",
+                "/api/system",
+                "/api/library",
+                "/api/remote/info",
+                "/api/remote/state",
+            ) or path.startswith("/static/")
+            if not allowed_lan_get:
+                self.send_json(403, {"error": "Akses jaringan lokal hanya diizinkan untuk FOH Mobile Remote (/player)."})
+                return
 
         if path in ("/", "/index.html"):
             self.serve_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
@@ -124,6 +830,53 @@ class AudioServerHandler(BaseHTTPRequestHandler):
                 self.send_error(404, "File not found")
         elif path == "/api/system":
             self.send_json(200, check_system_binaries())
+        elif path == "/api/remote/info":
+            qs = parse_qs(parsed.query)
+            force_ip = qs.get("refresh", ["0"])[0] == "1"
+            interfaces = get_network_interfaces_detail(force_refresh=force_ip)
+            lan_ips = get_local_lan_ips(force_refresh=False)
+            actual_port = int(self.server.server_address[1])
+            remote_port = _get_wsl_remote_bridge_port(actual_port)
+            info: dict = {
+                "ok": True,
+                "is_localhost": is_local,
+                "enabled": remote_hub.enabled,
+                "port": remote_port,
+                "lan_ips": lan_ips,
+                "master_online": (time.time() - remote_hub.master_updated_at) < 5.0,
+                "active_remotes_count": remote_hub.get_active_remotes_count(),
+            }
+            if is_local:
+                info["pin"] = remote_hub.pin
+                info["interfaces"] = [
+                    {
+                        **iface,
+                        "url": f"http://{iface['ip']}:{remote_port}/player?remote=1&pin={remote_hub.pin}",
+                    }
+                    for iface in interfaces
+                ]
+                info["remote_urls"] = [
+                    f"http://{ip}:{remote_port}/player?remote=1&pin={remote_hub.pin}"
+                    for ip in lan_ips
+                ]
+                info["short_urls"] = [
+                    f"http://{ip}:{remote_port}"
+                    for ip in lan_ips
+                ]
+                info["wsl_bridge"] = get_wsl_bridge_status(actual_port)
+            self.send_json(200, info)
+        elif path == "/api/remote/state":
+            if not remote_hub.enabled:
+                self.send_json(403, {"ok": False, "error": "FOH Mobile Remote sedang dinonaktifkan.", "code": "DISABLED"})
+                return
+            qs = parse_qs(parsed.query)
+            pin = self.headers.get("X-FOH-PIN") or qs.get("pin", [None])[0]
+            if not remote_hub.verify_pin(pin):
+                self.send_json(401, {"ok": False, "error": "PIN FOH Remote tidak valid atau belum dimasukkan.", "code": "INVALID_PIN"})
+                return
+            client_tag = self.headers.get("X-FOH-Client-ID") or "mobile"
+            client_id = f"{self.client_address[0]}:{client_tag[:32]}"
+            self.send_json(200, remote_hub.get_remote_state(client_id))
         elif path == "/api/queue":
             self.send_json(200, task_manager.get_snapshot(history_limit=10))
         elif path == "/api/library":
@@ -157,6 +910,15 @@ class AudioServerHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         parsed = urlparse(self.path)
         path = parsed.path
+        is_local = self.is_localhost_client()
+
+        if not is_local:
+            if not remote_hub.enabled:
+                self.send_json(403, {"error": "FOH Mobile Remote sedang dinonaktifkan di Master Deck."})
+                return
+            if path != "/api/remote/command":
+                self.send_json(403, {"error": "Operasi ini hanya diizinkan langsung dari Master Laptop/PC."})
+                return
 
         content_length = int(self.headers.get("Content-Length", 0))
         if content_length > 1024 * 1024:  # 1MB limit for JSON payload
@@ -170,7 +932,55 @@ class AudioServerHandler(BaseHTTPRequestHandler):
             self.send_json(400, {"error": "Invalid JSON"})
             return
 
-        if path == "/api/download":
+        if path == "/api/remote/wsl-bridge":
+            if not is_local:
+                self.send_json(403, {"error": "Hanya Master Deck lokal yang dapat mengatur bridge WSL2."})
+                return
+            actual_port = int(self.server.server_address[1])
+            if payload.get("action") == "disable":
+                ok_bridge, msg_bridge, status_bridge = disable_wsl_port_bridge(actual_port)
+            else:
+                ok_bridge, msg_bridge, status_bridge = enable_wsl_port_bridge(actual_port)
+            self.send_json(200 if ok_bridge else 400, {
+                "ok": ok_bridge,
+                "message": msg_bridge,
+                "wsl_bridge": status_bridge,
+            })
+        elif path == "/api/remote/state":
+            if not is_local:
+                self.send_json(403, {"error": "Hanya Master Deck lokal yang dapat memperbarui state."})
+                return
+            if payload.get("regenerate_pin"):
+                remote_hub.regenerate_pin()
+            if "enabled" in payload and isinstance(payload["enabled"], bool):
+                remote_hub.set_enabled(payload["enabled"])
+            commands, active_count, current_pin, is_enabled = remote_hub.update_master_state(payload.get("state"))
+            self.send_json(200, {
+                "ok": True,
+                "commands": commands,
+                "active_remotes_count": active_count,
+                "pin": current_pin,
+                "enabled": is_enabled,
+                "lan_ips": get_local_lan_ips(),
+                "port": int(self.server.server_address[1]),
+            })
+        elif path == "/api/remote/command":
+            if not remote_hub.enabled:
+                self.send_json(403, {"ok": False, "error": "FOH Mobile Remote sedang dinonaktifkan.", "code": "DISABLED"})
+                return
+            pin = self.headers.get("X-FOH-PIN") or payload.get("pin")
+            if not remote_hub.verify_pin(pin):
+                self.send_json(401, {"ok": False, "error": "PIN FOH Remote tidak valid.", "code": "INVALID_PIN"})
+                return
+            action = str(payload.get("action") or "").strip()
+            if action not in ALLOWED_REMOTE_ACTIONS:
+                self.send_json(400, {"ok": False, "error": f"Action '{action}' tidak dikenali."})
+                return
+            client_tag = self.headers.get("X-FOH-Client-ID") or "mobile"
+            client_id = f"{self.client_address[0]}:{client_tag[:32]}"
+            cmd = remote_hub.enqueue_command(action, payload.get("params"), client_id)
+            self.send_json(200, {"ok": True, "command_id": cmd["id"]})
+        elif path == "/api/download":
             status, resp = task_manager.enqueue_downloads(payload)
             self.send_json(status, resp)
         elif path == "/api/scan":
@@ -591,13 +1401,18 @@ def ensure_worker_started() -> None:
             _worker_started = True
 
 
-def create_server(host: str = "127.0.0.1", port: int = 8765) -> tuple[ThreadingHTTPServer, int]:
+def create_server(host: str = "0.0.0.0", port: int = 8765) -> tuple[ThreadingHTTPServer, int]:
     """Starts the background worker and creates the HTTP server, falling back to a free port if needed."""
     ensure_worker_started()
+    _cleanup_stale_wsl_listen_port(port)
+    ThreadingHTTPServer.allow_reuse_address = True
     try:
         server = ThreadingHTTPServer((host, port), AudioServerHandler)
     except OSError:
-        server = ThreadingHTTPServer((host, 0), AudioServerHandler)
+        try:
+            server = ThreadingHTTPServer((host, 0), AudioServerHandler)
+        except OSError:
+            server = ThreadingHTTPServer(("127.0.0.1", 0), AudioServerHandler)
     actual_port = int(server.server_address[1])
     return server, actual_port
 
@@ -610,15 +1425,21 @@ def main():
         yt_dlp.main()
         return
 
-    host = "127.0.0.1"  # Bound strictly to localhost for security
+    bind_host = "0.0.0.0"  # Listens on LAN for FOH Mobile Remote (gated by PIN & localhost checks)
+    local_host = "127.0.0.1"
     port = 8765
 
-    server, actual_port = create_server(host, port)
+    server, actual_port = create_server(bind_host, port)
+    remote_port = _get_wsl_remote_bridge_port(actual_port)
+    lan_ips = get_local_lan_ips(force_refresh=True)
     print("=" * 65)
     print("  SWARARIA AUDIO LAB // BATCH INGESTION & SOUNDSYSTEM QC ENGINE")
     print("=" * 65)
-    print(f"  Server running locally at: http://{host}:{actual_port}")
-    print(f"  Inbox Folder: {INBOX_DIR}")
+    print(f"  Server running locally at : http://{local_host}:{actual_port}")
+    if lan_ips:
+        print(f"  FOH Mobile Remote (HP)    : http://{lan_ips[0]}:{remote_port}/player?remote=1")
+        print(f"  FOH Remote Security PIN   : {remote_hub.pin}")
+    print(f"  Inbox Folder              : {INBOX_DIR}")
     print("  Press Ctrl+C to stop.")
     print("=" * 65)
 

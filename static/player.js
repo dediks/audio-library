@@ -19,10 +19,13 @@ import {
   saveSharedWorkspaceState,
 } from './modules/ui-shared.js';
 import { initFolderModal } from './modules/folder-modal.js';
+import { renderQrToCanvas } from './modules/qr-code.js';
 
 const CUE_PADS_STORAGE_KEY = 'swararia_foh_cue_pads_v1';
 const PLAYER_PREFS_STORAGE_KEY = 'swararia_foh_player_prefs_v1';
 const PLAYBACK_SESSION_STORAGE_KEY = 'swararia_foh_playback_session_v1';
+const REMOTE_PIN_STORAGE_KEY = 'swararia_foh_remote_pin_v1';
+const REMOTE_CLIENT_ID_KEY = 'swararia_foh_remote_cid_v1';
 
 document.addEventListener('DOMContentLoaded', () => {
   initAppHeader({ activePage: 'player' });
@@ -132,6 +135,74 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnExpandAllGroups = document.getElementById('btnExpandAllGroups');
   const playerTableBody = document.getElementById('playerTableBody');
 
+  // DOM References - FOH Wireless Mobile Remote (HP Remote)
+  const remoteModeBanner = document.getElementById('remoteModeBanner');
+  const remoteConnStatus = document.getElementById('remoteConnStatus');
+  const btnRemotePinPrompt = document.getElementById('btnRemotePinPrompt');
+  const remotePinBtnText = document.getElementById('remotePinBtnText');
+  const btnExitRemoteSim = document.getElementById('btnExitRemoteSim');
+  const btnOpenRemoteModal = document.getElementById('btnOpenRemoteModal');
+  const remoteHeaderLabel = document.getElementById('remoteHeaderLabel');
+  const remoteModal = document.getElementById('remoteModal');
+  const btnCloseRemoteModal = document.getElementById('btnCloseRemoteModal');
+  const btnCancelRemoteModal = document.getElementById('btnCancelRemoteModal');
+  const remoteMasterSetupPanel = document.getElementById('remoteMasterSetupPanel');
+  const remoteClientPinPanel = document.getElementById('remoteClientPinPanel');
+  const remoteModalClientCount = document.getElementById('remoteModalClientCount');
+  const chkRemoteEnabled = document.getElementById('chkRemoteEnabled');
+  const remotePinDisplay = document.getElementById('remotePinDisplay');
+  const btnRegenRemotePin = document.getElementById('btnRegenRemotePin');
+  const btnRefreshRemoteIps = document.getElementById('btnRefreshRemoteIps');
+  const remoteUrlList = document.getElementById('remoteUrlList');
+  const remoteQrCanvas = document.getElementById('remoteQrCanvas');
+  const remoteQrCaption = document.getElementById('remoteQrCaption');
+  const remoteManualIpInput = document.getElementById('remoteManualIpInput');
+  const btnApplyManualIp = document.getElementById('btnApplyManualIp');
+  const remoteWslBridgeBox = document.getElementById('remoteWslBridgeBox');
+  const remoteWslBridgeTitle = document.getElementById('remoteWslBridgeTitle');
+  const remoteWslBridgeDesc = document.getElementById('remoteWslBridgeDesc');
+  const btnEnableWslBridge = document.getElementById('btnEnableWslBridge');
+  const btnEnableWslBridgeText = document.getElementById('btnEnableWslBridgeText');
+  const btnCopyWslCmd = document.getElementById('btnCopyWslCmd');
+  const remotePinInput = document.getElementById('remotePinInput');
+  const btnSaveRemotePin = document.getElementById('btnSaveRemotePin');
+  const remotePinFeedback = document.getElementById('remotePinFeedback');
+  const btnOpenRemoteSimTab = document.getElementById('btnOpenRemoteSimTab');
+
+  // Detect whether this tab is Master FOH Deck (Laptop/PC) or Wireless Remote Controller (HP)
+  const initialUrlParams = new URLSearchParams(window.location.search);
+  const isLocalhostHost = ['127.0.0.1', 'localhost', '::1'].includes(window.location.hostname);
+  const isRemoteController = initialUrlParams.get('remote') === '1' || !isLocalhostHost;
+
+  let remotePin = '';
+  try {
+    const urlPin = (initialUrlParams.get('pin') || '').trim();
+    if (urlPin) {
+      remotePin = urlPin;
+      localStorage.setItem(REMOTE_PIN_STORAGE_KEY, urlPin);
+      initialUrlParams.delete('pin');
+      const cleanSearch = initialUrlParams.toString();
+      const newRelativeUrl = window.location.pathname + (cleanSearch ? '?' + cleanSearch : '');
+      window.history.replaceState({}, '', newRelativeUrl);
+    } else {
+      remotePin = localStorage.getItem(REMOTE_PIN_STORAGE_KEY) || '';
+    }
+  } catch (_e) {
+    // Ignore storage errors
+  }
+
+  let remoteClientId = 'rm_default';
+  try {
+    let cid = sessionStorage.getItem(REMOTE_CLIENT_ID_KEY);
+    if (!cid) {
+      cid = 'rm_' + Math.random().toString(36).slice(2, 10);
+      sessionStorage.setItem(REMOTE_CLIENT_ID_KEY, cid);
+    }
+    remoteClientId = cid;
+  } catch (_e) {
+    // Ignore storage errors
+  }
+
   // State Management
   const sharedInit = getSharedWorkspaceState();
   let currentSourceDir = sharedInit.sourceDir || '';
@@ -156,6 +227,25 @@ document.addEventListener('DOMContentLoaded', () => {
   let isPageUnloading = false;
   let hasRestoredInitialSession = false;
   let pendingAutoResumeOnGesture = false;
+
+  // Remote Sync State (Telemetry & Anti-Jitter Lock)
+  let remoteIsPlaying = false;
+  let remoteCurrentTime = 0;
+  let remoteDuration = 0;
+  let remoteRtaBands = Array(32).fill(0);
+  let remoteVuL = 0;
+  let remoteVuR = 0;
+  let latestRtaBands = Array(32).fill(0);
+  let latestVuL = 0;
+  let latestVuR = 0;
+  let lastLocalControlTouchAt = 0;
+  let hasPromptedPinModalOnce = false;
+
+  function isDeckPlaying() {
+    return isRemoteController
+      ? Boolean(remoteIsPlaying)
+      : Boolean(audioEl && !audioEl.paused && !audioEl.ended);
+  }
 
   const collapsedGroups = new Set();
   const groupDomMap = new Map();
@@ -585,7 +675,38 @@ document.addEventListener('DOMContentLoaded', () => {
       const barStep = rtaWidth / numBands;
       const barWidth = Math.max(4, barStep - 3);
 
-      const isPlaying = audioEl && !audioEl.paused && !audioEl.ended;
+      const isPlaying = isDeckPlaying();
+
+      if (isRemoteController) {
+        if (isPlaying && Array.isArray(remoteRtaBands) && remoteRtaBands.length > 0) {
+          for (let b = 0; b < numBands; b++) {
+            const norm = Math.max(0, Math.min(1, (Number(remoteRtaBands[b]) || 0) / 100));
+            const barH = Math.max(2, Math.round(norm * (h - 10)));
+            const x = Math.round(b * barStep + 2);
+            const y = h - barH - 2;
+            if (norm > 0.85) {
+              ctx.fillStyle = '#ff3b3b';
+            } else if (norm > 0.68) {
+              ctx.fillStyle = '#ffbe0b';
+            } else {
+              ctx.fillStyle = '#00e5ff';
+            }
+            ctx.fillRect(x, y, barWidth, barH);
+          }
+        } else {
+          for (let b = 0; b < numBands; b++) {
+            const x = Math.round(b * barStep + 2);
+            ctx.fillStyle = 'rgba(0, 229, 255, 0.18)';
+            ctx.fillRect(x, h - 4, barWidth, 2);
+          }
+        }
+        const meterX = rtaWidth + 8;
+        const singleMeterW = 16;
+        drawVuBar(ctx, meterX, 4, singleMeterW, h - 8, isPlaying ? remoteVuL : 0);
+        drawVuBar(ctx, meterX + singleMeterW + 6, 4, singleMeterW, h - 8, isPlaying ? remoteVuR : 0);
+        requestAnimationFrame(renderFrame);
+        return;
+      }
 
       if (rtaAnalyser && isPlaying) {
         rtaAnalyser.getByteFrequencyData(freqData);
@@ -602,6 +723,7 @@ document.addEventListener('DOMContentLoaded', () => {
           }
           const avg = count > 0 ? sum / count : 0;
           const norm = avg / 255;
+          latestRtaBands[b] = Math.round(norm * 100);
           const barH = Math.max(2, Math.round(norm * (h - 10)));
           const x = Math.round(b * barStep + 2);
           const y = h - barH - 2;
@@ -617,6 +739,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       } else {
         for (let b = 0; b < numBands; b++) {
+          latestRtaBands[b] = 0;
           const x = Math.round(b * barStep + 2);
           ctx.fillStyle = 'rgba(0, 229, 255, 0.18)';
           ctx.fillRect(x, h - 4, barWidth, 2);
@@ -636,6 +759,8 @@ document.addEventListener('DOMContentLoaded', () => {
           if (absR > peakR) peakR = absR;
         }
       }
+      latestVuL = peakL;
+      latestVuR = peakR;
 
       const maxInstant = Math.max(peakL, peakR);
       if (maxInstant > 0.0001) {
@@ -742,8 +867,27 @@ document.addEventListener('DOMContentLoaded', () => {
     return '/api/stream?' + params.toString();
   }
 
+  function setRemoteMobileView(viewName) {
+    if (!isRemoteController) return;
+    const valid = ['deck', 'pads', 'setlist', 'dsp'].includes(viewName) ? viewName : 'deck';
+    document.body.dataset.remoteView = valid;
+    const tabBtns = document.querySelectorAll('#remoteMobileTabs .remote-mobile-tab');
+    tabBtns.forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.remoteView === valid);
+    });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
   function loadTrack(fileObj, autoPlay = false, opts = {}) {
     if (!fileObj || !audioEl) return;
+    if (isRemoteController && !opts.fromRemoteSync) {
+      sendRemoteCommand('load_track', {
+        rel_path: fileObj.rel_path,
+        auto_play: Boolean(autoPlay),
+      });
+      setRemoteMobileView('deck');
+      return;
+    }
     cancelActiveFade();
     ensureAudioGraph();
 
@@ -808,6 +952,10 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function playCurrentTrack(opts = {}) {
+    if (isRemoteController) {
+      sendRemoteCommand('play');
+      return;
+    }
     if (!audioEl) return;
     if (!activeTrackObj) {
       if (visibleFiles.length > 0) {
@@ -862,6 +1010,10 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function pauseCurrentTrack() {
+    if (isRemoteController) {
+      sendRemoteCommand('pause');
+      return;
+    }
     if (!audioEl) return;
     pendingAutoResumeOnGesture = false;
     cancelActiveFade();
@@ -874,6 +1026,10 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function stopAndResetCue() {
+    if (isRemoteController) {
+      sendRemoteCommand('stop');
+      return;
+    }
     if (!audioEl) return;
     pendingAutoResumeOnGesture = false;
     cancelActiveFade();
@@ -888,6 +1044,10 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function triggerSmoothFadeOut(durationSec = 3.0) {
+    if (isRemoteController) {
+      sendRemoteCommand('fade', { duration: durationSec });
+      return;
+    }
     if (!audioEl || audioEl.paused || isFadingOut) return;
     ensureAudioGraph();
     isFadingOut = true;
@@ -1002,9 +1162,17 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function updateTimecodeUI() {
-    if (!audioEl) return;
-    const cur = Number.isFinite(audioEl.currentTime) ? audioEl.currentTime : 0;
-    const dur = Number.isFinite(audioEl.duration) ? audioEl.duration : 0;
+    if (!audioEl && !isRemoteController) return;
+    const cur = isRemoteController
+      ? remoteCurrentTime
+      : Number.isFinite(audioEl.currentTime)
+        ? audioEl.currentTime
+        : 0;
+    const dur = isRemoteController
+      ? remoteDuration
+      : Number.isFinite(audioEl.duration)
+        ? audioEl.duration
+        : 0;
     const rem = Math.max(0, dur - cur);
 
     if (timeElapsed) timeElapsed.textContent = formatTimecode(cur, true);
@@ -1012,12 +1180,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if (timeRemaining) timeRemaining.textContent = '-' + formatTimecode(rem, true);
 
     if (countdownBox) {
-      const isPlaying = !audioEl.paused && dur > 0;
+      const isPlaying = isDeckPlaying() && dur > 0;
       countdownBox.classList.toggle('warn-10s', isPlaying && rem > 0 && rem <= 10.0);
       countdownBox.classList.toggle('warn-30s', isPlaying && rem > 10.0 && rem <= 30.0);
     }
 
     if (seekSlider && !isSeeking && dur > 0) {
+      seekSlider.disabled = false;
       seekSlider.value = String(Math.round((cur / dur) * 1000));
     }
   }
@@ -1185,7 +1354,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const isActiveThis = Boolean(
         padData && activeTrackObj && activeTrackObj.rel_path === padData.rel_path
       );
-      const isPlayingThis = isActiveThis && Boolean(audioEl && !audioEl.paused);
+      const isPlayingThis = isActiveThis && isDeckPlaying();
 
       const padBtn = document.createElement('div');
       padBtn.className =
@@ -1264,6 +1433,9 @@ document.addEventListener('DOMContentLoaded', () => {
           cuePads[i] = null;
           saveCuePads();
           renderCuePads();
+          if (isRemoteController) {
+            sendRemoteCommand('clear_pad', { index: i });
+          }
         });
         actionsWrap.appendChild(clearBtn);
       } else {
@@ -1347,6 +1519,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function assignFileToCuePad(fileObj, preferredIndex = null) {
     if (!fileObj) return;
+    if (isRemoteController) {
+      sendRemoteCommand('assign_pad', {
+        rel_path: fileObj.rel_path,
+        index: preferredIndex,
+      });
+      notify({
+        type: 'success',
+        title:
+          preferredIndex !== null
+            ? `Dikirim ke Cue Pad [${preferredIndex + 1}]`
+            : 'Dikirim ke Cue Pad Master Deck',
+        message: `"${fileObj.name}" dipasang ke Cue Pad di Laptop.`,
+        duration: 2200,
+      });
+      return;
+    }
 
     // If no specific slot was requested and this track is already in a Pad, highlight/notify
     const existingIdx = cuePads.findIndex(p => p && p.rel_path === fileObj.rel_path);
@@ -1420,6 +1608,10 @@ document.addEventListener('DOMContentLoaded', () => {
   function restartCuePadFromZero(padIndex) {
     const padData = cuePads[padIndex];
     if (!padData) return;
+    if (isRemoteController) {
+      sendRemoteCommand('restart_pad', { index: padIndex });
+      return;
+    }
     const found = resolveCuePadFileObj(padData);
     if (activeTrackObj && activeTrackObj.rel_path === found.rel_path && audioEl) {
       audioEl.currentTime = 0;
@@ -1434,6 +1626,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!padData) {
       // Friendly behavior: clicking an empty Pad opens the Track Picker Modal for that Pad!
       openPadPickerModal(padIndex);
+      return;
+    }
+    if (isRemoteController) {
+      sendRemoteCommand('trigger_pad', { index: padIndex });
       return;
     }
 
@@ -1596,6 +1792,9 @@ document.addEventListener('DOMContentLoaded', () => {
       cuePads = Array(8).fill(null);
       saveCuePads();
       renderCuePads();
+      if (isRemoteController) {
+        sendRemoteCommand('clear_pad', { all: true });
+      }
       notify({
         type: 'info',
         title: 'Cue Pads Direset',
@@ -1621,7 +1820,7 @@ document.addEventListener('DOMContentLoaded', () => {
       activeSourceBadge.title = currentSourceDir || 'library/inbox';
     }
     if (btnResetInbox) {
-      btnResetInbox.classList.toggle('hidden', isDefault);
+      btnResetInbox.classList.toggle('hidden', isDefault || isRemoteController);
     }
   }
 
@@ -1653,6 +1852,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     renderPlaylists();
     applyFiltersAndRenderTable();
+
+    if (isRemoteController) {
+      return true;
+    }
 
     // Restore previously active track (including exact playback position & playing state) or cue first song automatically
     if (activeTrackRelPath) {
@@ -1736,6 +1939,9 @@ document.addEventListener('DOMContentLoaded', () => {
       renderPlaylists();
       applyFiltersAndRenderTable();
       persistWorkspaceState();
+      if (isRemoteController) {
+        sendRemoteCommand('select_playlist', { playlist: id });
+      }
     });
     return btn;
   }
@@ -1857,7 +2063,7 @@ document.addEventListener('DOMContentLoaded', () => {
     btnPlay.title = 'Instant Playback';
     btnPlay.addEventListener('click', e => {
       e.stopPropagation();
-      if (activeTrackObj && activeTrackObj.rel_path === fileObj.rel_path && audioEl && !audioEl.paused) {
+      if (activeTrackObj && activeTrackObj.rel_path === fileObj.rel_path && isDeckPlaying()) {
         pauseCurrentTrack();
       } else {
         loadTrack(fileObj, true);
@@ -1871,7 +2077,7 @@ document.addEventListener('DOMContentLoaded', () => {
     btnCue.title = 'Load track to Master Deck at 00:00.0 Cue Point (Standby)';
     btnCue.addEventListener('click', e => {
       e.stopPropagation();
-      if (audioEl && !audioEl.paused) {
+      if (!isRemoteController && audioEl && !audioEl.paused) {
         audioEl.pause();
       }
       loadTrack(fileObj, false);
@@ -1893,6 +2099,9 @@ document.addEventListener('DOMContentLoaded', () => {
         cuePads[curIdx] = null;
         saveCuePads();
         renderCuePads();
+        if (isRemoteController) {
+          sendRemoteCommand('clear_pad', { index: curIdx });
+        }
         notify({
           type: 'info',
           title: `Dilepas dari Cue Pad [${curIdx + 1}]`,
@@ -1991,7 +2200,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function highlightActiveRowInTable() {
-    const isPlaying = Boolean(audioEl && !audioEl.paused && !audioEl.ended);
+    const isPlaying = isDeckPlaying();
     rowDomByRelPath.forEach((tr, relPath) => {
       const isActive = Boolean(activeTrackObj && activeTrackObj.rel_path === relPath);
       tr.classList.toggle('is-active-track', isActive && !isPlaying);
@@ -2009,6 +2218,10 @@ document.addEventListener('DOMContentLoaded', () => {
   // ---------------------------------------------------------------------------
   if (btnPlayPause) {
     btnPlayPause.addEventListener('click', () => {
+      if (isRemoteController) {
+        sendRemoteCommand('play_pause');
+        return;
+      }
       if (audioEl && !audioEl.paused) {
         pauseCurrentTrack();
       } else {
@@ -2023,6 +2236,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (btnPrevTrack) {
     btnPrevTrack.addEventListener('click', () => {
+      if (isRemoteController) {
+        sendRemoteCommand('prev');
+        return;
+      }
       const prev = getAdjacentTrack(-1);
       if (prev) {
         const shouldPlay = Boolean(audioEl && !audioEl.paused);
@@ -2033,6 +2250,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (btnNextTrack) {
     btnNextTrack.addEventListener('click', () => {
+      if (isRemoteController) {
+        sendRemoteCommand('next');
+        return;
+      }
       const next = getAdjacentTrack(1);
       if (next) {
         const shouldPlay = Boolean(audioEl && !audioEl.paused);
@@ -2049,6 +2270,10 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function nudgeSeek(deltaSec) {
+    if (isRemoteController) {
+      sendRemoteCommand('nudge', { delta: deltaSec });
+      return;
+    }
     if (!audioEl || !Number.isFinite(audioEl.duration)) return;
     audioEl.currentTime = Math.max(0, Math.min(audioEl.duration, audioEl.currentTime + deltaSec));
     updateTimecodeUI();
@@ -2056,6 +2281,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (btnCueZero) {
     btnCueZero.addEventListener('click', () => {
+      if (isRemoteController) {
+        sendRemoteCommand('cue_zero');
+        return;
+      }
       if (!audioEl) return;
       audioEl.currentTime = 0;
       updateTimecodeUI();
@@ -2069,14 +2298,26 @@ document.addEventListener('DOMContentLoaded', () => {
   if (seekSlider) {
     seekSlider.addEventListener('input', () => {
       isSeeking = true;
-      if (audioEl && Number.isFinite(audioEl.duration) && audioEl.duration > 0) {
-        const targetSec = (Number(seekSlider.value) / 1000) * audioEl.duration;
+      lastLocalControlTouchAt = Date.now();
+      const dur = isRemoteController
+        ? remoteDuration
+        : audioEl && Number.isFinite(audioEl.duration)
+          ? audioEl.duration
+          : 0;
+      if (dur > 0) {
+        const targetSec = (Number(seekSlider.value) / 1000) * dur;
         if (timeElapsed) timeElapsed.textContent = formatTimecode(targetSec, true);
       }
     });
     seekSlider.addEventListener('change', () => {
+      const ratio = Math.max(0, Math.min(1, Number(seekSlider.value) / 1000));
+      if (isRemoteController) {
+        isSeeking = false;
+        sendRemoteCommand('seek_ratio', { ratio });
+        return;
+      }
       if (audioEl && Number.isFinite(audioEl.duration) && audioEl.duration > 0) {
-        audioEl.currentTime = (Number(seekSlider.value) / 1000) * audioEl.duration;
+        audioEl.currentTime = ratio * audioEl.duration;
       }
       isSeeking = false;
       updateTimecodeUI();
@@ -2084,7 +2325,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Play Mode Buttons
-  function setPlayMode(newMode) {
+  function setPlayMode(newMode, opts = {}) {
     playMode = newMode;
     if (modeBtnCue) modeBtnCue.classList.toggle('active', playMode === 'cue');
     if (modeBtnContinuous) modeBtnContinuous.classList.toggle('active', playMode === 'continuous');
@@ -2096,6 +2337,9 @@ document.addEventListener('DOMContentLoaded', () => {
       else activePlayModeBadge.textContent = 'LOOP 1 TRACK';
     }
     savePlayerPrefs();
+    if (isRemoteController && !opts.fromRemoteSync) {
+      sendRemoteCommand('set_play_mode', { mode: newMode });
+    }
   }
 
   if (modeBtnCue) modeBtnCue.addEventListener('click', () => setPlayMode('cue'));
@@ -2129,9 +2373,14 @@ document.addEventListener('DOMContentLoaded', () => {
   // Channel Routing Matrix Buttons
   routingButtons.forEach(btn => {
     btn.addEventListener('click', () => {
-      ensureAudioGraph();
       routingMode = btn.dataset.route || 'stereo';
       routingButtons.forEach(b => b.classList.toggle('active', b === btn));
+      if (isRemoteController) {
+        syncRoutingBadgeUI();
+        sendRemoteCommand('set_routing', { mode: routingMode });
+        return;
+      }
+      ensureAudioGraph();
       applyRoutingMatrix();
     });
   });
@@ -2140,12 +2389,16 @@ document.addEventListener('DOMContentLoaded', () => {
     btnResetPeak.addEventListener('click', () => {
       maxPeakHoldDb = -Infinity;
       updatePeakBadge();
+      if (isRemoteController) {
+        sendRemoteCommand('reset_peak');
+      }
     });
   }
 
   // Gain, Mute, Preamp & EQ Sliders
   if (volumeSlider) {
     volumeSlider.addEventListener('input', () => {
+      lastLocalControlTouchAt = Date.now();
       isMuted = false;
       if (btnMute) {
         btnMute.textContent = 'Mute';
@@ -2153,46 +2406,74 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       applyGainAndEqNodes();
       savePlayerPrefs();
+      if (isRemoteController) {
+        sendRemoteCommand('set_volume', { volume: Number(volumeSlider.value) });
+      }
     });
   }
   if (btnMute) {
     btnMute.addEventListener('click', () => {
+      lastLocalControlTouchAt = Date.now();
       isMuted = !isMuted;
       btnMute.textContent = isMuted ? 'Unmute' : 'Mute';
       btnMute.classList.toggle('active', isMuted);
       applyGainAndEqNodes();
+      if (isRemoteController) {
+        sendRemoteCommand('toggle_mute', { is_muted: isMuted });
+      }
     });
   }
   if (preampSlider) {
     preampSlider.addEventListener('input', () => {
-      ensureAudioGraph();
+      lastLocalControlTouchAt = Date.now();
+      if (!isRemoteController) ensureAudioGraph();
       applyGainAndEqNodes();
+      if (isRemoteController) {
+        sendRemoteCommand('set_preamp', { preamp_db: Number(preampSlider.value) });
+      }
     });
   }
   if (btnResetPreamp && preampSlider) {
     btnResetPreamp.addEventListener('click', () => {
+      lastLocalControlTouchAt = Date.now();
       preampSlider.value = '0';
       applyGainAndEqNodes();
+      if (isRemoteController) {
+        sendRemoteCommand('set_preamp', { preamp_db: 0 });
+      }
     });
   }
   [eqLowSlider, eqMidSlider, eqHighSlider].forEach(slider => {
     if (slider) {
       slider.addEventListener('input', () => {
-        ensureAudioGraph();
+        lastLocalControlTouchAt = Date.now();
+        if (!isRemoteController) ensureAudioGraph();
         applyGainAndEqNodes();
+        if (isRemoteController) {
+          sendRemoteCommand('set_eq', {
+            low_db: eqLowSlider ? Number(eqLowSlider.value) : 0,
+            mid_db: eqMidSlider ? Number(eqMidSlider.value) : 0,
+            high_db: eqHighSlider ? Number(eqHighSlider.value) : 0,
+          });
+        }
       });
     }
   });
   if (btnResetEq) {
     btnResetEq.addEventListener('click', () => {
+      lastLocalControlTouchAt = Date.now();
       if (eqLowSlider) eqLowSlider.value = '0';
       if (eqMidSlider) eqMidSlider.value = '0';
       if (eqHighSlider) eqHighSlider.value = '0';
       applyGainAndEqNodes();
+      if (isRemoteController) {
+        sendRemoteCommand('reset_eq');
+      }
     });
   }
   if (chkAutoTrim) {
     chkAutoTrim.addEventListener('change', () => {
+      lastLocalControlTouchAt = Date.now();
       if (chkAutoTrim.checked && activeTrackObj && preampSlider) {
         preampSlider.value = String(computeRecommendedAutoTrimDb(activeTrackObj));
       } else if (!chkAutoTrim.checked && preampSlider) {
@@ -2201,6 +2482,9 @@ document.addEventListener('DOMContentLoaded', () => {
       applyGainAndEqNodes();
       if (activeTrackObj) updateNowPlayingCard(activeTrackObj);
       savePlayerPrefs();
+      if (isRemoteController) {
+        sendRemoteCommand('set_autotrim', { enabled: Boolean(chkAutoTrim.checked) });
+      }
     });
   }
 
@@ -2300,6 +2584,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Global FOH Keyboard Shortcuts (Space, F, S, 1-8, Escape)
   document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && remoteModal && !remoteModal.classList.contains('hidden')) {
+      e.preventDefault();
+      closeRemoteModal();
+      return;
+    }
     if (e.key === 'Escape' && padPickerModal && !padPickerModal.classList.contains('hidden')) {
       e.preventDefault();
       closePadPickerModal();
@@ -2311,7 +2600,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (e.code === 'Space') {
       e.preventDefault();
-      if (audioEl && !audioEl.paused) {
+      if (isDeckPlaying()) {
         pauseCurrentTrack();
       } else {
         playCurrentTrack();
@@ -2329,16 +2618,874 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  // ---------------------------------------------------------------------------
+  // 10. FOH Wireless Mobile Remote Engine (Master <-> HP Two-Way Sync)
+  // ---------------------------------------------------------------------------
+  function syncRemotePinButtonText() {
+    if (remotePinBtnText) {
+      remotePinBtnText.textContent = remotePin ? `PIN: ${remotePin}` : 'Masukkan PIN';
+    }
+  }
+
+  let currentRemoteServerPort = 8765;
+  let latestWslPowerShellCmd = '';
+
+  function renderQrForRemoteUrl(targetUrl, labelHint = '') {
+    if (!remoteQrCanvas) return;
+    const ok = renderQrToCanvas(remoteQrCanvas, targetUrl, { sizePx: 180, margin: 3 });
+    if (remoteQrCaption) {
+      if (ok) {
+        try {
+          const parsed = new URL(targetUrl);
+          remoteQrCaption.textContent = labelHint
+            ? `${parsed.hostname} (${labelHint})`
+            : `Scan QR (${parsed.host})`;
+        } catch (_e) {
+          remoteQrCaption.textContent = 'Scan QR dengan Kamera HP';
+        }
+      } else {
+        remoteQrCaption.textContent = 'Menunggu IP Wi-Fi...';
+      }
+    }
+  }
+
+  const btnDisableWslBridge = document.getElementById('btnDisableWslBridge');
+  function renderWslBridgeStatusUI(wslInfo) {
+    if (!remoteWslBridgeBox) return;
+    if (!wslInfo || !wslInfo.is_wsl) {
+      remoteWslBridgeBox.classList.add('hidden');
+      return;
+    }
+    remoteWslBridgeBox.classList.remove('hidden');
+    latestWslPowerShellCmd = wslInfo.powershell_admin_cmd || '';
+    const isActive = Boolean(wslInfo.bridge_active);
+    remoteWslBridgeBox.classList.toggle('active', isActive);
+    if (btnDisableWslBridge) {
+      btnDisableWslBridge.classList.toggle('hidden', !isActive);
+    }
+
+    if (isActive) {
+      if (remoteWslBridgeTitle) {
+        remoteWslBridgeTitle.textContent = `✓ Jembatan Port Windows -> WSL2 (${wslInfo.wsl_ip || 'Aktif'}) Sudah Terbuka`;
+      }
+      if (remoteWslBridgeDesc) {
+        remoteWslBridgeDesc.textContent =
+          'Hanya TCP Port 8765 yang diteruskan ke WSL2 (dilindungi PIN 4-Digit & LAN Gate). Anda dapat menekan "Tutup Port" kapan saja setelah selesai manggung.';
+      }
+      if (btnEnableWslBridgeText) {
+        btnEnableWslBridgeText.textContent = 'Perbarui Bridge WSL2';
+      }
+    } else {
+      if (remoteWslBridgeTitle) {
+        remoteWslBridgeTitle.textContent =
+          '⚠️ Mode WSL2 Terdeteksi: Akses dari HP Memerlukan Jembatan Port Windows';
+      }
+      if (remoteWslBridgeDesc) {
+        remoteWslBridgeDesc.textContent = `Aplikasi berjalan di dalam WSL2 (IP virtual internal: ${wslInfo.wsl_ip || '172.x.x.x'}). Agar HP di Wi-Fi bisa membuka player ini, klik tombol "Aktifkan Akses HP (1-Klik)" lalu klik Yes pada jendela konfirmasi Windows.`;
+      }
+      if (btnEnableWslBridgeText) {
+        btnEnableWslBridgeText.textContent = 'Aktifkan Akses HP (1-Klik)';
+      }
+    }
+  }
+
+  function renderRemoteUrlItems(interfacesList, fallbackUrls, pinCode) {
+    if (!remoteUrlList) return;
+    remoteUrlList.replaceChildren();
+
+    const items =
+      Array.isArray(interfacesList) && interfacesList.length > 0
+        ? interfacesList
+        : (fallbackUrls || []).map(u => ({
+            url: u,
+            label: 'Jaringan Lokal',
+            reachable_from_hp: true,
+          }));
+
+    if (items.length === 0) {
+      const fallbackSimUrl = `${window.location.origin}/player?remote=1&pin=${encodeURIComponent(pinCode || remotePin || '')}`;
+      renderQrForRemoteUrl(fallbackSimUrl, 'Simulasi Lokal');
+
+      const emptyItem = document.createElement('div');
+      emptyItem.className = 'remote-url-item';
+      const msg = document.createElement('span');
+      msg.className = 'remote-url-code';
+      msg.textContent =
+        'Belum terdeteksi IP Wi-Fi/Hotspot otomatis. Ketik IP Wi-Fi Laptop Anda pada kolom manual di bawah atau klik Refresh IP.';
+      emptyItem.appendChild(msg);
+      remoteUrlList.appendChild(emptyItem);
+      return;
+    }
+
+    const firstItem = items[0];
+    renderQrForRemoteUrl(
+      firstItem.url,
+      firstItem.reachable_from_hp ? 'Wi-Fi / LAN' : 'WSL2 Internal'
+    );
+
+    items.forEach((item, idx) => {
+      const fullUrl = item.url;
+      const row = document.createElement('div');
+      row.className = 'remote-url-item' + (idx === 0 ? ' active' : '');
+      row.title = 'Klik untuk menampilkan alamat IP ini pada QR Code';
+
+      const leftCol = document.createElement('div');
+      leftCol.className = 'remote-url-item-left';
+
+      const badgeEl = document.createElement('span');
+      badgeEl.className =
+        'remote-url-badge' + (item.reachable_from_hp === false ? ' warn' : '');
+      badgeEl.textContent = item.label || 'Jaringan Lokal';
+
+      const codeEl = document.createElement('code');
+      codeEl.className = 'remote-url-code';
+      codeEl.textContent = fullUrl;
+
+      leftCol.appendChild(badgeEl);
+      leftCol.appendChild(codeEl);
+
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.className = 'btn-nudge';
+      copyBtn.textContent = 'Salin Link';
+      copyBtn.addEventListener('click', async e => {
+        e.stopPropagation();
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(fullUrl);
+            copyBtn.textContent = 'Tersalin ✓';
+            setTimeout(() => {
+              copyBtn.textContent = 'Salin Link';
+            }, 1800);
+          }
+        } catch (_e) {
+          // Ignore clipboard errors
+        }
+      });
+
+      row.addEventListener('click', () => {
+        Array.from(remoteUrlList.querySelectorAll('.remote-url-item')).forEach(el => {
+          el.classList.remove('active');
+        });
+        row.classList.add('active');
+        renderQrForRemoteUrl(
+          fullUrl,
+          item.reachable_from_hp === false ? 'WSL2 Internal' : 'Wi-Fi / LAN'
+        );
+      });
+
+      row.appendChild(leftCol);
+      row.appendChild(copyBtn);
+      remoteUrlList.appendChild(row);
+    });
+  }
+
+  async function refreshRemoteModalInfo(forceIpRefresh = false) {
+    try {
+      const res = await fetch('/api/remote/info' + (forceIpRefresh ? '?refresh=1' : ''), {
+        headers: {
+          'X-FOH-Client-ID': remoteClientId,
+        },
+      });
+      if (!res.ok) return;
+      const info = await res.json();
+      if (info.port) currentRemoteServerPort = Number(info.port) || 8765;
+      if (chkRemoteEnabled && typeof info.enabled === 'boolean') {
+        chkRemoteEnabled.checked = info.enabled;
+      }
+      if (remotePinDisplay && info.pin) {
+        remotePinDisplay.textContent = info.pin;
+        if (!isRemoteController) {
+          remotePin = info.pin;
+        }
+      }
+      if (remoteModalClientCount) {
+        const cnt = Number(info.active_remotes_count) || 0;
+        remoteModalClientCount.textContent =
+          cnt > 0 ? `● ${cnt} HP Terhubung Aktif` : '0 HP Terhubung (Siap Menerima Koneksi)';
+      }
+      renderWslBridgeStatusUI(info.wsl_bridge);
+      renderRemoteUrlItems(info.interfaces, info.remote_urls, info.pin);
+    } catch (_e) {
+      // Ignore network errors
+    }
+  }
+
+  function openRemoteModal(forcePinEntry = false) {
+    if (!remoteModal) return;
+    const showPinEntry = isRemoteController || forcePinEntry;
+    if (remoteMasterSetupPanel) {
+      remoteMasterSetupPanel.classList.toggle('hidden', showPinEntry);
+    }
+    if (remoteClientPinPanel) {
+      remoteClientPinPanel.classList.toggle('hidden', !showPinEntry);
+    }
+    if (btnOpenRemoteSimTab) {
+      btnOpenRemoteSimTab.classList.toggle('hidden', showPinEntry);
+    }
+    remoteModal.classList.remove('hidden');
+
+    if (showPinEntry) {
+      if (remotePinInput) {
+        remotePinInput.value = remotePin || '';
+        setTimeout(() => remotePinInput.focus(), 50);
+      }
+    } else {
+      refreshRemoteModalInfo(false);
+    }
+  }
+
+  function closeRemoteModal() {
+    if (remoteModal) {
+      remoteModal.classList.add('hidden');
+    }
+  }
+
+  if (btnOpenRemoteModal) {
+    btnOpenRemoteModal.addEventListener('click', () => openRemoteModal(false));
+  }
+  if (btnRemotePinPrompt) {
+    btnRemotePinPrompt.addEventListener('click', () => openRemoteModal(true));
+  }
+  if (btnCloseRemoteModal) {
+    btnCloseRemoteModal.addEventListener('click', closeRemoteModal);
+  }
+  if (btnCancelRemoteModal) {
+    btnCancelRemoteModal.addEventListener('click', closeRemoteModal);
+  }
+  if (remoteModal) {
+    remoteModal.addEventListener('click', e => {
+      if (e.target === remoteModal) closeRemoteModal();
+    });
+  }
+  if (btnRefreshRemoteIps) {
+    btnRefreshRemoteIps.addEventListener('click', () => refreshRemoteModalInfo(true));
+  }
+  if (btnEnableWslBridge) {
+    btnEnableWslBridge.addEventListener('click', async () => {
+      btnEnableWslBridge.disabled = true;
+      if (btnEnableWslBridgeText) {
+        btnEnableWslBridgeText.textContent = 'Menunggu Izin Admin Windows...';
+      }
+      const { ok, data, error } = await apiPost('/api/remote/wsl-bridge', {});
+      btnEnableWslBridge.disabled = false;
+      if (data && data.wsl_bridge) {
+        renderWslBridgeStatusUI(data.wsl_bridge);
+      } else {
+        refreshRemoteModalInfo(true);
+      }
+      notify({
+        type: ok ? 'success' : 'info',
+        title: ok ? 'Jembatan Port WSL2 Aktif!' : 'Perlu Izin Administrator Windows',
+        message:
+          (data && data.message) ||
+          error ||
+          'Silakan klik Yes pada pop-up PowerShell atau jalankan perintah PowerShell secara manual.',
+        duration: 4200,
+      });
+    });
+  }
+  if (btnDisableWslBridge) {
+    btnDisableWslBridge.addEventListener('click', async () => {
+      btnDisableWslBridge.disabled = true;
+      btnDisableWslBridge.textContent = 'Menutup Port...';
+      const { ok, data } = await apiPost('/api/remote/wsl-bridge', { action: 'disable' });
+      btnDisableWslBridge.disabled = false;
+      btnDisableWslBridge.textContent = 'Tutup Port';
+      if (data && data.wsl_bridge) {
+        renderWslBridgeStatusUI(data.wsl_bridge);
+      } else {
+        refreshRemoteModalInfo(true);
+      }
+      notify({
+        type: ok ? 'info' : 'error',
+        title: ok ? 'Jembatan Port Ditutup' : 'Gagal Menutup Jembatan',
+        message: (data && data.message) || 'Aturan portproxy dan firewall Windows telah dihapus.',
+        duration: 3800,
+      });
+    });
+  }
+  if (btnCopyWslCmd) {
+    btnCopyWslCmd.addEventListener('click', async () => {
+      if (!latestWslPowerShellCmd) return;
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(latestWslPowerShellCmd);
+          btnCopyWslCmd.textContent = 'Cmd Tersalin ✓';
+          setTimeout(() => {
+            btnCopyWslCmd.textContent = 'Salin Cmd PowerShell';
+          }, 2000);
+          notify({
+            type: 'info',
+            title: 'Perintah PowerShell Disalin',
+            message: 'Buka PowerShell (Run as Administrator) di Windows, lalu Paste & tekan Enter.',
+            duration: 4000,
+          });
+        }
+      } catch (_e) {
+        // Ignore clipboard errors
+      }
+    });
+  }
+  function applyManualIpToQr() {
+    if (!remoteManualIpInput) return;
+    const rawIp = remoteManualIpInput.value.trim().replace(/^https?:\/\//i, '').split('/')[0].split(':')[0];
+    if (!rawIp) return;
+    const customUrl = `http://${rawIp}:${currentRemoteServerPort}/player?remote=1&pin=${encodeURIComponent(remotePin || '')}`;
+    renderQrForRemoteUrl(customUrl, 'IP Manual');
+    notify({
+      type: 'success',
+      title: 'QR Code Diperbarui',
+      message: `QR Code kini mengarah ke ${customUrl}`,
+      duration: 2800,
+    });
+  }
+  if (btnApplyManualIp) {
+    btnApplyManualIp.addEventListener('click', applyManualIpToQr);
+  }
+  if (remoteManualIpInput) {
+    remoteManualIpInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        applyManualIpToQr();
+      }
+    });
+  }
+  if (btnRegenRemotePin) {
+    btnRegenRemotePin.addEventListener('click', async () => {
+      const { ok, data } = await apiPost('/api/remote/state', { regenerate_pin: true });
+      if (ok && data && data.pin) {
+        if (remotePinDisplay) remotePinDisplay.textContent = data.pin;
+        refreshRemoteModalInfo(false);
+        notify({
+          type: 'info',
+          title: 'PIN FOH Remote Diperbarui',
+          message: `PIN baru: ${data.pin}. Masukkan PIN ini di HP Anda.`,
+          duration: 3000,
+        });
+      }
+    });
+  }
+  if (chkRemoteEnabled) {
+    chkRemoteEnabled.addEventListener('change', async () => {
+      await apiPost('/api/remote/state', { enabled: Boolean(chkRemoteEnabled.checked) });
+      refreshRemoteModalInfo(false);
+    });
+  }
+  if (btnOpenRemoteSimTab) {
+    btnOpenRemoteSimTab.addEventListener('click', () => {
+      const pinParam = remotePin ? `&pin=${encodeURIComponent(remotePin)}` : '';
+      window.open(`/player?remote=1${pinParam}`, '_blank');
+    });
+  }
+  if (btnExitRemoteSim) {
+    btnExitRemoteSim.addEventListener('click', () => {
+      window.location.href = '/player';
+    });
+  }
+
+  function submitClientPin() {
+    if (!remotePinInput) return;
+    const entered = remotePinInput.value.trim();
+    if (entered.length !== 4) {
+      if (remotePinFeedback) {
+        remotePinFeedback.textContent = 'PIN harus terdiri dari 4 angka.';
+      }
+      return;
+    }
+    remotePin = entered;
+    try {
+      localStorage.setItem(REMOTE_PIN_STORAGE_KEY, entered);
+    } catch (_e) {
+      // Ignore storage error
+    }
+    syncRemotePinButtonText();
+    closeRemoteModal();
+    pollRemoteStateFromMaster();
+  }
+
+  if (btnSaveRemotePin) {
+    btnSaveRemotePin.addEventListener('click', submitClientPin);
+  }
+  if (remotePinInput) {
+    remotePinInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        submitClientPin();
+      }
+    });
+  }
+
+  async function sendRemoteCommand(action, params = {}) {
+    if (!isRemoteController) return;
+    try {
+      const res = await fetch('/api/remote/command', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-FOH-PIN': remotePin,
+          'X-FOH-Client-ID': remoteClientId,
+        },
+        body: JSON.stringify({
+          action,
+          params,
+          pin: remotePin,
+        }),
+      });
+      if (res.status === 401) {
+        openRemoteModal(true);
+        notify({
+          type: 'error',
+          title: 'PIN FOH Remote Diperlukan',
+          message: 'Masukkan 4-Digit PIN yang tertera di tombol HP Remote pada Laptop.',
+        });
+      }
+    } catch (_e) {
+      // Ignore transient network errors
+    }
+  }
+
+  function buildMasterStateSnapshot() {
+    const curSec = audioEl && Number.isFinite(audioEl.currentTime) ? Number(audioEl.currentTime.toFixed(2)) : 0;
+    const durSec = audioEl && Number.isFinite(audioEl.duration) ? Number(audioEl.duration.toFixed(2)) : 0;
+    const isPlayingNow = Boolean(audioEl && !audioEl.paused && !audioEl.ended);
+    let transportState = 'STANDBY';
+    if (isFadingOut) transportState = 'FADING';
+    else if (isPlayingNow) transportState = 'PLAYING';
+    else if (activeTrackObj && curSec > 0.05) transportState = 'PAUSED';
+    else if (activeTrackObj) transportState = 'CUED';
+
+    return {
+      track: activeTrackObj
+        ? {
+            rel_path: activeTrackObj.rel_path,
+            name: activeTrackObj.name,
+            folder: activeTrackObj.folder || '',
+            ext: activeTrackObj.ext || '',
+            size_mb: activeTrackObj.size_mb || 0,
+            qc: activeTrackObj.qc || {},
+          }
+        : null,
+      is_playing: isPlayingNow,
+      transport_state: transportState,
+      current_time: curSec,
+      duration: durSec,
+      play_mode: playMode,
+      volume: volumeSlider ? Number(volumeSlider.value) : 100,
+      is_muted: Boolean(isMuted),
+      preamp_db: preampSlider ? Number(preampSlider.value) : 0,
+      eq_low_db: eqLowSlider ? Number(eqLowSlider.value) : 0,
+      eq_mid_db: eqMidSlider ? Number(eqMidSlider.value) : 0,
+      eq_high_db: eqHighSlider ? Number(eqHighSlider.value) : 0,
+      routing_mode: routingMode,
+      auto_trim: Boolean(chkAutoTrim && chkAutoTrim.checked),
+      peak_db: Number.isFinite(maxPeakHoldDb) ? Number(maxPeakHoldDb.toFixed(1)) : -100,
+      rta_bands: latestRtaBands,
+      vu_l: Number(latestVuL.toFixed(3)),
+      vu_r: Number(latestVuR.toFixed(3)),
+      cue_pads: cuePads,
+      source_dir: currentSourceDir || '',
+      active_playlist: activePlaylist || 'ALL',
+    };
+  }
+
+  function executeRemoteCommandOnMaster(cmd) {
+    if (!cmd || !cmd.action) return;
+    const p = cmd.params || {};
+    switch (cmd.action) {
+      case 'play_pause':
+        if (audioEl && !audioEl.paused) pauseCurrentTrack();
+        else playCurrentTrack();
+        break;
+      case 'play':
+        playCurrentTrack();
+        break;
+      case 'pause':
+        pauseCurrentTrack();
+        break;
+      case 'stop':
+        stopAndResetCue();
+        break;
+      case 'prev': {
+        const prev = getAdjacentTrack(-1);
+        if (prev) loadTrack(prev, Boolean(audioEl && !audioEl.paused));
+        break;
+      }
+      case 'next': {
+        const next = getAdjacentTrack(1);
+        if (next) loadTrack(next, Boolean(audioEl && !audioEl.paused));
+        break;
+      }
+      case 'fade':
+        triggerSmoothFadeOut(Number(p.duration) || 3.0);
+        break;
+      case 'seek_ratio':
+        if (audioEl && Number.isFinite(audioEl.duration) && audioEl.duration > 0) {
+          const r = Math.max(0, Math.min(1, Number(p.ratio) || 0));
+          audioEl.currentTime = r * audioEl.duration;
+          updateTimecodeUI();
+        }
+        break;
+      case 'nudge':
+        nudgeSeek(Number(p.delta) || 0);
+        break;
+      case 'cue_zero':
+        if (audioEl) {
+          audioEl.currentTime = 0;
+          updateTimecodeUI();
+        }
+        break;
+      case 'set_play_mode':
+        if (['cue', 'continuous', 'loop'].includes(p.mode)) {
+          setPlayMode(p.mode);
+        }
+        break;
+      case 'set_volume':
+        if (volumeSlider) {
+          volumeSlider.value = String(Math.max(0, Math.min(100, Number(p.volume) || 0)));
+          isMuted = false;
+          if (btnMute) {
+            btnMute.textContent = 'Mute';
+            btnMute.classList.remove('active');
+          }
+          applyGainAndEqNodes();
+          savePlayerPrefs();
+        }
+        break;
+      case 'toggle_mute':
+        isMuted = typeof p.is_muted === 'boolean' ? p.is_muted : !isMuted;
+        if (btnMute) {
+          btnMute.textContent = isMuted ? 'Unmute' : 'Mute';
+          btnMute.classList.toggle('active', isMuted);
+        }
+        applyGainAndEqNodes();
+        break;
+      case 'set_preamp':
+        if (preampSlider) {
+          ensureAudioGraph();
+          preampSlider.value = String(Math.max(-12, Math.min(6, Number(p.preamp_db) || 0)));
+          applyGainAndEqNodes();
+        }
+        break;
+      case 'set_eq':
+        ensureAudioGraph();
+        if (eqLowSlider && p.low_db !== undefined) eqLowSlider.value = String(p.low_db);
+        if (eqMidSlider && p.mid_db !== undefined) eqMidSlider.value = String(p.mid_db);
+        if (eqHighSlider && p.high_db !== undefined) eqHighSlider.value = String(p.high_db);
+        applyGainAndEqNodes();
+        break;
+      case 'reset_eq':
+        if (eqLowSlider) eqLowSlider.value = '0';
+        if (eqMidSlider) eqMidSlider.value = '0';
+        if (eqHighSlider) eqHighSlider.value = '0';
+        applyGainAndEqNodes();
+        break;
+      case 'set_routing':
+        if (['stereo', 'mono', 'left', 'right', 'invert'].includes(p.mode)) {
+          ensureAudioGraph();
+          routingMode = p.mode;
+          routingButtons.forEach(b => b.classList.toggle('active', b.dataset.route === routingMode));
+          applyRoutingMatrix();
+        }
+        break;
+      case 'set_autotrim':
+        if (chkAutoTrim) {
+          chkAutoTrim.checked = Boolean(p.enabled);
+          if (chkAutoTrim.checked && activeTrackObj && preampSlider) {
+            preampSlider.value = String(computeRecommendedAutoTrimDb(activeTrackObj));
+          } else if (!chkAutoTrim.checked && preampSlider) {
+            preampSlider.value = '0';
+          }
+          applyGainAndEqNodes();
+          if (activeTrackObj) updateNowPlayingCard(activeTrackObj);
+          savePlayerPrefs();
+        }
+        break;
+      case 'reset_peak':
+        maxPeakHoldDb = -Infinity;
+        updatePeakBadge();
+        break;
+      case 'trigger_pad':
+        if (typeof p.index === 'number' && p.index >= 0 && p.index < 8) {
+          triggerCuePad(p.index);
+        }
+        break;
+      case 'restart_pad':
+        if (typeof p.index === 'number' && p.index >= 0 && p.index < 8) {
+          restartCuePadFromZero(p.index);
+        }
+        break;
+      case 'clear_pad':
+        if (p.all) {
+          cuePads = Array(8).fill(null);
+        } else if (typeof p.index === 'number' && p.index >= 0 && p.index < 8) {
+          cuePads[p.index] = null;
+        }
+        saveCuePads();
+        renderCuePads();
+        break;
+      case 'assign_pad': {
+        const targetFile = p.rel_path ? allFiles.find(f => f.rel_path === p.rel_path) : activeTrackObj;
+        if (targetFile) {
+          assignFileToCuePad(targetFile, typeof p.index === 'number' ? p.index : null);
+        }
+        break;
+      }
+      case 'load_track': {
+        const targetFile = p.rel_path ? allFiles.find(f => f.rel_path === p.rel_path) : null;
+        if (targetFile) {
+          loadTrack(targetFile, Boolean(p.auto_play));
+        }
+        break;
+      }
+      case 'select_playlist':
+        if (typeof p.playlist === 'string') {
+          activePlaylist = p.playlist;
+          renderPlaylists();
+          applyFiltersAndRenderTable();
+          persistWorkspaceState();
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  let isMasterSyncInFlight = false;
+  async function pushMasterStateAndPollCommands() {
+    if (isRemoteController || isMasterSyncInFlight || isPageUnloading) return;
+    isMasterSyncInFlight = true;
+    try {
+      const res = await fetch('/api/remote/state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ state: buildMasterStateSnapshot() }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.pin) remotePin = data.pin;
+        const cnt = Number(data.active_remotes_count) || 0;
+        if (btnOpenRemoteModal && remoteHeaderLabel) {
+          btnOpenRemoteModal.classList.toggle('connected', cnt > 0);
+          remoteHeaderLabel.textContent = cnt > 0 ? `HP Remote (${cnt})` : 'HP Remote';
+        }
+        if (remoteModalClientCount) {
+          remoteModalClientCount.textContent =
+            cnt > 0 ? `● ${cnt} HP Terhubung Aktif` : '0 HP Terhubung (Siap Menerima Koneksi)';
+        }
+        if (Array.isArray(data.commands) && data.commands.length > 0) {
+          data.commands.forEach(cmd => executeRemoteCommandOnMaster(cmd));
+        }
+      }
+    } catch (_e) {
+      // Ignore transient errors
+    } finally {
+      isMasterSyncInFlight = false;
+    }
+  }
+
+  function applyMasterStateToRemoteUI(st) {
+    if (!st) return;
+
+    // 1. Sync Source Directory if changed on Master Deck
+    if (typeof st.source_dir === 'string' && st.source_dir !== currentSourceDir) {
+      currentSourceDir = st.source_dir;
+      fetchLibrary(currentSourceDir);
+    }
+
+    // 2. Sync Active Playlist if changed
+    if (typeof st.active_playlist === 'string' && st.active_playlist !== activePlaylist) {
+      activePlaylist = st.active_playlist;
+      renderPlaylists();
+      applyFiltersAndRenderTable();
+    }
+
+    // 3. Sync Playing State & Timecode
+    const prevPlaying = remoteIsPlaying;
+    remoteIsPlaying = Boolean(st.is_playing);
+    remoteCurrentTime = Number(st.current_time) || 0;
+    remoteDuration = Number(st.duration) || 0;
+
+    setTransportStateBadge(st.transport_state || 'STANDBY');
+    syncPlayPauseButton(remoteIsPlaying);
+    updateTimecodeUI();
+
+    // 4. Sync Active Track OLED Card & Row Highlight
+    const prevRel = activeTrackObj ? activeTrackObj.rel_path : '';
+    const newRel = st.track && st.track.rel_path ? st.track.rel_path : '';
+    if (st.track && newRel) {
+      const matched = allFiles.find(f => f.rel_path === newRel) || st.track;
+      activeTrackObj = matched;
+      activeTrackRelPath = newRel;
+      if (newRel !== prevRel) {
+        updateNowPlayingCard(matched);
+      }
+    }
+    if (newRel !== prevRel || prevPlaying !== remoteIsPlaying) {
+      highlightActiveRowInTable();
+    }
+
+    // 5. Sync Play Mode
+    if (st.play_mode && st.play_mode !== playMode) {
+      setPlayMode(st.play_mode, { fromRemoteSync: true });
+    }
+
+    // 6. Sync Sliders / Mute / EQ / Routing (unless user touched a control within last 800ms)
+    const userRecentlyTouched = Date.now() - lastLocalControlTouchAt < 800;
+    if (!userRecentlyTouched) {
+      if (volumeSlider && typeof st.volume === 'number') {
+        volumeSlider.value = String(st.volume);
+      }
+      if (typeof st.is_muted === 'boolean') {
+        isMuted = st.is_muted;
+        if (btnMute) {
+          btnMute.textContent = isMuted ? 'Unmute' : 'Mute';
+          btnMute.classList.toggle('active', isMuted);
+        }
+      }
+      if (preampSlider && typeof st.preamp_db === 'number') {
+        preampSlider.value = String(st.preamp_db);
+      }
+      if (eqLowSlider && typeof st.eq_low_db === 'number') {
+        eqLowSlider.value = String(st.eq_low_db);
+      }
+      if (eqMidSlider && typeof st.eq_mid_db === 'number') {
+        eqMidSlider.value = String(st.eq_mid_db);
+      }
+      if (eqHighSlider && typeof st.eq_high_db === 'number') {
+        eqHighSlider.value = String(st.eq_high_db);
+      }
+      if (chkAutoTrim && typeof st.auto_trim === 'boolean') {
+        chkAutoTrim.checked = st.auto_trim;
+      }
+      if (st.routing_mode && st.routing_mode !== routingMode) {
+        routingMode = st.routing_mode;
+        routingButtons.forEach(b => b.classList.toggle('active', b.dataset.route === routingMode));
+        syncRoutingBadgeUI();
+      }
+      applyGainAndEqNodes();
+    }
+
+    // 7. Sync Peak Hold & RTA / VU Telemetry
+    if (typeof st.peak_db === 'number') {
+      maxPeakHoldDb = st.peak_db <= -99 ? -Infinity : st.peak_db;
+      updatePeakBadge();
+    }
+    if (Array.isArray(st.rta_bands) && st.rta_bands.length === 32) {
+      remoteRtaBands = st.rta_bands;
+    }
+    remoteVuL = Number(st.vu_l) || 0;
+    remoteVuR = Number(st.vu_r) || 0;
+
+    // 8. Sync 8 Instant Cue Pads
+    if (Array.isArray(st.cue_pads) && st.cue_pads.length === 8) {
+      const oldJson = JSON.stringify(cuePads);
+      const newJson = JSON.stringify(st.cue_pads);
+      if (oldJson !== newJson || newRel !== prevRel || prevPlaying !== remoteIsPlaying) {
+        cuePads = st.cue_pads;
+        renderCuePads();
+      }
+    }
+  }
+
+  let isRemotePollInFlight = false;
+  async function pollRemoteStateFromMaster() {
+    if (!isRemoteController || isRemotePollInFlight || isPageUnloading) return;
+    isRemotePollInFlight = true;
+    try {
+      const res = await fetch('/api/remote/state', {
+        headers: {
+          'X-FOH-PIN': remotePin,
+          'X-FOH-Client-ID': remoteClientId,
+        },
+      });
+      if (res.status === 401) {
+        if (remoteConnStatus) {
+          remoteConnStatus.textContent = '🔒 PIN Diperlukan — Klik tombol PIN untuk menghubungkan';
+          remoteConnStatus.className = 'remote-conn-status err';
+        }
+        if (!hasPromptedPinModalOnce) {
+          hasPromptedPinModalOnce = true;
+          openRemoteModal(true);
+        }
+        return;
+      }
+      if (res.status === 403) {
+        if (remoteConnStatus) {
+          remoteConnStatus.textContent = '⛔ HP Remote sedang dinonaktifkan di Laptop Master Deck';
+          remoteConnStatus.className = 'remote-conn-status err';
+        }
+        return;
+      }
+      if (res.ok) {
+        const data = await res.json();
+        if (remoteConnStatus) {
+          if (data.master_online) {
+            remoteConnStatus.textContent = '● Connected to Master Deck (Audio Out: Laptop/Soundcard)';
+            remoteConnStatus.className = 'remote-conn-status online';
+          } else {
+            remoteConnStatus.textContent = '○ Menunggu halaman /player dibuka di Laptop Master Deck...';
+            remoteConnStatus.className = 'remote-conn-status warn';
+          }
+        }
+        if (data.state) {
+          applyMasterStateToRemoteUI(data.state);
+        }
+      }
+    } catch (_e) {
+      if (remoteConnStatus) {
+        remoteConnStatus.textContent = '○ Koneksi Wi-Fi terputus — Mencoba menghubungkan ulang...';
+        remoteConnStatus.className = 'remote-conn-status err';
+      }
+    } finally {
+      isRemotePollInFlight = false;
+    }
+  }
+
+  function initRemoteModeEngine() {
+    syncRemotePinButtonText();
+    if (isRemoteController) {
+      document.body.classList.add('remote-controller-mode');
+      setRemoteMobileView('deck');
+      const mobileTabBtns = document.querySelectorAll('#remoteMobileTabs .remote-mobile-tab');
+      mobileTabBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+          setRemoteMobileView(btn.dataset.remoteView || 'deck');
+        });
+      });
+      if (remoteModeBanner) remoteModeBanner.classList.remove('hidden');
+      if (btnExitRemoteSim && isLocalhostHost) {
+        btnExitRemoteSim.classList.remove('hidden');
+      }
+      if (btnOpenRemoteModal && remoteHeaderLabel) {
+        btnOpenRemoteModal.classList.add('connected');
+        remoteHeaderLabel.textContent = 'Remote Active';
+      }
+      // Hide local-OS-only controls when operating from a smartphone remote
+      if (btnBrowseSource) btnBrowseSource.classList.add('hidden');
+      if (btnOpenExplorer) btnOpenExplorer.classList.add('hidden');
+      if (btnQuickAuditSetlist) btnQuickAuditSetlist.classList.add('hidden');
+      pollRemoteStateFromMaster();
+      setInterval(pollRemoteStateFromMaster, 350);
+    } else {
+      pushMasterStateAndPollCommands();
+      setInterval(pushMasterStateAndPollCommands, 350);
+    }
+  }
+
   // Initialize Player State & Start RTA Loop
   loadPlayerPrefs();
-  setPlayMode(playMode);
+  setPlayMode(playMode, { fromRemoteSync: true });
   syncRoutingBadgeUI();
   syncDspRackTabsUI();
   syncCuePadsCollapseUI();
   applyGainAndEqNodes();
   renderCuePads();
-  refreshAudioOutputDevices();
+  if (!isRemoteController) {
+    refreshAudioOutputDevices();
+  }
   startRtaRenderLoop();
   fetchLibrary(currentSourceDir);
+  initRemoteModeEngine();
 });
 

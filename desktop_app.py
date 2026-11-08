@@ -138,20 +138,25 @@ def launch_fallback_app_window(url: str) -> subprocess.Popen | None:
 
 
 def main() -> int:
-    host = "127.0.0.1"
+    bind_host = "0.0.0.0"
+    local_host = "127.0.0.1"
     preferred_port = 8765
 
-    server, actual_port = web_ui.create_server(host, preferred_port)
-    url = f"http://{host}:{actual_port}"
+    server, actual_port = web_ui.create_server(bind_host, preferred_port)
+    url = f"http://{local_host}:{actual_port}"
 
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
-    wait_for_server(host, actual_port, timeout=5.0)
+    wait_for_server(local_host, actual_port, timeout=5.0)
 
+    lan_ips = web_ui.get_local_lan_ips(force_refresh=True)
     print("=" * 65)
     print("  SWARARIA AUDIO LAB — DESKTOP APPLICATION MODE")
     print("=" * 65)
     print(f"  Local Workstation Engine : {url}")
+    if lan_ips:
+        print(f"  FOH Mobile Remote (HP)   : http://{lan_ips[0]}:{actual_port}/player?remote=1")
+        print(f"  FOH Remote Security PIN  : {web_ui.remote_hub.pin}")
     print(f"  Audio Library Inbox      : {web_ui.INBOX_DIR}")
     print("=" * 65)
 
