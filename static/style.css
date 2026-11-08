@@ -4,12 +4,14 @@
    ========================================================================== */
 
 :root {
-  --bg-core: #09090b;
-  --bg-surface: #0c0c0f;
-  --bg-surface-elevated: #18181b;
-  --bg-surface-glass: rgba(9, 9, 11, 0.96);
-  --border-subtle: #27272a;
-  --border-strong: #3f3f46;
+  --bg-core: #11141c;
+  --bg-surface: #1b202c;
+  --bg-recessed: #131720;
+  --bg-oled: #0b0e14;
+  --bg-surface-elevated: #242a38;
+  --bg-surface-glass: rgba(22, 26, 36, 0.94);
+  --border-subtle: #2e364a;
+  --border-strong: #434e68;
   --border-focus: #00e5ff;
 
   --accent-cyan: #00e5ff;
@@ -35,7 +37,7 @@
   --radius-lg: 8px;
   --radius-full: 9999px;
 
-  --shadow-card: 0 4px 20px rgba(0, 0, 0, 0.7);
+  --shadow-card: 0 8px 26px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.05);
   --shadow-glow: 0 0 16px var(--accent-cyan-glow);
   --transition-fast: 0.14s ease;
   --transition-normal: 0.2s cubic-bezier(0.16, 1, 0.3, 1);
@@ -342,7 +344,7 @@ body.dark-theme {
 
 .field-textarea {
   width: 100%;
-  background: #09090b;
+  background: var(--bg-recessed);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   padding: 0.5rem 0.7rem;
@@ -409,7 +411,7 @@ body.dark-theme {
   flex-direction: column;
   gap: 0.15rem;
   padding: 0.48rem 0.65rem;
-  background: #09090b;
+  background: var(--bg-recessed);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   transition: all 0.14s ease;
@@ -418,7 +420,7 @@ body.dark-theme {
 
 .seg-option:hover .seg-option-body {
   border-color: var(--border-strong);
-  background: #121216;
+  background: var(--bg-surface-elevated);
 }
 
 .seg-option input:checked + .seg-option-body {
@@ -464,7 +466,7 @@ body.dark-theme {
 
 .compact-options-grid .custom-toggle {
   padding: 0.38rem 0.6rem;
-  background: #09090b;
+  background: var(--bg-recessed);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   gap: 0.5rem;
@@ -817,7 +819,7 @@ body.dark-theme {
 }
 
 .active-job-box {
-  background: #09090b;
+  background: var(--bg-recessed);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   padding: 0.7rem 0.85rem;
@@ -902,7 +904,7 @@ body.dark-theme {
 
 /* Terminal Console */
 .terminal-container {
-  background: #060608;
+  background: var(--bg-oled);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   overflow: hidden;
@@ -913,7 +915,7 @@ body.dark-theme {
   align-items: center;
   justify-content: space-between;
   padding: 0.36rem 0.7rem;
-  background: #121216;
+  background: var(--bg-recessed);
   border-bottom: 1px solid var(--border-subtle);
 }
 
@@ -959,7 +961,7 @@ body.dark-theme {
   font-size: 0.72rem;
   line-height: 1.48;
   color: #f1f5f9;
-  background: #050507;
+  background: var(--bg-oled);
 }
 
 .log-line {
@@ -985,7 +987,7 @@ body.dark-theme {
   gap: 0.55rem;
   padding: 0.5rem 0.7rem;
   margin-bottom: 0.55rem;
-  background: #09090b;
+  background: var(--bg-recessed);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
 }
@@ -1073,7 +1075,7 @@ body.dark-theme {
 }
 
 .qc-table th {
-  background: #121217;
+  background: var(--bg-recessed);
   padding: 0.48rem 0.7rem;
   font-family: var(--font-sans);
   font-size: 0.73rem;
@@ -1091,12 +1093,12 @@ body.dark-theme {
 }
 
 .qc-table tr:hover td {
-  background-color: rgba(255, 255, 255, 0.03);
+  background-color: rgba(255, 255, 255, 0.04);
 }
 
 /* Collapsible Playlist Group Header Rows */
 .qc-table tr.group-header-row td {
-  background: #11131a;
+  background: #151a25;
   border-top: 1px solid var(--border-strong);
   border-bottom: 1px solid var(--border-strong);
   padding: 0.38rem 0.7rem;
@@ -1105,7 +1107,7 @@ body.dark-theme {
 }
 
 .qc-table tr.group-header-row:hover td {
-  background: #171a24;
+  background: #1d2433;
 }
 
 .group-header-bar {
@@ -2521,7 +2523,7 @@ body.dark-theme {
   flex-direction: column;
   gap: 0.45rem;
   padding: 0.9rem 1.05rem;
-  background: var(--bg-core);
+  background: var(--bg-recessed);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   text-decoration: none;
@@ -2590,6 +2592,7 @@ body.dark-theme {
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
+  box-shadow: var(--shadow-card);
 }
 
 .qc-kpi-card.safe {

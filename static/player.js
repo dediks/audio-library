@@ -22,6 +22,7 @@ import { initFolderModal } from './modules/folder-modal.js';
 
 const CUE_PADS_STORAGE_KEY = 'swararia_foh_cue_pads_v1';
 const PLAYER_PREFS_STORAGE_KEY = 'swararia_foh_player_prefs_v1';
+const PLAYBACK_SESSION_STORAGE_KEY = 'swararia_foh_playback_session_v1';
 
 document.addEventListener('DOMContentLoaded', () => {
   initAppHeader({ activePage: 'player' });
@@ -98,9 +99,20 @@ document.addEventListener('DOMContentLoaded', () => {
   const cuePadsBody = document.getElementById('cuePadsBody');
   const cuePadsCountBadge = document.getElementById('cuePadsCountBadge');
   const btnAssignCurrentToPad = document.getElementById('btnAssignCurrentToPad');
+  const btnAssignCurrentText = document.getElementById('btnAssignCurrentText');
   const btnClearAllPads = document.getElementById('btnClearAllPads');
   const btnToggleCuePads = document.getElementById('btnToggleCuePads');
   const btnToggleCuePadsText = document.getElementById('btnToggleCuePadsText');
+
+  const padPickerModal = document.getElementById('padPickerModal');
+  const padPickerModalTitle = document.getElementById('padPickerModalTitle');
+  const btnClosePadPicker = document.getElementById('btnClosePadPicker');
+  const btnCancelPadPicker = document.getElementById('btnCancelPadPicker');
+  const padPickerActiveBanner = document.getElementById('padPickerActiveBanner');
+  const padPickerActiveTitle = document.getElementById('padPickerActiveTitle');
+  const btnPickActiveDeckTrack = document.getElementById('btnPickActiveDeckTrack');
+  const padPickerSearchInput = document.getElementById('padPickerSearchInput');
+  const padPickerList = document.getElementById('padPickerList');
 
   const btnOpenExplorer = document.getElementById('btnOpenExplorer');
   const btnQuickAuditSetlist = document.getElementById('btnQuickAuditSetlist');
@@ -141,6 +153,9 @@ document.addEventListener('DOMContentLoaded', () => {
   let isFadingOut = false;
   let fadeTimerId = null;
   let isAuditRunning = false;
+  let isPageUnloading = false;
+  let hasRestoredInitialSession = false;
+  let pendingAutoResumeOnGesture = false;
 
   const collapsedGroups = new Set();
   const groupDomMap = new Map();
@@ -257,17 +272,85 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  function savePlaybackSessionState(overrideIsPlaying = null) {
+    if (!activeTrackObj || !audioEl) return;
+    try {
+      const isPlayingNow =
+        overrideIsPlaying !== null
+          ? Boolean(overrideIsPlaying)
+          : Boolean(!audioEl.paused && !audioEl.ended);
+      const curSec = Number.isFinite(audioEl.currentTime) ? audioEl.currentTime : 0;
+      sessionStorage.setItem(
+        PLAYBACK_SESSION_STORAGE_KEY,
+        JSON.stringify({
+          rel_path: activeTrackObj.rel_path,
+          source_dir: currentSourceDir || '',
+          currentTime: curSec,
+          isPlaying: isPlayingNow,
+          savedAt: Date.now(),
+        })
+      );
+    } catch (_e) {
+      // Ignore storage errors
+    }
+  }
+
+  function loadPlaybackSessionState() {
+    try {
+      const raw = sessionStorage.getItem(PLAYBACK_SESSION_STORAGE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed.rel_path !== 'string') return null;
+      return {
+        rel_path: parsed.rel_path,
+        source_dir: String(parsed.source_dir || ''),
+        currentTime:
+          typeof parsed.currentTime === 'number' && Number.isFinite(parsed.currentTime)
+            ? Math.max(0, parsed.currentTime)
+            : 0,
+        isPlaying: Boolean(parsed.isPlaying),
+        savedAt: typeof parsed.savedAt === 'number' ? parsed.savedAt : 0,
+      };
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  window.addEventListener('beforeunload', () => {
+    isPageUnloading = true;
+    savePlaybackSessionState();
+  });
+  window.addEventListener('pagehide', () => {
+    isPageUnloading = true;
+    savePlaybackSessionState();
+  });
+
   // ---------------------------------------------------------------------------
   // 2. Web Audio API DSP Engine (Preamp, 3-Band EQ, Phase Matrix, RTA & Meters)
   // ---------------------------------------------------------------------------
+  function connectMediaElementToGraphIfReady() {
+    if (!audioCtx || !audioEl || mediaSourceNode || !preampGainNode) return;
+    if (audioCtx.state !== 'running') return;
+    try {
+      mediaSourceNode = audioCtx.createMediaElementSource(audioEl);
+      mediaSourceNode.connect(preampGainNode);
+      applyGainAndEqNodes();
+    } catch (_e) {
+      // Ignore if already connected
+    }
+  }
+
   function ensureAudioGraph() {
-    if (audioCtx || !audioEl) return;
+    if (!audioEl) return;
+    if (audioCtx) {
+      connectMediaElementToGraphIfReady();
+      return;
+    }
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
     if (!AudioContextClass) return;
 
     try {
       audioCtx = new AudioContextClass();
-      mediaSourceNode = audioCtx.createMediaElementSource(audioEl);
 
       preampGainNode = audioCtx.createGain();
 
@@ -309,8 +392,7 @@ document.addEventListener('DOMContentLoaded', () => {
       meterAnalyserR = audioCtx.createAnalyser();
       meterAnalyserR.fftSize = 1024;
 
-      // Connect Signal Chain
-      mediaSourceNode.connect(preampGainNode);
+      // Connect Signal Chain (preamp -> EQ -> Matrix -> Master -> Destination)
       preampGainNode.connect(eqLowNode);
       eqLowNode.connect(eqMidNode);
       eqMidNode.connect(eqHighNode);
@@ -337,6 +419,14 @@ document.addEventListener('DOMContentLoaded', () => {
       fadeGainNode.connect(meterSplitter);
       meterSplitter.connect(meterAnalyserL, 0);
       meterSplitter.connect(meterAnalyserR, 1);
+
+      audioCtx.addEventListener('statechange', () => {
+        connectMediaElementToGraphIfReady();
+      });
+
+      // Only attach createMediaElementSource once audioCtx is running so a suspended
+      // AudioContext on page refresh never mutes native HTML5 audio playback!
+      connectMediaElementToGraphIfReady();
 
       applyRoutingMatrix();
       applyGainAndEqNodes();
@@ -439,11 +529,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     const masterLin = isMuted ? 0 : volPct / 100;
-    if (masterGainNode) {
+    if (masterGainNode && mediaSourceNode) {
       masterGainNode.gain.value = masterLin;
       if (audioEl) audioEl.volume = 1.0;
     } else if (audioEl) {
-      audioEl.volume = masterLin;
+      const fallbackGain = Math.max(0, Math.min(1, masterLin * dbToLinear(preampDb)));
+      audioEl.volume = fallbackGain;
     }
 
     if (preampGainNode) {
@@ -648,7 +739,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return '/api/stream?' + params.toString();
   }
 
-  function loadTrack(fileObj, autoPlay = false) {
+  function loadTrack(fileObj, autoPlay = false, opts = {}) {
     if (!fileObj || !audioEl) return;
     cancelActiveFade();
     ensureAudioGraph();
@@ -667,6 +758,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     applyGainAndEqNodes();
 
+    const startTime =
+      typeof opts.startTime === 'number' && Number.isFinite(opts.startTime) && opts.startTime > 0
+        ? opts.startTime
+        : 0;
+
     audioEl.src = buildStreamUrl(fileObj);
     audioEl.load();
 
@@ -675,19 +771,40 @@ document.addEventListener('DOMContentLoaded', () => {
       seekSlider.value = '0';
     }
 
+    if (startTime > 0) {
+      const applyStartTime = () => {
+        try {
+          if (Number.isFinite(audioEl.duration) && audioEl.duration > 0) {
+            audioEl.currentTime = Math.min(startTime, Math.max(0, audioEl.duration - 0.2));
+          } else {
+            audioEl.currentTime = startTime;
+          }
+          updateTimecodeUI();
+        } catch (_e) {
+          // Ignore seek before metadata ready
+        }
+      };
+      if (audioEl.readyState >= 1) {
+        applyStartTime();
+      } else {
+        audioEl.addEventListener('loadedmetadata', applyStartTime, { once: true });
+      }
+    }
+
     updateNowPlayingCard(fileObj);
     highlightActiveRowInTable();
     renderCuePads();
 
     if (autoPlay) {
-      playCurrentTrack();
+      playCurrentTrack({ isSessionRestore: Boolean(opts.isSessionRestore), startTime });
     } else {
       setTransportStateBadge('CUED');
       syncPlayPauseButton(false);
+      savePlaybackSessionState(false);
     }
   }
 
-  async function playCurrentTrack() {
+  async function playCurrentTrack(opts = {}) {
     if (!audioEl) return;
     if (!activeTrackObj) {
       if (visibleFiles.length > 0) {
@@ -704,17 +821,35 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         await audioCtx.resume();
       } catch (_e) {
-        // Ignore resume error
+        // Ignore resume error on auto-reload without gesture
       }
     }
+    connectMediaElementToGraphIfReady();
 
     try {
       await audioEl.play();
+      pendingAutoResumeOnGesture = false;
       setTransportStateBadge('PLAYING');
       syncPlayPauseButton(true);
       highlightActiveRowInTable();
       renderCuePads();
+      savePlaybackSessionState(true);
     } catch (err) {
+      if (opts && opts.isSessionRestore) {
+        pendingAutoResumeOnGesture = true;
+        setTransportStateBadge('PAUSED');
+        syncPlayPauseButton(false);
+        highlightActiveRowInTable();
+        renderCuePads();
+        const resumeAtStr = formatTimecode(opts.startTime || audioEl.currentTime || 0, false);
+        notify({
+          type: 'info',
+          title: `Posisi Lagu Dipulihkan (${resumeAtStr})`,
+          message: 'Klik di mana saja atau tekan Space untuk melanjutkan pemutaran.',
+          duration: 4200,
+        });
+        return;
+      }
       notify({
         type: 'error',
         title: 'Gagal Memutar Audio',
@@ -725,16 +860,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function pauseCurrentTrack() {
     if (!audioEl) return;
+    pendingAutoResumeOnGesture = false;
     cancelActiveFade();
     audioEl.pause();
     setTransportStateBadge('PAUSED');
     syncPlayPauseButton(false);
     highlightActiveRowInTable();
     renderCuePads();
+    savePlaybackSessionState(false);
   }
 
   function stopAndResetCue() {
     if (!audioEl) return;
+    pendingAutoResumeOnGesture = false;
     cancelActiveFade();
     audioEl.pause();
     audioEl.currentTime = 0;
@@ -743,6 +881,7 @@ document.addEventListener('DOMContentLoaded', () => {
     syncPlayPauseButton(false);
     highlightActiveRowInTable();
     renderCuePads();
+    savePlaybackSessionState(false);
   }
 
   function triggerSmoothFadeOut(durationSec = 3.0) {
@@ -884,8 +1023,22 @@ document.addEventListener('DOMContentLoaded', () => {
   // 5. Audio Element Events & Play Mode Transitions
   // ---------------------------------------------------------------------------
   if (audioEl) {
-    audioEl.addEventListener('timeupdate', updateTimecodeUI);
+    audioEl.addEventListener('timeupdate', () => {
+      updateTimecodeUI();
+      if (!isPageUnloading) {
+        savePlaybackSessionState();
+      }
+    });
     audioEl.addEventListener('loadedmetadata', updateTimecodeUI);
+    audioEl.addEventListener('play', () => {
+      if (!isPageUnloading) savePlaybackSessionState(true);
+    });
+    audioEl.addEventListener('pause', () => {
+      if (!isPageUnloading && !audioEl.ended) savePlaybackSessionState(false);
+    });
+    audioEl.addEventListener('seeked', () => {
+      if (!isPageUnloading) savePlaybackSessionState();
+    });
     audioEl.addEventListener('ended', () => {
       cancelActiveFade();
       if (playMode === 'loop') {
@@ -974,8 +1127,10 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // ---------------------------------------------------------------------------
-  // 7. 8 Instant FOH Cue Pads (Collapsible Strip)
+  // 7. 8 Instant FOH Cue Pads (Collapsible Strip + Track Picker + Drag & Drop)
   // ---------------------------------------------------------------------------
+  let pendingPadPickerSlot = 0;
+
   function syncCuePadsCollapseUI() {
     if (cuePadsBody) {
       cuePadsBody.classList.toggle('collapsed', cuePadsCollapsed);
@@ -988,6 +1143,23 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  function syncTablePadButtons() {
+    rowDomByRelPath.forEach((tr, relPath) => {
+      const btnPad = tr.querySelector('.btn-row-pad');
+      if (!btnPad) return;
+      const padIdx = cuePads.findIndex(p => p && p.rel_path === relPath);
+      if (padIdx >= 0) {
+        btnPad.classList.add('assigned');
+        btnPad.textContent = `Pad [${padIdx + 1}] ✓`;
+        btnPad.title = `Terpasang di Cue Pad [${padIdx + 1}] — Klik untuk melepas dari Pad`;
+      } else {
+        btnPad.classList.remove('assigned');
+        btnPad.textContent = '+ Pad';
+        btnPad.title = 'Pasang track ini ke slot Instant Cue Pad kosong berikutnya';
+      }
+    });
+  }
+
   function renderCuePads() {
     if (!cuePadsGrid) return;
     cuePadsGrid.replaceChildren();
@@ -997,62 +1169,145 @@ document.addEventListener('DOMContentLoaded', () => {
       cuePadsCountBadge.textContent = `${assignedCount} / 8 Assigned`;
     }
 
+    const nextEmptyIdx = cuePads.findIndex(p => p === null);
+    if (btnAssignCurrentText) {
+      btnAssignCurrentText.textContent =
+        nextEmptyIdx >= 0
+          ? `+ Assign Active to Pad [${nextEmptyIdx + 1}]`
+          : '+ Assign Active Track';
+    }
+
     for (let i = 0; i < 8; i++) {
       const padData = cuePads[i];
-      const isPlayingThis =
-        Boolean(padData && activeTrackObj && activeTrackObj.rel_path === padData.rel_path) &&
-        Boolean(audioEl && !audioEl.paused);
+      const isActiveThis = Boolean(
+        padData && activeTrackObj && activeTrackObj.rel_path === padData.rel_path
+      );
+      const isPlayingThis = isActiveThis && Boolean(audioEl && !audioEl.paused);
 
       const padBtn = document.createElement('div');
       padBtn.className =
         'cue-pad-item' +
         (padData ? ' assigned' : '') +
+        (isActiveThis && !isPlayingThis ? ' cued' : '') +
         (isPlayingThis ? ' playing' : '');
       padBtn.setAttribute('role', 'button');
       padBtn.tabIndex = 0;
       padBtn.title = padData
-        ? `[Hotkey ${i + 1}] ${padData.name}`
-        : `Pad Slot ${i + 1} Empty — Click to assign active track or click "+ Pad" on a Setlist row`;
+        ? `[Hotkey ${i + 1}] ${padData.name} — Klik atau tekan angka ${i + 1} untuk Play/Pause`
+        : `Cue Pad [${i + 1}] Kosong — Klik untuk memilih track atau tarik lagu dari tabel ke sini`;
 
+      // Top Row: Key Badge + Status Pill + Quick Actions
       const topRow = document.createElement('div');
       topRow.className = 'cue-pad-top';
 
+      const topLeft = document.createElement('div');
+      topLeft.className = 'cue-pad-top-left';
+
       const keyBadge = document.createElement('span');
       keyBadge.className = 'cue-pad-key';
-      keyBadge.textContent = `[${i + 1}]`;
-      topRow.appendChild(keyBadge);
+      keyBadge.textContent = `Key [${i + 1}]`;
+      topLeft.appendChild(keyBadge);
+
+      const statusPill = document.createElement('span');
+      if (isPlayingThis) {
+        statusPill.className = 'cue-pad-status-pill playing';
+        statusPill.textContent = '● ON AIR';
+      } else if (isActiveThis) {
+        statusPill.className = 'cue-pad-status-pill cued';
+        statusPill.textContent = 'CUED';
+      } else if (padData) {
+        statusPill.className = 'cue-pad-status-pill';
+        statusPill.textContent = 'READY';
+      } else {
+        statusPill.className = 'cue-pad-status-pill';
+        statusPill.textContent = 'EMPTY';
+      }
+      topLeft.appendChild(statusPill);
+      topRow.appendChild(topLeft);
+
+      const actionsWrap = document.createElement('div');
+      actionsWrap.className = 'cue-pad-actions';
 
       if (padData) {
+        const restartBtn = document.createElement('button');
+        restartBtn.type = 'button';
+        restartBtn.className = 'cue-pad-action-btn';
+        restartBtn.textContent = '↺';
+        restartBtn.title = `Ulangi Pad [${i + 1}] dari 00:00.0`;
+        restartBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          restartCuePadFromZero(i);
+        });
+        actionsWrap.appendChild(restartBtn);
+
+        const changeBtn = document.createElement('button');
+        changeBtn.type = 'button';
+        changeBtn.className = 'cue-pad-action-btn';
+        changeBtn.textContent = '⇄';
+        changeBtn.title = `Ganti track pada Pad [${i + 1}]`;
+        changeBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          openPadPickerModal(i);
+        });
+        actionsWrap.appendChild(changeBtn);
+
         const clearBtn = document.createElement('button');
         clearBtn.type = 'button';
         clearBtn.className = 'cue-pad-clear-btn';
         clearBtn.textContent = '✕';
-        clearBtn.title = `Clear Pad ${i + 1}`;
+        clearBtn.title = `Kosongkan Pad [${i + 1}]`;
         clearBtn.addEventListener('click', e => {
           e.stopPropagation();
           cuePads[i] = null;
           saveCuePads();
           renderCuePads();
         });
-        topRow.appendChild(clearBtn);
+        actionsWrap.appendChild(clearBtn);
+      } else {
+        const pickBtn = document.createElement('button');
+        pickBtn.type = 'button';
+        pickBtn.className = 'cue-pad-action-btn';
+        pickBtn.textContent = '+ Pilih';
+        pickBtn.title = `Pilih track untuk Pad [${i + 1}]`;
+        pickBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          openPadPickerModal(i);
+        });
+        actionsWrap.appendChild(pickBtn);
       }
+      topRow.appendChild(actionsWrap);
+
+      // Main Row: Play/Pause/Add Icon + Track Title
+      const mainRow = document.createElement('div');
+      mainRow.className = 'cue-pad-main-row';
+
+      const playIcon = document.createElement('span');
+      playIcon.className = 'cue-pad-play-icon';
+      playIcon.textContent = padData ? (isPlayingThis ? '❚❚' : '▶') : '+';
+      mainRow.appendChild(playIcon);
 
       const titleDiv = document.createElement('div');
       titleDiv.className = 'cue-pad-title';
-      titleDiv.textContent = padData ? padData.name : 'Empty Slot';
+      titleDiv.textContent = padData ? padData.name : 'Pilih Audio Track...';
+      mainRow.appendChild(titleDiv);
 
+      // Sub Row: Folder + Action Hint
       const subDiv = document.createElement('div');
       subDiv.className = 'cue-pad-sub';
-      subDiv.textContent = padData
-        ? padData.folder
-          ? padData.folder
-          : 'Root Inbox'
-        : 'Click to assign track';
+      if (padData) {
+        const folderLabel = padData.folder ? padData.folder : 'Root Inbox';
+        subDiv.textContent = isPlayingThis
+          ? `${folderLabel} • Klik / [${i + 1}] untuk Pause`
+          : `${folderLabel} • Klik / [${i + 1}] untuk Play`;
+      } else {
+        subDiv.textContent = 'Klik di sini atau tarik lagu dari tabel';
+      }
 
       padBtn.appendChild(topRow);
-      padBtn.appendChild(titleDiv);
+      padBtn.appendChild(mainRow);
       padBtn.appendChild(subDiv);
 
+      // Click & Keyboard trigger
       padBtn.addEventListener('click', () => triggerCuePad(i));
       padBtn.addEventListener('keydown', e => {
         if (e.key === 'Enter' || e.key === ' ') {
@@ -1061,16 +1316,67 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       });
 
+      // Drag & Drop target events
+      padBtn.addEventListener('dragover', e => {
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+        padBtn.classList.add('drag-over');
+      });
+      padBtn.addEventListener('dragleave', () => {
+        padBtn.classList.remove('drag-over');
+      });
+      padBtn.addEventListener('drop', e => {
+        e.preventDefault();
+        padBtn.classList.remove('drag-over');
+        const droppedRelPath = e.dataTransfer ? e.dataTransfer.getData('text/plain') : '';
+        if (!droppedRelPath) return;
+        const foundFile = allFiles.find(f => f.rel_path === droppedRelPath);
+        if (foundFile) {
+          assignFileToCuePad(foundFile, i);
+        }
+      });
+
       cuePadsGrid.appendChild(padBtn);
     }
+
+    syncTablePadButtons();
   }
 
   function assignFileToCuePad(fileObj, preferredIndex = null) {
     if (!fileObj) return;
+
+    // If no specific slot was requested and this track is already in a Pad, highlight/notify
+    const existingIdx = cuePads.findIndex(p => p && p.rel_path === fileObj.rel_path);
+    if (preferredIndex === null && existingIdx >= 0) {
+      notify({
+        type: 'info',
+        title: `Sudah Terpasang di Cue Pad [${existingIdx + 1}]`,
+        message: `"${fileObj.name}" sudah siap dipicu dengan tombol keyboard [${existingIdx + 1}].`,
+        duration: 2400,
+      });
+      return;
+    }
+
     let targetIdx = preferredIndex;
     if (targetIdx === null || targetIdx < 0 || targetIdx >= 8) {
       targetIdx = cuePads.findIndex(p => p === null);
-      if (targetIdx === -1) targetIdx = 0;
+      if (targetIdx === -1) {
+        openPadPickerModal(0);
+        notify({
+          type: 'info',
+          title: 'Semua 8 Cue Pad Sudah Terisi',
+          message: 'Silakan hapus atau ganti salah satu slot Pad terlebih dahulu.',
+          duration: 3000,
+        });
+        return;
+      }
+    }
+
+    // Prevent duplicate assignment across slots if moving to a specific slot
+    for (let k = 0; k < 8; k++) {
+      if (k !== targetIdx && cuePads[k] && cuePads[k].rel_path === fileObj.rel_path) {
+        cuePads[k] = null;
+      }
     }
 
     cuePads[targetIdx] = {
@@ -1089,37 +1395,175 @@ document.addEventListener('DOMContentLoaded', () => {
 
     notify({
       type: 'success',
-      title: `Disematkan ke Cue Pad ${targetIdx + 1}`,
-      message: `"${fileObj.name}" siap dipicu dengan tombol keyboard [${targetIdx + 1}].`,
-      duration: 2800,
+      title: `Terpasang di Cue Pad [${targetIdx + 1}]`,
+      message: `"${fileObj.name}" siap diputar instan dengan tombol [${targetIdx + 1}].`,
+      duration: 2600,
     });
+  }
+
+  function resolveCuePadFileObj(padData) {
+    return (
+      allFiles.find(f => f.rel_path === padData.rel_path) || {
+        rel_path: padData.rel_path,
+        name: padData.name,
+        folder: padData.folder,
+        ext: '.' + (padData.name.split('.').pop() || 'opus').toLowerCase(),
+        size_mb: 0,
+        qc: {},
+      }
+    );
+  }
+
+  function restartCuePadFromZero(padIndex) {
+    const padData = cuePads[padIndex];
+    if (!padData) return;
+    const found = resolveCuePadFileObj(padData);
+    if (activeTrackObj && activeTrackObj.rel_path === found.rel_path && audioEl) {
+      audioEl.currentTime = 0;
+      playCurrentTrack();
+    } else {
+      loadTrack(found, true);
+    }
   }
 
   function triggerCuePad(padIndex) {
     const padData = cuePads[padIndex];
     if (!padData) {
-      if (activeTrackObj) {
-        assignFileToCuePad(activeTrackObj, padIndex);
+      // Friendly behavior: clicking an empty Pad opens the Track Picker Modal for that Pad!
+      openPadPickerModal(padIndex);
+      return;
+    }
+
+    const found = resolveCuePadFileObj(padData);
+    const isSameTrack = Boolean(activeTrackObj && activeTrackObj.rel_path === found.rel_path);
+    if (isSameTrack && audioEl) {
+      if (!audioEl.paused) {
+        pauseCurrentTrack();
       } else {
-        notify({
-          type: 'info',
-          title: `Cue Pad ${padIndex + 1} Kosong`,
-          message: 'Klik tombol "+ Pad" pada lagu di tabel untuk mengisi slot ini.',
-          duration: 2600,
-        });
+        playCurrentTrack();
       }
       return;
     }
 
-    const found = allFiles.find(f => f.rel_path === padData.rel_path) || {
-      rel_path: padData.rel_path,
-      name: padData.name,
-      folder: padData.folder,
-      ext: '.' + (padData.name.split('.').pop() || 'opus').toLowerCase(),
-      size_mb: 0,
-      qc: {},
-    };
     loadTrack(found, true);
+  }
+
+  // Interactive Cue Pad Track Picker Modal
+  function openPadPickerModal(slotIndex) {
+    pendingPadPickerSlot = slotIndex;
+    if (!padPickerModal) return;
+
+    if (padPickerModalTitle) {
+      padPickerModalTitle.textContent = `Pilih Track untuk Cue Pad [${slotIndex + 1}]`;
+    }
+
+    if (padPickerActiveBanner && padPickerActiveTitle) {
+      if (activeTrackObj) {
+        padPickerActiveBanner.classList.remove('hidden');
+        padPickerActiveTitle.textContent = activeTrackObj.name;
+      } else {
+        padPickerActiveBanner.classList.add('hidden');
+      }
+    }
+
+    if (padPickerSearchInput) {
+      padPickerSearchInput.value = '';
+    }
+
+    renderPadPickerTrackList('');
+    padPickerModal.classList.remove('hidden');
+    if (padPickerSearchInput) {
+      setTimeout(() => padPickerSearchInput.focus(), 40);
+    }
+  }
+
+  function closePadPickerModal() {
+    if (padPickerModal) {
+      padPickerModal.classList.add('hidden');
+    }
+  }
+
+  function renderPadPickerTrackList(queryText) {
+    if (!padPickerList) return;
+    padPickerList.replaceChildren();
+
+    const q = (queryText || '').trim().toLowerCase();
+    const sourceList = visibleFiles.length > 0 && !q ? visibleFiles : allFiles;
+    const matches = sourceList.filter(f => {
+      if (!q) return true;
+      return `${f.name} ${f.folder || ''} ${f.ext || ''}`.toLowerCase().includes(q);
+    });
+
+    if (matches.length === 0) {
+      const emptyDiv = document.createElement('div');
+      emptyDiv.className = 'pad-picker-item';
+      const infoSpan = document.createElement('span');
+      infoSpan.className = 'pad-picker-item-meta';
+      infoSpan.textContent = 'Tidak ada track yang cocok dengan pencarian.';
+      emptyDiv.appendChild(infoSpan);
+      padPickerList.appendChild(emptyDiv);
+      return;
+    }
+
+    const fragment = document.createDocumentFragment();
+    matches.slice(0, 80).forEach(fileObj => {
+      const row = document.createElement('div');
+      row.className = 'pad-picker-item';
+
+      const info = document.createElement('div');
+      info.className = 'pad-picker-item-info';
+
+      const title = document.createElement('div');
+      title.className = 'pad-picker-item-title';
+      title.textContent = fileObj.name;
+
+      const meta = document.createElement('div');
+      meta.className = 'pad-picker-item-meta';
+      const folderStr = fileObj.folder ? fileObj.folder : 'Root Inbox';
+      const extStr = (fileObj.ext || '').replace('.', '').toUpperCase();
+      meta.textContent = `${folderStr} • ${extStr} (${fileObj.size_mb} MB)`;
+
+      info.appendChild(title);
+      info.appendChild(meta);
+
+      const assignBtn = document.createElement('button');
+      assignBtn.type = 'button';
+      assignBtn.className = 'pad-picker-assign-btn';
+      assignBtn.textContent = `Pasang ke Pad [${pendingPadPickerSlot + 1}]`;
+
+      row.appendChild(info);
+      row.appendChild(assignBtn);
+
+      row.addEventListener('click', () => {
+        assignFileToCuePad(fileObj, pendingPadPickerSlot);
+        closePadPickerModal();
+      });
+
+      fragment.appendChild(row);
+    });
+
+    padPickerList.appendChild(fragment);
+  }
+
+  if (btnClosePadPicker) btnClosePadPicker.addEventListener('click', closePadPickerModal);
+  if (btnCancelPadPicker) btnCancelPadPicker.addEventListener('click', closePadPickerModal);
+  if (padPickerModal) {
+    padPickerModal.addEventListener('click', e => {
+      if (e.target === padPickerModal) closePadPickerModal();
+    });
+  }
+  if (padPickerSearchInput) {
+    padPickerSearchInput.addEventListener('input', () => {
+      renderPadPickerTrackList(padPickerSearchInput.value);
+    });
+  }
+  if (btnPickActiveDeckTrack) {
+    btnPickActiveDeckTrack.addEventListener('click', () => {
+      if (activeTrackObj) {
+        assignFileToCuePad(activeTrackObj, pendingPadPickerSlot);
+        closePadPickerModal();
+      }
+    });
   }
 
   if (btnToggleCuePads) {
@@ -1207,16 +1651,27 @@ document.addEventListener('DOMContentLoaded', () => {
     renderPlaylists();
     applyFiltersAndRenderTable();
 
-    // Restore previously active track or cue first song automatically
+    // Restore previously active track (including exact playback position & playing state) or cue first song automatically
     if (activeTrackRelPath) {
       const restored = allFiles.find(f => f.rel_path === activeTrackRelPath);
       if (restored && (!activeTrackObj || activeTrackObj.rel_path !== restored.rel_path)) {
-        loadTrack(restored, false);
+        const savedSession = !hasRestoredInitialSession ? loadPlaybackSessionState() : null;
+        hasRestoredInitialSession = true;
+        const isMatchingSession = Boolean(
+          savedSession && savedSession.rel_path === restored.rel_path
+        );
+        const resumeTime = isMatchingSession ? savedSession.currentTime : 0;
+        const shouldAutoPlay = isMatchingSession ? Boolean(savedSession.isPlaying) : false;
+        loadTrack(restored, shouldAutoPlay, {
+          startTime: resumeTime,
+          isSessionRestore: true,
+        });
       } else if (restored) {
         activeTrackObj = restored;
         updateNowPlayingCard(restored);
       }
     } else if (!activeTrackObj && visibleFiles.length > 0) {
+      hasRestoredInitialSession = true;
       loadTrack(visibleFiles[0], false);
     }
 
@@ -1378,6 +1833,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function createPlayerTrackRow(fileObj, trackIdx, showFolderBadge) {
     const tr = document.createElement('tr');
+    tr.draggable = true;
+    tr.addEventListener('dragstart', e => {
+      if (e.dataTransfer) {
+        e.dataTransfer.setData('text/plain', fileObj.rel_path);
+        e.dataTransfer.effectAllowed = 'copy';
+      }
+    });
     const qc = fileObj.qc || {};
 
     // Column 1: Play / Cue / Pad Actions
@@ -1414,12 +1876,29 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const btnPad = document.createElement('button');
     btnPad.type = 'button';
-    btnPad.className = 'btn-row-pad';
-    btnPad.textContent = '+ Pad';
-    btnPad.title = 'Assign track to Instant Cue Pad (Hotkey 1–8)';
+    const existingPadIdx = cuePads.findIndex(p => p && p.rel_path === fileObj.rel_path);
+    btnPad.className = 'btn-row-pad' + (existingPadIdx >= 0 ? ' assigned' : '');
+    btnPad.textContent = existingPadIdx >= 0 ? `Pad [${existingPadIdx + 1}] ✓` : '+ Pad';
+    btnPad.title =
+      existingPadIdx >= 0
+        ? `Terpasang di Cue Pad [${existingPadIdx + 1}] — Klik untuk melepas dari Pad`
+        : 'Pasang track ini ke slot Instant Cue Pad kosong berikutnya';
     btnPad.addEventListener('click', e => {
       e.stopPropagation();
-      assignFileToCuePad(fileObj);
+      const curIdx = cuePads.findIndex(p => p && p.rel_path === fileObj.rel_path);
+      if (curIdx >= 0) {
+        cuePads[curIdx] = null;
+        saveCuePads();
+        renderCuePads();
+        notify({
+          type: 'info',
+          title: `Dilepas dari Cue Pad [${curIdx + 1}]`,
+          message: `"${fileObj.name}" telah dihapus dari slot Pad [${curIdx + 1}].`,
+          duration: 2200,
+        });
+      } else {
+        assignFileToCuePad(fileObj);
+      }
     });
 
     actionsWrap.appendChild(btnPlay);
@@ -1796,8 +2275,13 @@ document.addEventListener('DOMContentLoaded', () => {
     onLog: () => {},
   });
 
-  // Global FOH Keyboard Shortcuts (Space, F, S, 1-8)
+  // Global FOH Keyboard Shortcuts (Space, F, S, 1-8, Escape)
   document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && padPickerModal && !padPickerModal.classList.contains('hidden')) {
+      e.preventDefault();
+      closePadPickerModal();
+      return;
+    }
     const tag = (e.target && e.target.tagName ? e.target.tagName : '').toUpperCase();
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
     if (e.ctrlKey || e.altKey || e.metaKey) return;

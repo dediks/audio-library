@@ -314,15 +314,15 @@
           <div class="cue-pads-heading-inline">
             <h2 id="cuePadsHeading">Instant Cue Pads</h2>
             <span class="cue-pads-count-badge" id="cuePadsCountBadge">0 / 8 Assigned</span>
-            <span class="cue-pads-hint-text">Hotkeys 1 – 8 untuk Instant Cue, Jingle, Bumper &amp; Reference Tracks</span>
+            <span class="cue-pads-hint-text">Klik slot kosong untuk memilih track (atau tarik lagu dari tabel), lalu tekan <kbd>1</kbd>–<kbd>8</kbd> di keyboard untuk Play/Pause instan</span>
           </div>
         </div>
         <div class="library-actions">
-          <button type="button" id="btnAssignCurrentToPad" class="btn-secondary btn-sm" title="Assign active track to next empty Cue Pad slot">
-            <span>+ Assign Active Track</span>
+          <button type="button" id="btnAssignCurrentToPad" class="btn-secondary btn-sm" title="Simpan track yang sedang dimuat di Master Transport ke slot kosong berikutnya">
+            <span id="btnAssignCurrentText">+ Assign Active Track</span>
           </button>
           <button type="button" id="btnClearAllPads" class="btn-nudge" title="Clear all Cue Pad slots 1–8">
-            <span>Reset</span>
+            <span>Clear All</span>
           </button>
           <button type="button" id="btnToggleCuePads" class="btn-nudge" aria-expanded="true" title="Collapse or expand Instant Cue Pads">
             <span id="btnToggleCuePadsText">Hide Pads</span>
@@ -473,6 +473,41 @@
       <div class="modal-footer">
         <button type="button" id="btnCancelModal" class="btn-secondary">Batal</button>
         <button type="button" id="btnSelectModalDir" class="btn-primary">Pilih Folder Ini</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Interactive Cue Pad Track Picker Modal -->
+  <div class="modal-backdrop hidden" id="padPickerModal" role="dialog" aria-modal="true" aria-labelledby="padPickerModalTitle">
+    <div class="modal-card pad-picker-modal-card">
+      <div class="modal-header">
+        <div>
+          <h3 id="padPickerModalTitle">Pilih Track untuk Cue Pad [1]</h3>
+          <p class="pad-picker-subtitle">Klik salah satu track di bawah untuk langsung dipasang ke tombol pintas ini</p>
+        </div>
+        <button type="button" id="btnClosePadPicker" class="btn-text">&#10005; Tutup</button>
+      </div>
+      <div class="modal-body pad-picker-body">
+        <div class="pad-picker-active-banner hidden" id="padPickerActiveBanner">
+          <div class="pad-picker-active-info">
+            <span class="pad-picker-active-label">Track di Master Deck saat ini:</span>
+            <strong id="padPickerActiveTitle">—</strong>
+          </div>
+          <button type="button" id="btnPickActiveDeckTrack" class="btn-chip accent">Gunakan Track Ini</button>
+        </div>
+        <div class="pad-picker-search-row">
+          <input
+            type="search"
+            id="padPickerSearchInput"
+            class="toolbar-input"
+            placeholder="Cari judul track atau nama folder playlist..."
+            aria-label="Cari track untuk Cue Pad"
+          >
+        </div>
+        <div class="pad-picker-list" id="padPickerList"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" id="btnCancelPadPicker" class="btn-secondary">Batal</button>
       </div>
     </div>
   </div>

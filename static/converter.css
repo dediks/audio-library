@@ -70,7 +70,7 @@
   flex-direction: column;
   gap: 0.18rem;
   padding: 0.52rem 0.7rem;
-  background: #09090b;
+  background: var(--bg-recessed);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   transition: all 0.14s ease;
@@ -79,7 +79,7 @@
 
 .seg-option:hover .seg-option-body {
   border-color: var(--border-strong);
-  background: #121216;
+  background: var(--bg-surface-elevated);
 }
 
 .seg-option input:checked + .seg-option-body {
@@ -115,7 +115,7 @@
   display: grid;
   gap: 0.3rem;
   padding: 0.22rem;
-  background: #09090b;
+  background: var(--bg-recessed);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
 }
@@ -217,7 +217,7 @@
 
 .compact-options-grid .custom-toggle {
   padding: 0.42rem 0.65rem;
-  background: #09090b;
+  background: var(--bg-recessed);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   gap: 0.55rem;
@@ -257,7 +257,7 @@
   gap: 0.55rem;
   padding: 0.65rem 0.85rem;
   margin-bottom: 0.65rem;
-  background: #09090b;
+  background: var(--bg-recessed);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
 }
@@ -428,7 +428,7 @@
 .folder-io-box {
   margin-top: 0.45rem;
   padding: 0.5rem 0.65rem;
-  background: #09090b;
+  background: var(--bg-recessed);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
 }

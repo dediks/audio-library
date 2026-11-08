@@ -89,7 +89,7 @@
    Unified Studio OLED Display Screen (Track + Timecode + Seek)
    ========================================================================== */
 .foh-deck-screen {
-  background: #060608;
+  background: var(--bg-oled);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   padding: 0.75rem 0.9rem;
@@ -209,7 +209,7 @@
 .timecode-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  background: #0a0a0e;
+  background: var(--bg-recessed);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   overflow: hidden;
@@ -425,7 +425,7 @@
 
 .play-mode-buttons {
   display: inline-flex;
-  background: #07070a;
+  background: var(--bg-recessed);
   padding: 0.18rem;
   border-radius: var(--radius-md);
   border: 1px solid var(--border-subtle);
@@ -489,7 +489,7 @@
   font-weight: 600;
   padding: 0.18rem 0.48rem;
   border-radius: var(--radius-sm);
-  background: #060608;
+  background: var(--bg-oled);
   border: 1px solid var(--border-subtle);
   color: var(--accent-green);
 }
@@ -501,7 +501,7 @@
 }
 
 .rta-visualizer-wrap {
-  background: #060608;
+  background: var(--bg-oled);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   padding: 0.45rem 0.55rem 0.3rem;
@@ -540,7 +540,7 @@
 }
 
 .fader-box {
-  background: #07070a;
+  background: var(--bg-recessed);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   padding: 0.45rem 0.65rem;
@@ -579,7 +579,7 @@
 
 /* Tabbed Studio DSP Rack (3-Band EQ | Phase Matrix | Output & Auto-Trim) */
 .dsp-rack-container {
-  background: #07070a;
+  background: var(--bg-recessed);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   overflow: hidden;
@@ -591,7 +591,7 @@
 .dsp-rack-tabs {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  background: #0b0b0f;
+  background: #161b26;
   border-bottom: 1px solid var(--border-subtle);
 }
 
@@ -868,14 +868,15 @@
 
 .cue-pad-item {
   position: relative;
-  background: #07070a;
-  border: 1px solid var(--border-subtle);
+  background: var(--bg-recessed);
+  border: 1px dashed rgba(255, 255, 255, 0.18);
   border-radius: var(--radius-md);
-  padding: 0.45rem 0.55rem;
+  padding: 0.48rem 0.6rem;
   display: flex;
   flex-direction: column;
-  gap: 0.22rem;
-  min-height: 60px;
+  justify-content: space-between;
+  gap: 0.28rem;
+  min-height: 68px;
   cursor: pointer;
   transition: all var(--transition-fast);
   text-align: left;
@@ -883,12 +884,20 @@
 }
 
 .cue-pad-item:hover {
-  border-color: var(--border-strong);
-  background: rgba(255, 255, 255, 0.02);
+  border-color: var(--accent-cyan);
+  background: rgba(0, 229, 255, 0.04);
+}
+
+.cue-pad-item.drag-over {
+  border-style: solid;
+  border-color: var(--accent-amber);
+  background: rgba(255, 190, 11, 0.14);
+  box-shadow: 0 0 12px rgba(255, 190, 11, 0.25);
 }
 
 .cue-pad-item.assigned {
-  border-color: rgba(0, 229, 255, 0.4);
+  border-style: solid;
+  border-color: rgba(0, 229, 255, 0.38);
   background: rgba(0, 229, 255, 0.05);
 }
 
@@ -897,10 +906,17 @@
   background: rgba(0, 229, 255, 0.1);
 }
 
+.cue-pad-item.cued {
+  border-style: solid;
+  border-color: var(--accent-cyan);
+  background: rgba(0, 229, 255, 0.11);
+}
+
 .cue-pad-item.playing {
+  border-style: solid;
   border-color: var(--accent-green);
   background: rgba(0, 245, 155, 0.14);
-  box-shadow: 0 0 10px var(--accent-green-glow);
+  box-shadow: 0 0 12px var(--accent-green-glow);
 }
 
 .cue-pad-top {
@@ -910,11 +926,18 @@
   gap: 0.25rem;
 }
 
+.cue-pad-top-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
 .cue-pad-key {
   font-family: var(--font-mono);
   font-size: 0.62rem;
   font-weight: 700;
-  padding: 0.06rem 0.32rem;
+  padding: 0.06rem 0.34rem;
   border-radius: 3px;
   background: var(--bg-surface-elevated);
   border: 1px solid var(--border-subtle);
@@ -923,26 +946,99 @@
 
 .cue-pad-item.assigned .cue-pad-key {
   color: var(--accent-cyan);
-  border-color: rgba(0, 229, 255, 0.3);
+  border-color: rgba(0, 229, 255, 0.35);
 }
 
+.cue-pad-item.playing .cue-pad-key {
+  color: #04130d;
+  background: var(--accent-green);
+  border-color: var(--accent-green);
+}
+
+.cue-pad-status-pill {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  padding: 0.04rem 0.32rem;
+  border-radius: 3px;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.cue-pad-status-pill.cued {
+  color: var(--accent-cyan);
+  background: rgba(0, 229, 255, 0.14);
+}
+
+.cue-pad-status-pill.playing {
+  color: var(--accent-green);
+  background: rgba(0, 245, 155, 0.18);
+}
+
+.cue-pad-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+}
+
+.cue-pad-action-btn,
 .cue-pad-clear-btn {
   font-family: var(--font-mono);
-  font-size: 0.62rem;
-  padding: 0.04rem 0.26rem;
+  font-size: 0.64rem;
+  padding: 0.04rem 0.28rem;
   border-radius: 3px;
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  opacity: 0.7;
+  opacity: 0.78;
   transition: all var(--transition-fast);
+}
+
+.cue-pad-action-btn:hover {
+  opacity: 1;
+  color: var(--accent-cyan);
+  background: rgba(0, 229, 255, 0.14);
 }
 
 .cue-pad-clear-btn:hover {
   opacity: 1;
   color: var(--accent-red);
-  background: rgba(255, 59, 59, 0.12);
+  background: rgba(255, 59, 59, 0.14);
+}
+
+.cue-pad-main-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.cue-pad-play-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.6rem;
+  flex-shrink: 0;
+  background: rgba(0, 229, 255, 0.14);
+  color: var(--accent-cyan);
+  border: 1px solid rgba(0, 229, 255, 0.35);
+}
+
+.cue-pad-item.playing .cue-pad-play-icon {
+  background: var(--accent-green);
+  color: #04130d;
+  border-color: var(--accent-green);
+}
+
+.cue-pad-item:not(.assigned) .cue-pad-play-icon {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-secondary);
+  border-color: var(--border-subtle);
 }
 
 .cue-pad-title {
@@ -952,17 +1048,18 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
 
 .cue-pad-item:not(.assigned) .cue-pad-title {
-  color: var(--text-muted);
-  font-weight: 400;
-  font-size: 0.7rem;
+  color: var(--accent-cyan);
+  font-weight: 600;
+  font-size: 0.72rem;
 }
 
 .cue-pad-sub {
   font-family: var(--font-mono);
-  font-size: 0.62rem;
+  font-size: 0.61rem;
   color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -978,7 +1075,7 @@
   gap: 0.55rem;
   padding: 0.65rem 0.8rem;
   margin-bottom: 0.6rem;
-  background: #07070a;
+  background: var(--bg-recessed);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
 }
@@ -1148,6 +1245,139 @@
   border-color: var(--accent-amber);
   color: var(--accent-amber);
   background: rgba(255, 190, 11, 0.08);
+}
+
+.btn-row-pad.assigned {
+  border-color: rgba(255, 190, 11, 0.55);
+  color: var(--accent-amber);
+  background: rgba(255, 190, 11, 0.14);
+  font-weight: 700;
+}
+
+/* Cue Pad Track Picker Modal */
+.pad-picker-modal-card {
+  max-width: 620px;
+  width: 92vw;
+}
+
+.pad-picker-subtitle {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  margin-top: 0.15rem;
+}
+
+.pad-picker-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.pad-picker-active-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.5rem 0.7rem;
+  border-radius: var(--radius-md);
+  background: rgba(0, 229, 255, 0.08);
+  border: 1px solid rgba(0, 229, 255, 0.3);
+}
+
+.pad-picker-active-Banner.hidden,
+.pad-picker-active-banner.hidden {
+  display: none;
+}
+
+.pad-picker-active-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.pad-picker-active-label {
+  font-size: 0.66rem;
+  color: var(--accent-cyan);
+  font-family: var(--font-mono);
+}
+
+.pad-picker-active-info strong {
+  font-size: 0.78rem;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pad-picker-list {
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-recessed);
+  display: flex;
+  flex-direction: column;
+}
+
+.pad-picker-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  padding: 0.48rem 0.7rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.pad-picker-item:last-child {
+  border-bottom: none;
+}
+
+.pad-picker-item:hover {
+  background: rgba(0, 229, 255, 0.08);
+}
+
+.pad-picker-item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  min-width: 0;
+}
+
+.pad-picker-item-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pad-picker-item-meta {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: var(--text-muted);
+}
+
+.pad-picker-assign-btn {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 0.24rem 0.55rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(0, 229, 255, 0.35);
+  background: rgba(0, 229, 255, 0.1);
+  color: var(--accent-cyan);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.pad-picker-item:hover .pad-picker-assign-btn {
+  background: var(--accent-cyan);
+  color: #04130d;
+  font-weight: 700;
 }
 
 /* Value & Status Badges in Setlist Table */
