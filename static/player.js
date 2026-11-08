@@ -316,13 +316,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  window.addEventListener('beforeunload', () => {
-    isPageUnloading = true;
-    savePlaybackSessionState();
+  window.addEventListener('beforeunload', e => {
+    const isActivelyPlaying = Boolean(audioEl && !audioEl.paused && !audioEl.ended);
+    savePlaybackSessionState(isActivelyPlaying);
+    if (isActivelyPlaying) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
   });
   window.addEventListener('pagehide', () => {
     isPageUnloading = true;
-    savePlaybackSessionState();
   });
 
   // ---------------------------------------------------------------------------
@@ -2274,6 +2277,26 @@ document.addEventListener('DOMContentLoaded', () => {
     onSelectDest: () => {},
     onLog: () => {},
   });
+
+  // Unlock Web Audio API Graph & Auto-Resume on first user interaction after refresh
+  function unlockAudioContextAndResumeOnGesture() {
+    if (audioCtx && audioCtx.state === 'suspended') {
+      audioCtx
+        .resume()
+        .then(() => {
+          connectMediaElementToGraphIfReady();
+        })
+        .catch(() => {});
+    } else {
+      connectMediaElementToGraphIfReady();
+    }
+    if (pendingAutoResumeOnGesture) {
+      pendingAutoResumeOnGesture = false;
+      playCurrentTrack();
+    }
+  }
+  window.addEventListener('pointerdown', unlockAudioContextAndResumeOnGesture, { capture: true });
+  window.addEventListener('keydown', unlockAudioContextAndResumeOnGesture, { capture: true });
 
   // Global FOH Keyboard Shortcuts (Space, F, S, 1-8, Escape)
   document.addEventListener('keydown', e => {
