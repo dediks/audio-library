@@ -62,6 +62,70 @@ def ensure_build_dependencies(auto_install: bool = False) -> bool:
         return res.returncode == 0
 
 
+def find_inno_setup_compiler() -> Path | None:
+    """Mencari ISCC.exe (Inno Setup Command Line Compiler) di PATH atau folder standar Windows."""
+    # 1. Cek di PATH
+    for name in ("iscc", "ISCC", "iscc.exe", "ISCC.exe"):
+        found = shutil.which(name)
+        if found:
+            return Path(found).resolve()
+
+    # 2. Cek lokasi instalasi standar di Windows
+    roots = [
+        os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+        os.environ.get("ProgramFiles", r"C:\Program Files"),
+        os.environ.get("LocalAppData", ""),
+    ]
+    subpaths = [
+        Path("Inno Setup 6") / "ISCC.exe",
+        Path("Inno Setup 5") / "ISCC.exe",
+        Path("Programs") / "Inno Setup 6" / "ISCC.exe",
+        Path("Programs") / "Inno Setup 5" / "ISCC.exe",
+    ]
+    for r in roots:
+        if not r:
+            continue
+        for sub in subpaths:
+            cand = Path(r) / sub
+            if cand.is_file():
+                return cand.resolve()
+    return None
+
+
+def compile_inno_setup_installer() -> bool:
+    """Mengompilasi installer.iss menjadi SwarariaAudioLab_Setup.exe menggunakan Inno Setup."""
+    iss_file = BASE_DIR / "installer.iss"
+    if not iss_file.is_file():
+        print(f"[ERROR] File konfigurasi installer '{iss_file}' tidak ditemukan.")
+        return False
+
+    iscc_path = find_inno_setup_compiler()
+    if not iscc_path:
+        print("\n[PERINGATAN] Inno Setup Compiler (ISCC.exe) belum terpasang.")
+        print("             Untuk membuat installer ala wizard Windows secara otomatis:")
+        print("             1. Install Inno Setup 6 via PowerShell / CMD:")
+        print("                winget install JRSoftware.InnoSetup")
+        print("             2. Atau download manual dari: https://jrsoftware.org/isdl.php")
+        print("             3. Jalankan kembali: python build_desktop.py --installer")
+        return False
+
+    print(f"\n[5/5] Mengompilasi Setup Wizard Windows via Inno Setup ({iscc_path})...")
+    res = subprocess.run([str(iscc_path), str(iss_file)], cwd=str(BASE_DIR))
+    if res.returncode == 0:
+        setup_exe = BASE_DIR / "dist" / "SwarariaAudioLab_Setup.exe"
+        print("\n" + "=" * 68)
+        print("  🎉 INSTALLER WIZARD BERHASIL DIBUAT!")
+        print("=" * 68)
+        print(f"  File Installer : {setup_exe}")
+        print("  Tinggal bagikan file 'SwarariaAudioLab_Setup.exe' ke pengguna Windows.")
+        print("  Pengguna tinggal double click -> Next -> Next -> Install -> Selesai!")
+        print("=" * 68)
+        return True
+    else:
+        print(f"[ERROR] Inno Setup kompilasi gagal dengan exit code {res.returncode}.")
+        return False
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build standalone Swararia Audio Lab desktop app.")
     parser.add_argument(
@@ -73,6 +137,11 @@ def main() -> int:
         "--clean",
         action="store_true",
         help="Bersihkan folder build/ dan dist/ sebelum memulai.",
+    )
+    parser.add_argument(
+        "--installer",
+        action="store_true",
+        help="Otomatis jalankan Inno Setup setelah build untuk membuat file SwarariaAudioLab_Setup.exe.",
     )
     args = parser.parse_args()
 
@@ -118,11 +187,16 @@ def main() -> int:
     print("=" * 68)
     print(f"  Folder Distribusi : {DIST_DIR}")
     print(f"  File Executable   : {exe_path}")
-    print("\n  Cara membagikan ke orang awam:")
-    print("  1. Kompres folder 'dist/SwarariaAudioLab' menjadi file .zip (Portable)")
-    print("     ATAU")
-    print("  2. Buka 'installer.iss' menggunakan Inno Setup di Windows untuk")
-    print("     membuat 1 file installer 'SwarariaAudioLab_Setup.exe'.")
+    if args.installer:
+        compile_inno_setup_installer()
+    else:
+        print("\n  Cara membagikan ke orang awam:")
+        print("  1. Kompres folder 'dist/SwarariaAudioLab' menjadi file .zip (Portable)")
+        print("     ATAU")
+        print("  2. Jalankan dengan opsi '--installer':")
+        print("     python build_desktop.py --installer")
+        print("     (Atau buka 'installer.iss' dengan Inno Setup Compiler di Windows)")
+        print("     untuk membuat 1 file installer 'SwarariaAudioLab_Setup.exe'.")
     print("=" * 68)
     return 0
 

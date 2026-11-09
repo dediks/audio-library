@@ -30,6 +30,7 @@ OutputBaseFilename=SwarariaAudioLab_Setup
 Compression=lzma2/fast
 SolidCompression=yes
 WizardStyle=modern
+UninstallDisplayIcon={app}\{#MyAppExeName}
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -39,7 +40,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "dist\SwarariaAudioLab\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "dist\SwarariaAudioLab\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "dist\SwarariaAudioLab\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "{#MyAppExeName}"
 
 [Dirs]
 Name: "{app}\library\inbox"; Permissions: users-modify
