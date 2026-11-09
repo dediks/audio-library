@@ -8,26 +8,89 @@ import { apiGet } from './api-client.js';
 
 const NOTIF_SEEN_TASKS_KEY = 'audio_lab_seen_tasks';
 
+let currentLogFilter = 'all';
+let cachedLogLines = [];
+
+export function setLogFilter(mode) {
+  currentLogFilter = mode;
+  const terminalEl = document.getElementById('terminalLogs');
+  if (terminalEl) renderLogs(terminalEl, cachedLogLines);
+}
+
 /**
  * Replaces terminal container contents with an array of log strings.
+ * Supports filtering into an 'errors' group.
  * @param {HTMLElement | null} terminalEl
  * @param {string[]} logs
  */
 export function renderLogs(terminalEl, logs) {
   if (!terminalEl || !Array.isArray(logs)) return;
-  terminalEl.replaceChildren();
+  cachedLogLines = logs;
+
+  const errorCountBadge = document.getElementById('termErrorCount');
+  const errorLines = [];
+  const allLines = [];
+
   logs.forEach(msg => {
-    const p = document.createElement('p');
     let lvl = 'info';
-    if (msg.includes('ERROR') || msg.includes('Failed')) {
+    if (msg.includes('ERROR') || msg.includes('Failed') || msg.includes('Error:')) {
       lvl = 'error';
-    } else if (msg.includes('WARNING') || msg.includes('SKIPPED') || msg.includes('caution')) {
+    } else if (msg.includes('WARNING') || msg.includes('SKIPPED') || msg.includes('FALLBACK') || msg.includes('caution')) {
       lvl = 'warn';
     }
-    p.className = 'log-line ' + lvl;
-    p.textContent = msg;
-    terminalEl.appendChild(p);
+    const item = { msg, lvl };
+    allLines.push(item);
+    if (lvl === 'error' || lvl === 'warn') {
+      errorLines.push(item);
+    }
   });
+
+  const actualErrorCount = errorLines.filter(x => x.lvl === 'error').length;
+  if (errorCountBadge) {
+    if (actualErrorCount > 0) {
+      errorCountBadge.textContent = String(actualErrorCount);
+      errorCountBadge.classList.remove('hidden');
+    } else {
+      errorCountBadge.classList.add('hidden');
+    }
+  }
+
+  terminalEl.replaceChildren();
+
+  if (currentLogFilter === 'errors') {
+    if (errorLines.length === 0) {
+      const p = document.createElement('p');
+      p.className = 'log-line info';
+      p.textContent = '[INFO] Tidak ada error atau peringatan pada proses ini.';
+      terminalEl.appendChild(p);
+    } else {
+      const banner = document.createElement('div');
+      banner.className = 'terminal-error-banner';
+      const icon = document.createElement('span');
+      icon.className = 'banner-icon';
+      icon.textContent = '⚠️';
+      const text = document.createElement('span');
+      text.textContent = `Error Group: Menampilkan ${errorLines.length} baris catatan (${actualErrorCount} error):`;
+      banner.appendChild(icon);
+      banner.appendChild(text);
+      terminalEl.appendChild(banner);
+
+      errorLines.forEach(({ msg, lvl }) => {
+        const p = document.createElement('p');
+        p.className = 'log-line ' + lvl;
+        p.textContent = msg;
+        terminalEl.appendChild(p);
+      });
+    }
+  } else {
+    allLines.forEach(({ msg, lvl }) => {
+      const p = document.createElement('p');
+      p.className = 'log-line ' + lvl;
+      p.textContent = msg;
+      terminalEl.appendChild(p);
+    });
+  }
+
   terminalEl.scrollTop = terminalEl.scrollHeight;
 }
 
@@ -128,6 +191,7 @@ export function createQueueMonitor(opts = {}) {
       }
       if (opts.jobUrlLabel) {
         opts.jobUrlLabel.textContent = current.url;
+        opts.jobUrlLabel.title = current.url;
       }
 
       const p = Math.round(current.progress || 0);
@@ -170,6 +234,7 @@ export function createQueueMonitor(opts = {}) {
       }
       if (opts.jobUrlLabel && lastNotifiedTask && lastNotifiedTask.summary) {
         opts.jobUrlLabel.textContent = lastNotifiedTask.summary;
+        opts.jobUrlLabel.title = lastNotifiedTask.summary;
       }
       if (queueLen === 0) {
         const justFinished = wasJobRunning;

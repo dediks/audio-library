@@ -17,7 +17,7 @@ import {
   createFileNameCell,
   createGroupCollapseController,
 } from './table-groups.js';
-import { renderLogs, createQueueMonitor } from './queue-monitor.js';
+import { renderLogs, setLogFilter, createQueueMonitor } from './queue-monitor.js';
 import { openRenameModal, openDeleteModal, openBatchRenameModal } from './rename-modal.js';
 import { spaNavigate, initSpaRouter } from './spa-router.js';
 import { initPersistentDock, ensureFohAudioElement } from './persistent-dock.js';
@@ -59,6 +59,7 @@ export {
   createFileNameCell,
   createGroupCollapseController,
   renderLogs,
+  setLogFilter,
   createQueueMonitor,
   openRenameModal,
   openDeleteModal,

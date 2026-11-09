@@ -160,7 +160,7 @@
           <div class="action-footer compact-footer">
             <div class="format-spec-tag">
               <span class="spec-dot" id="specDot"></span>
-              <span id="specText">Target: Opus Best Quality (.opus) — Lossless Remux 48 kHz + Metadata Tag</span>
+              <span id="specText">Target: Opus Best Quality (.opus) — Lossless Remux 48 kHz + Cover Art HD (Anti-DRC, 4x Multi-thread)</span>
             </div>
             <button type="submit" id="btnStartIngest" class="btn-primary">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
@@ -215,7 +215,13 @@
                 <span class="tdot yellow"></span>
                 <span class="tdot green"></span>
               </div>
-              <span class="terminal-title">LIVE EXTRACTION STREAM</span>
+              <div class="terminal-filters">
+                <span class="terminal-title">LIVE EXTRACTION STREAM</span>
+                <button type="button" class="term-tab active" id="btnLogFilterAll">Semua Log</button>
+                <button type="button" class="term-tab" id="btnLogFilterErrors">
+                  Error Group <span class="term-error-pill hidden" id="termErrorCount">0</span>
+                </button>
+              </div>
               <button type="button" id="btnClearLogs" class="btn-text">Clear</button>
             </div>
             <div class="terminal-content" id="terminalLogs">

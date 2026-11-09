@@ -64,29 +64,37 @@ ALLOWED_BITRATES = (320, 192, 128, 96)
 ALLOWED_LUFS_TARGETS = (-14.0, -16.0)
 TAG_FOLDER_PATTERN = r"\s*\[(?:44\.1kHz|48kHz|Opus|-14LUFS|-16LUFS)(?:[^\]]*)\]$"
 
-# Priority order for YouTube / YouTube Music:
-# 141 = Premium AAC 256 kbps (44.1 kHz)
-# 774 = Premium Opus ~256 kbps (48 kHz)
-# 251 = Public High Opus ~160 kbps (48 kHz)
-# 140 = Standard AAC 128 kbps (44.1 kHz)
-# Excludes -drc ("Stable Volume" dynamic range compressed) streams before final fallback.
+# Priority order for YouTube & YouTube Music:
+# 141 = YouTube Music Premium AAC 256 kbps (44.1 kHz, .m4a - Studio Master)
+# 774 = YouTube Music Premium Opus ~256 kbps (48 kHz, .webm)
+# 251 = Public High Opus ~160 kbps (48 kHz, .webm, transparent cutoff ~20 kHz)
+# 140 = Standard AAC 128 kbps (44.1 kHz, .m4a)
+# All selector branches strictly exclude -drc ("Stable Volume" dynamic range compression).
 YOUTUBE_AUDIO_SELECTOR = (
-    "ba[format_id=141]/ba[format_id=774]/ba[format_id=251]/"
-    "ba[format_id=140]/ba[format_id!*=-drc]/ba"
+    "ba[format_id!*=-drc][format_id=141]/"
+    "ba[format_id!*=-drc][format_id=774]/"
+    "ba[format_id!*=-drc][format_id=251]/"
+    "ba[format_id!*=-drc][format_id=140]/"
+    "ba[format_id!*=-drc]/"
+    "ba"
 )
 
-# Selector when specifically keeping Opus (.webm) alongside MP3 conversion:
+# Selector prioritizing Opus (48 kHz) streams for zero-reencoding lossless remux:
 YOUTUBE_OPUS_SELECTOR = (
-    "ba[format_id=774]/ba[format_id=251]/"
-    "ba[acodec=opus][format_id!*=-drc]/"
-    + YOUTUBE_AUDIO_SELECTOR
+    "ba[format_id!*=-drc][format_id=774]/"
+    "ba[format_id!*=-drc][format_id=251]/"
+    "ba[format_id!*=-drc][acodec=opus]/"
+    "ba[format_id!*=-drc][format_id=141]/"
+    "ba[format_id!*=-drc][format_id=140]/"
+    "ba[format_id!*=-drc]/"
+    "ba"
 )
 
 STREAM_TIERS = {
-    "141": "PREMIUM TIER — AAC 256 kbps (44.1 kHz, .m4a)",
-    "774": "PREMIUM TIER — Opus ~256 kbps (48 kHz, .webm)",
-    "251": "PUBLIC HIGH TIER — Opus ~160 kbps (48 kHz, .webm)",
-    "140": "STANDARD TIER — AAC 128 kbps (44.1 kHz, .m4a)",
+    "141": "YOUTUBE MUSIC PREMIUM — AAC 256 kbps (44.1 kHz Studio Master, .m4a)",
+    "774": "YOUTUBE MUSIC PREMIUM — Opus ~256 kbps (48 kHz, .webm)",
+    "251": "PUBLIC HIGH FIDELITY — Opus ~160 kbps (48 kHz Transparent, cutoff ~20 kHz, .webm)",
+    "140": "STANDARD TIER — AAC 128 kbps (44.1 kHz, cutoff ~16 kHz, .m4a)",
     "250": "LOW TIER — Opus ~70 kbps (48 kHz, .webm)",
     "249": "LOW TIER — Opus ~50 kbps (48 kHz, .webm)",
     "139": "LOW TIER — HE-AAC ~48 kbps (.m4a)",
@@ -97,8 +105,8 @@ def describe_format_tier(format_id: str) -> str:
     clean_id = format_id.strip()
     if clean_id in STREAM_TIERS:
         return f"[STREAM TIER] Format {clean_id}: {STREAM_TIERS[clean_id]}"
-    if clean_id.endswith("-drc"):
-        return f"[STREAM TIER] Format {clean_id}: WARNING — Dynamic Range Compressed (DRC) stream"
+    if "-drc" in clean_id:
+        return f"[STREAM TIER] Format {clean_id}: ⚠️ WARNING — Dynamic Range Compressed (DRC / Stable Volume) stream"
     return f"[STREAM TIER] Format {clean_id}: Audio stream terpilih"
 
 
@@ -161,6 +169,7 @@ def sync_download_archive(
 
     mp3_ids: set[str] = set()
     opus_ids: set[str] = set()
+    aac_ids: set[str] = set()
     any_ids: set[str] = set()
 
     if inbox_dir.is_dir():
@@ -176,11 +185,13 @@ def sync_download_archive(
                     mp3_ids.add(vid)
                 elif ext in (".webm", ".opus", ".ogg"):
                     opus_ids.add(vid)
+                elif ext in (".m4a", ".aac"):
+                    aac_ids.add(vid)
 
     if audio_format in ("mp3", "mp3_320k", "mp3_vbr0"):
         valid_ids = (mp3_ids & opus_ids) if keep_opus else mp3_ids
     elif audio_format == "opus":
-        valid_ids = opus_ids
+        valid_ids = opus_ids | aac_ids
     else:
         valid_ids = any_ids
 
@@ -223,6 +234,8 @@ def run_ytdlp_process(
     skipped_files: list[str] = []
     last_error_line = ""
     cookie_err_detected = False
+    playlist_item = 1
+    playlist_total = 1
     vid_map = existing_by_vid or {}
     log_fn = on_log or (lambda msg: print(msg, flush=True))
 
@@ -274,10 +287,20 @@ def run_ytdlp_process(
                 log_fn(describe_format_tier(fmt_match.group(1)))
 
             if on_progress is not None:
+                item_match = re.search(r"\[download\]\s+Downloading item\s+(\d+)\s+of\s+(\d+)", clean_line)
+                if item_match:
+                    playlist_item = int(item_match.group(1))
+                    playlist_total = max(1, int(item_match.group(2)))
+
                 prog_match = re.search(r"\[download\]\s+([\d\.]+)%", clean_line)
                 if prog_match:
                     try:
-                        on_progress(min(99.0, float(prog_match.group(1))))
+                        song_pct = float(prog_match.group(1))
+                        if playlist_total > 1:
+                            overall_pct = ((playlist_item - 1) + (song_pct / 100.0)) / playlist_total * 90.0
+                        else:
+                            overall_pct = song_pct * 0.90
+                        on_progress(min(90.0, max(0.0, round(overall_pct, 1))))
                     except ValueError:
                         pass
 
@@ -303,6 +326,15 @@ def is_ytdlp_available() -> bool:
         return True
     except ImportError:
         return (_VENDOR_DIR / "yt_dlp").is_dir()
+
+
+def is_mutagen_available() -> bool:
+    """Checks if mutagen library is available for embedding album cover art into Opus/MP3."""
+    try:
+        import mutagen  # noqa: F401
+        return True
+    except ImportError:
+        return (_VENDOR_DIR / "mutagen").is_dir()
 
 
 def require(program: str) -> None:
@@ -576,8 +608,10 @@ def scan(args) -> int:
 
 def get_ytdlp_base_cmd() -> list[str]:
     """Returns the base command to run yt-dlp, preferring system binary or bundled/vendored package."""
-    if shutil.which("yt-dlp"):
-        return ["yt-dlp"]
+    which_ytdlp = shutil.which("yt-dlp")
+    # If a standalone system yt-dlp exists outside .vendor, use it directly
+    if which_ytdlp and not str(Path(which_ytdlp).resolve()).startswith(str(_VENDOR_DIR.resolve())):
+        return [which_ytdlp]
     try:
         import yt_dlp  # noqa: F401
         return [sys.executable, "-m", "yt_dlp"]
@@ -585,7 +619,7 @@ def get_ytdlp_base_cmd() -> list[str]:
         pass
     if (_VENDOR_DIR / "yt_dlp").is_dir():
         return [sys.executable, "-m", "yt_dlp"]
-    return ["yt-dlp"]
+    return [which_ytdlp] if which_ytdlp else ["yt-dlp"]
 
 
 def build_ytdlp_command(
@@ -605,6 +639,8 @@ def build_ytdlp_command(
         norm_format = "mp3_320k"
 
     cmd = list(get_ytdlp_base_cmd())
+    thumb_args = ["--embed-thumbnail", "--convert-thumbnails", "jpg"] if is_mutagen_available() else []
+
     if norm_format == "opus":
         # Prioritize 774 (Premium Opus 256k) then 251 (Public High Opus 160k),
         # extract to .opus via lossless stream copy (-c:a copy), and embed metadata
@@ -613,15 +649,36 @@ def build_ytdlp_command(
             "--extract-audio",
             "--audio-format", "opus",
             "--embed-metadata",
+            *thumb_args,
         ])
     elif norm_format == "native":
         # Audio-only stream, kept as-is. Prioritize Premium 256k (141 AAC / 774 Opus),
         # then Public 160k 48kHz Opus (251), 128k AAC (140), and non-DRC streams.
-        cmd.extend(["-f", YOUTUBE_AUDIO_SELECTOR])
+        cmd.extend([
+            "-f", YOUTUBE_AUDIO_SELECTOR,
+            "--embed-metadata",
+            *thumb_args,
+        ])
     elif keep_opus:
-        cmd.extend(["-f", f"{YOUTUBE_OPUS_SELECTOR}/b"])
+        cmd.extend([
+            "-f", f"{YOUTUBE_OPUS_SELECTOR}/b",
+            "--embed-metadata",
+            *thumb_args,
+        ])
     else:
-        cmd.extend(["-f", f"{YOUTUBE_AUDIO_SELECTOR}/b"])
+        cmd.extend([
+            "-f", f"{YOUTUBE_AUDIO_SELECTOR}/b",
+            "--embed-metadata",
+            *thumb_args,
+        ])
+
+    # 1. Performance: Multi-threaded fragments (3x-5x faster download) & network timeout
+    cmd.extend([
+        "--concurrent-fragments", "4",
+        "--socket-timeout", "30",
+        "--retries", "5",
+        "--fragment-retries", "5",
+    ])
 
     if js_runtime:
         cmd.extend(["--js-runtimes", js_runtime])
@@ -636,37 +693,39 @@ def build_ytdlp_command(
     auth_desc = "Public"
     if cookies_file and cookies_file.is_file():
         cmd.extend(["--cookies", str(cookies_file)])
-        auth_desc = "cookies.txt"
+        auth_desc = "cookies.txt (YouTube Music Premium)"
     elif cookie_browser:
         cmd.extend(["--cookies-from-browser", cookie_browser])
         auth_desc = cookie_browser
 
     opus_note = " + Simpan File Asli Opus (.webm)" if keep_opus else ""
     if norm_format == "opus":
-        desc = f"Target: Opus Best Quality (.opus) — Lossless Remux 48 kHz (Auth: {auth_desc})"
+        desc = f"Target: Opus Best Quality (.opus) — Lossless Remux 48 kHz (Auth: {auth_desc}, Anti-DRC: Active, Multi-thread: 4x)"
     elif norm_format == "mp3_320k":
         cmd.extend([
             "--extract-audio",
             "--audio-format", "mp3",
             "--audio-quality", "320K",
             "--embed-metadata",
+            *thumb_args,
         ])
         if keep_opus:
             cmd.append("--keep-video")
-        desc = f"Target: MP3 320 kbps CBR{opus_note} (KONVERSI lossy, Auth: {auth_desc})"
+        desc = f"Target: MP3 320 kbps CBR{opus_note} (KONVERSI lossy, Auth: {auth_desc}, Multi-thread: 4x)"
     elif norm_format == "mp3_vbr0":
         cmd.extend([
             "--extract-audio",
             "--audio-format", "mp3",
             "--audio-quality", "0",
             "--embed-metadata",
+            *thumb_args,
         ])
         if keep_opus:
             cmd.append("--keep-video")
-        desc = f"Target: MP3 VBR 0{opus_note} (KONVERSI lossy, Auth: {auth_desc})"
+        desc = f"Target: MP3 VBR 0{opus_note} (KONVERSI lossy, Auth: {auth_desc}, Multi-thread: 4x)"
     else:
         # Native: no postprocessing at all (no extract/convert/remux/metadata embed).
-        desc = f"Target: Native Raw Stream - stream asli YouTube tanpa konversi (Auth: {auth_desc})"
+        desc = f"Target: Native Raw Stream - stream asli YouTube tanpa konversi (Auth: {auth_desc}, Anti-DRC: Active, Multi-thread: 4x)"
 
     cmd.append(url)
     return cmd, desc

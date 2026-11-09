@@ -9,6 +9,7 @@ import {
   apiPost,
   appendLog,
   renderLogs,
+  setLogFilter,
   notify,
   createQueueMonitor,
   openFolderInExplorer,
@@ -137,19 +138,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (val === 'opus') {
       if (isRawWebm) {
-        if (specText) specText.textContent = 'Target: Native Raw Stream — Format mentah asli YouTube (.webm / .m4a) tanpa remux';
+        if (specText) specText.textContent = 'Target: Native Raw Stream — Format mentah asli YouTube (.webm / .m4a) tanpa remux (Anti-DRC, 4x Multi-thread)';
         if (specDot) specDot.style.backgroundColor = 'var(--accent-cyan)';
       } else {
-        if (specText) specText.textContent = 'Target: Opus Best Quality (.opus) — Lossless Remux 48 kHz + Metadata Tag';
+        if (specText) specText.textContent = 'Target: Opus Best Quality (.opus) — Lossless Remux 48 kHz + Cover Art HD (Anti-DRC, 4x Multi-thread)';
         if (specDot) specDot.style.backgroundColor = '#10b981';
       }
     } else if (val === 'mp3_320k') {
       const opusSuffix = keepOpus ? ' + Simpan File Asli Opus (.webm)' : '';
-      if (specText) specText.textContent = 'Target: MP3 320 kbps CBR' + opusSuffix + ' (KONVERSI lossy)';
+      if (specText) specText.textContent = 'Target: MP3 320 kbps CBR' + opusSuffix + ' (KONVERSI lossy, 4x Multi-thread)';
       if (specDot) specDot.style.backgroundColor = 'var(--accent-amber)';
     } else if (val === 'mp3_vbr0') {
       const opusSuffix = keepOpus ? ' + Simpan File Asli Opus (.webm)' : '';
-      if (specText) specText.textContent = 'Target: MP3 VBR 0' + opusSuffix + ' (KONVERSI lossy)';
+      if (specText) specText.textContent = 'Target: MP3 VBR 0' + opusSuffix + ' (KONVERSI lossy, 4x Multi-thread)';
       if (specDot) specDot.style.backgroundColor = '#c084fc';
     }
   }
@@ -222,6 +223,21 @@ document.addEventListener('DOMContentLoaded', () => {
   if (btnClearLogs) {
     btnClearLogs.addEventListener('click', () => {
       terminalLogs.replaceChildren();
+    });
+  }
+
+  const btnLogFilterAll = document.getElementById('btnLogFilterAll');
+  const btnLogFilterErrors = document.getElementById('btnLogFilterErrors');
+  if (btnLogFilterAll && btnLogFilterErrors) {
+    btnLogFilterAll.addEventListener('click', () => {
+      btnLogFilterAll.classList.add('active');
+      btnLogFilterErrors.classList.remove('active');
+      setLogFilter('all');
+    });
+    btnLogFilterErrors.addEventListener('click', () => {
+      btnLogFilterErrors.classList.add('active');
+      btnLogFilterAll.classList.remove('active');
+      setLogFilter('errors');
     });
   }
 

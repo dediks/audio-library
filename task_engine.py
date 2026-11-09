@@ -863,9 +863,10 @@ class TaskQueueManager:
                 js_runtime=js_runtime,
             )
             if try_idx > 0:
+                auth_source = "library/cookies.txt" if self.cookies_file.is_file() else f"browser ({cookie_browser})"
                 self.append_log(
                     task,
-                    f"[AUTH FALLBACK] Sesi {cookie_browser} bermasalah/terkunci. Beralih otomatis ke Fallback Mode Publik...",
+                    f"[AUTH FALLBACK] Sesi {auth_source} bermasalah atau kadaluarsa. Beralih otomatis ke Fallback Mode Publik...",
                 )
             self.append_log(task, target_desc)
             self.append_log(task, f"Starting extraction for: {url}")
@@ -907,14 +908,17 @@ class TaskQueueManager:
 
         if new_files and auto_scan and shutil.which("ffmpeg") and shutil.which("ffprobe"):
             self.append_log(task, "Initiating audio QC audit (EBU R128 & True Peak)...")
-            for nf in new_files:
+            total_qc = len(new_files)
+            for qc_idx, nf in enumerate(new_files, 1):
                 try:
                     qc_data = audio_manager.audit_one(nf)
                     self.metadata_cache.put_qc(nf, qc_data)
                     tp_val = audio_manager.get_float(qc_data.get("true_peak_dbtp"))
                     if tp_val is not None and tp_val > 0:
                         clipping_count += 1
-                    self.append_log(task, f"QC completed: {nf.name} [Status: {qc_data.get('status')}]")
+                    qc_prog = 90.0 + (qc_idx / total_qc) * 9.0
+                    task["progress"] = min(99.0, round(qc_prog, 1))
+                    self.append_log(task, f"QC completed ({qc_idx}/{total_qc}): {nf.name} [Status: {qc_data.get('status')}]")
                 except Exception as qc_err:
                     self.append_log(task, f"QC error on {nf.name}: {qc_err}")
 
