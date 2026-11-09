@@ -664,6 +664,10 @@ document.addEventListener('DOMContentLoaded', () => {
     let idleDecayFrames = 0;
 
     function renderFrame() {
+      if (!rtaCanvas || !rtaCanvas.isConnected) {
+        isRunning = false;
+        return;
+      }
       const isPlaying = isDeckPlaying();
       if (!isPlaying) {
         if (idleDecayFrames <= 0) {
@@ -1122,10 +1126,20 @@ document.addEventListener('DOMContentLoaded', () => {
     return list[nextIdx];
   }
 
+  const deckStateListeners = new Set();
+  function notifyDeckStateChange() {
+    deckStateListeners.forEach(fn => {
+      try { fn(); } catch (_) {}
+    });
+    window.dispatchEvent(new CustomEvent('swararia:deck-state-change'));
+  }
+
   function syncPlayPauseButton(isPlaying) {
-    if (!btnPlayPause || !btnPlayPauseText) return;
-    btnPlayPause.classList.toggle('is-playing', isPlaying);
-    btnPlayPauseText.textContent = isPlaying ? '❚❚ PAUSE' : '▶ PLAY CUE';
+    if (btnPlayPause && btnPlayPauseText) {
+      btnPlayPause.classList.toggle('is-playing', isPlaying);
+      btnPlayPauseText.textContent = isPlaying ? '❚❚ PAUSE' : '▶ PLAY CUE';
+    }
+    notifyDeckStateChange();
   }
 
   function updateNowPlayingCard(fileObj) {
@@ -1195,6 +1209,7 @@ document.addEventListener('DOMContentLoaded', () => {
       nextCueHint.textContent = nextTrack ? `Next: ${nextTrack.name}` : 'Next: (End of Setlist)';
       nextCueHint.title = nextTrack ? nextTrack.name : '';
     }
+    notifyDeckStateChange();
   }
 
   function updateTimecodeUI() {
@@ -1226,6 +1241,82 @@ document.addEventListener('DOMContentLoaded', () => {
       seekSlider.value = String(Math.round((cur / dur) * 1000));
     }
   }
+
+  // Global Bridge for Persistent Floating Deck and External Triggers
+  window.__swarariaFohDeck = {
+    getTrack: () => activeTrackObj,
+    isPlaying: () => isDeckPlaying(),
+    getAudioEl: () => audioEl,
+    play: () => playCurrentTrack(),
+    pause: () => pauseCurrentTrack(),
+    togglePlay: () => {
+      if (isDeckPlaying()) {
+        pauseCurrentTrack();
+      } else {
+        playCurrentTrack();
+      }
+    },
+    stop: () => stopAndResetCue(),
+    next: () => {
+      if (isRemoteController) {
+        sendRemoteCommand('next');
+        return;
+      }
+      const next = getAdjacentTrack(1);
+      if (next) loadTrack(next, true);
+    },
+    prev: () => {
+      if (isRemoteController) {
+        sendRemoteCommand('prev');
+        return;
+      }
+      const prev = getAdjacentTrack(-1);
+      if (prev) loadTrack(prev, true);
+    },
+    seek: (sec) => {
+      if (audioEl && Number.isFinite(sec)) {
+        audioEl.currentTime = Math.max(0, Math.min(audioEl.duration || 0, sec));
+        updateTimecodeUI();
+      }
+    },
+    getPlayMode: () => playMode,
+    setPlayMode: (mode) => {
+      if (mode === 'cue' && modeBtnCue) modeBtnCue.click();
+      else if (mode === 'continuous' && modeBtnContinuous) modeBtnContinuous.click();
+      else if (mode === 'loop' && modeBtnLoop) modeBtnLoop.click();
+      notifyDeckStateChange();
+    },
+    getVolume: () => {
+      return volumeSlider ? Number(volumeSlider.value) : (audioEl ? audioEl.volume * 100 : 100);
+    },
+    setVolume: (val) => {
+      if (volumeSlider) {
+        volumeSlider.value = String(val);
+        volumeSlider.dispatchEvent(new Event('input'));
+      } else if (audioEl) {
+        audioEl.volume = Math.max(0, Math.min(100, val)) / 100;
+      }
+    },
+    onStateChange: (fn) => {
+      deckStateListeners.add(fn);
+      return () => deckStateListeners.delete(fn);
+    },
+    notifyStateChange: notifyDeckStateChange,
+  };
+
+  // Re-sync full console whenever view is activated in SPA
+  window.addEventListener('swararia:player-activated', () => {
+    updateTimecodeUI();
+    if (activeTrackObj) {
+      updateNowPlayingCard(activeTrackObj);
+      highlightActiveRowInTable();
+    }
+    syncPlayPauseButton(isDeckPlaying());
+    setTransportStateBadge(isDeckPlaying() ? 'PLAYING' : activeTrackObj ? 'CUED' : 'STANDBY');
+    if (requestRtaWake && isDeckPlaying()) {
+      requestRtaWake();
+    }
+  });
 
   // ---------------------------------------------------------------------------
   // 5. Audio Element Events & Play Mode Transitions

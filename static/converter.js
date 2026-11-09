@@ -1267,7 +1267,11 @@ document.addEventListener('DOMContentLoaded', () => {
   if (btnSendToOrganizer) {
     btnSendToOrganizer.addEventListener('click', () => {
       persistWorkspaceState();
-      window.location.href = '/organizer';
+      if (typeof window.__spaNavigate === 'function') {
+        window.__spaNavigate('/organizer');
+      } else {
+        window.location.href = '/organizer';
+      }
     });
   }
 

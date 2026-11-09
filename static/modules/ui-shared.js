@@ -19,6 +19,30 @@ import {
 } from './table-groups.js';
 import { renderLogs, createQueueMonitor } from './queue-monitor.js';
 import { openRenameModal, openDeleteModal, openBatchRenameModal } from './rename-modal.js';
+import { spaNavigate, initSpaRouter } from './spa-router.js';
+import { initPersistentDock, ensureFohAudioElement } from './persistent-dock.js';
+
+// Safe DOMContentLoaded hook for dynamically loaded SPA modules
+if (typeof document !== 'undefined') {
+  const nativeAddEventListener = EventTarget.prototype.addEventListener;
+  document.addEventListener = function (type, listener, options) {
+    if (type === 'DOMContentLoaded' && document.readyState !== 'loading') {
+      queueMicrotask(() => {
+        try {
+          if (typeof listener === 'function') {
+            listener.call(document, new Event('DOMContentLoaded'));
+          } else if (listener && typeof listener.handleEvent === 'function') {
+            listener.handleEvent(new Event('DOMContentLoaded'));
+          }
+        } catch (err) {
+          console.error('[SPA Shell] Error in DOMContentLoaded callback:', err);
+        }
+      });
+      return;
+    }
+    return nativeAddEventListener.call(document, type, listener, options);
+  };
+}
 
 export {
   createSvgIcon,
@@ -39,6 +63,10 @@ export {
   openRenameModal,
   openDeleteModal,
   openBatchRenameModal,
+  spaNavigate,
+  initSpaRouter,
+  initPersistentDock,
+  ensureFohAudioElement,
 };
 
 /**
@@ -141,6 +169,9 @@ export function initAppHeader(opts = {}) {
   if (!headerEl) return {};
 
   const activePage = opts.activePage || headerEl.dataset.page || 'ingest';
+  if (typeof document !== 'undefined' && document.body) {
+    document.body.dataset.page = activePage;
+  }
   headerEl.replaceChildren();
 
   // 1. Brand Block
@@ -188,6 +219,11 @@ export function initAppHeader(opts = {}) {
     const span = document.createElement('span');
     span.textContent = labelText;
     a.appendChild(span);
+    a.addEventListener('click', (e) => {
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      spaNavigate(href);
+    });
     return a;
   }
 
@@ -320,6 +356,7 @@ export function initAppHeader(opts = {}) {
   }
 
   refreshStatus();
+  initSpaRouter();
   return { refreshStatus };
 }
 

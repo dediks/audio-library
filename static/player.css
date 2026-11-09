@@ -2557,3 +2557,535 @@ body.remote-controller-mode .group-header-bar {
   padding: 0.15rem 0;
   font-size: 0.74rem;
 }
+
+/* ==========================================================================
+   PERSISTENT FLOATING PLAYER DOCK (Stage 7 Floating Deck across all stages)
+   ========================================================================== */
+.floating-player-dock {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 74px;
+  background: var(--bg-surface-glass, rgba(22, 26, 36, 0.96));
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-top: 2px solid var(--border-strong, #434e68);
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.7);
+  display: grid;
+  grid-template-columns: minmax(220px, 1.2fr) minmax(360px, 2fr) minmax(220px, 1.2fr);
+  align-items: center;
+  padding: 0 1.5rem;
+  z-index: 9999;
+  transform: translateY(0);
+  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s ease;
+  user-select: none;
+}
+
+/* Strictly hide floating dock on Full Player console page */
+body[data-page="player"] .floating-player-dock,
+.floating-player-dock.is-hidden {
+  display: none !important;
+  transform: translateY(105%);
+  pointer-events: none;
+  opacity: 0;
+}
+
+/* Add bottom padding to main containers on non-player pages so content is never covered */
+body:not([data-page="player"]) .app-container {
+  padding-bottom: 92px;
+}
+body:not([data-page="player"]) .app-footer {
+  margin-bottom: 84px;
+}
+
+/* Left Column: Track Info & Artwork */
+.dock-track-info {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.dock-cover-art {
+  width: 44px;
+  height: 44px;
+  border-radius: 9px;
+  background: linear-gradient(135deg, #1e293b, #0f172a);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: #a855f7;
+  transition: all 0.3s ease;
+}
+
+.dock-cover-art.is-playing {
+  color: #10b981;
+  border-color: rgba(16, 185, 129, 0.4);
+  box-shadow: 0 0 14px rgba(16, 185, 129, 0.3);
+  animation: dockVinylSpin 8s linear infinite;
+}
+
+@keyframes dockVinylSpin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.dock-text-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.dock-track-title {
+  font-family: 'Inter', -apple-system, sans-serif;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #f8fafc;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: -0.01em;
+}
+
+.dock-track-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: 'Inter', sans-serif;
+  font-size: 0.72rem;
+  color: #94a3b8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dock-meta-folder {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dock-badge-fmt {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 0.12rem 0.4rem;
+  border-radius: 4px;
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+/* Center Column: Symmetrical Transport & Custom Scrubber */
+.dock-transport-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  max-width: 520px;
+  margin: 0 auto;
+}
+
+.dock-controls-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.85rem;
+}
+
+.dock-round-btn {
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  border-radius: 50%;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  padding: 0;
+}
+
+.dock-round-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+  transform: scale(1.08);
+}
+
+.dock-round-btn:active {
+  transform: scale(0.96);
+}
+
+.dock-play-fab {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #10b981, #059669);
+  color: #022c22;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 2px 14px rgba(16, 185, 129, 0.4);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  padding: 0;
+}
+
+.dock-play-fab:hover {
+  transform: scale(1.08);
+  box-shadow: 0 4px 18px rgba(16, 185, 129, 0.55);
+}
+
+.dock-play-fab:active {
+  transform: scale(0.96);
+}
+
+.dock-play-fab.is-playing {
+  background: #10b981;
+}
+
+.dock-scrubber-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+}
+
+.dock-time {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+  color: #64748b;
+  min-width: 38px;
+  text-align: center;
+  font-weight: 500;
+}
+
+/* Custom Seek Range Input */
+.dock-seek-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1;
+  height: 4px;
+  border-radius: 999px;
+  background: #232733;
+  outline: none;
+  cursor: pointer;
+  transition: height 0.15s ease;
+  margin: 0;
+}
+
+.dock-seek-slider:hover {
+  height: 6px;
+}
+
+.dock-seek-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #ffffff;
+  cursor: pointer;
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.5);
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.dock-seek-slider:hover::-webkit-slider-thumb {
+  background: #10b981;
+  transform: scale(1.25);
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.6);
+}
+
+.dock-seek-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.5);
+}
+
+.dock-seek-slider:hover::-moz-range-thumb {
+  background: #10b981;
+}
+
+/* Right Column: Actions, Volume & Expand Pill */
+.dock-actions-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.85rem;
+}
+
+.dock-mode-pill {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 0.22rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(168, 85, 247, 0.14);
+  border: 1px solid rgba(168, 85, 247, 0.35);
+  color: #c084fc;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.dock-mode-pill:hover {
+  background: rgba(168, 85, 247, 0.25);
+  border-color: #c084fc;
+}
+
+.dock-vol-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.dock-mute-btn {
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 0.95rem;
+  padding: 0.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+}
+
+.dock-mute-btn:hover {
+  color: #ffffff;
+}
+
+.dock-vol-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 78px;
+  height: 4px;
+  border-radius: 999px;
+  background: #232733;
+  outline: none;
+  cursor: pointer;
+  transition: height 0.15s ease;
+  margin: 0;
+}
+
+.dock-vol-slider:hover {
+  height: 6px;
+}
+
+.dock-vol-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #ffffff;
+  cursor: pointer;
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.4);
+}
+
+.dock-vol-slider:hover::-webkit-slider-thumb {
+  background: #38bdf8;
+  transform: scale(1.2);
+}
+
+.dock-vol-slider::-moz-range-thumb {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: none;
+  cursor: pointer;
+}
+
+.dock-expand-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: rgba(56, 189, 248, 0.1);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  color: #38bdf8;
+  font-family: 'Inter', -apple-system, sans-serif;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 0.38rem 0.85rem;
+  border-radius: 999px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  flex-shrink: 0;
+}
+
+.dock-expand-pill:hover {
+  background: rgba(56, 189, 248, 0.22);
+  border-color: #38bdf8;
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+/* Minimize Chevron Button on Dock */
+.dock-btn-minimize {
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  cursor: pointer;
+  border-radius: 50%;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.18s ease;
+  padding: 0;
+  margin-left: 0.15rem;
+  flex-shrink: 0;
+}
+
+.dock-btn-minimize:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+  transform: translateY(1px);
+}
+
+/* Minimized Floating Dock */
+.floating-player-dock.is-minimized {
+  transform: translateY(115%) !important;
+  pointer-events: none !important;
+  opacity: 0 !important;
+}
+
+/* Page bottom padding when dock is minimized */
+body.dock-is-minimized:not([data-page="player"]) .app-container {
+  padding-bottom: 24px !important;
+}
+body.dock-is-minimized:not([data-page="player"]) .app-footer {
+  margin-bottom: 16px !important;
+}
+
+/* Floating Mini Pill Launcher (Visible when Dock is Minimized) */
+.dock-mini-pill {
+  position: fixed;
+  bottom: 18px;
+  right: 24px;
+  z-index: 9998;
+  height: 42px;
+  background: var(--bg-surface-glass, rgba(22, 26, 36, 0.96));
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1.5px solid var(--border-strong, #434e68);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.7);
+  border-radius: 999px;
+  display: none;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0 0.85rem 0 0.5rem;
+  color: #f1f5f9;
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.dock-mini-pill:hover {
+  background: var(--bg-surface-elevated, #242a38);
+  border-color: #64748b;
+  transform: translateY(-2px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.8);
+}
+
+.dock-mini-pill.is-active {
+  display: flex;
+}
+
+body[data-page="player"] .dock-mini-pill {
+  display: none !important;
+}
+
+.dock-mini-pill-art {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #1e293b, #0f172a);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #a855f7;
+  flex-shrink: 0;
+}
+
+.dock-mini-pill-art.is-playing {
+  color: #10b981;
+  border-color: rgba(16, 185, 129, 0.4);
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.3);
+  animation: dockVinylSpin 8s linear infinite;
+}
+
+.dock-mini-pill-title {
+  font-family: 'Inter', -apple-system, sans-serif;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #f1f5f9;
+  max-width: 150px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dock-mini-pill-play {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: #10b981;
+  color: #022c22;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+
+.dock-mini-pill-play:hover {
+  transform: scale(1.12);
+}
+
+.dock-mini-pill-expand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #94a3b8;
+  font-size: 0.72rem;
+  transition: transform 0.15s ease;
+}
+
+.dock-mini-pill:hover .dock-mini-pill-expand {
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+@media (max-width: 900px) {
+  .floating-player-dock {
+    grid-template-columns: 1fr auto;
+    padding: 0 1rem;
+    height: 70px;
+  }
+  .dock-actions-right {
+    display: none;
+  }
+}

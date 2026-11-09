@@ -659,7 +659,11 @@ document.addEventListener('DOMContentLoaded', () => {
     btnSendToNormalizer.addEventListener('click', () => {
       if (selectedPaths.size === 0) return;
       persistWorkspaceState();
-      window.location.href = '/converter?mode=normalize';
+      if (typeof window.__spaNavigate === 'function') {
+        window.__spaNavigate('/converter?mode=normalize');
+      } else {
+        window.location.href = '/converter?mode=normalize';
+      }
     });
   }
 
