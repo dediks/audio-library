@@ -161,6 +161,12 @@ export async function spaNavigate(targetUrl, isPopState = false) {
       if (resolved.config.key === 'player') {
         window.dispatchEvent(new CustomEvent('swararia:player-activated'));
       }
+
+      // Execute the page module on first activation. ES modules are evaluated once per URL, so this
+      // is a no-op for pages whose script already ran (natively loaded or visited before).
+      if (resolved.config.script) {
+        await import('/static/' + resolved.config.script);
+      }
     } else {
       // Fetch new HTML from server
       const res = await fetch(targetUrl);
@@ -302,8 +308,10 @@ async function preloadPlayerConsole() {
         pageKey: 'player',
         scrollTop: 0,
       });
-      // Pre-import player module
-      await import('/static/player.js');
+      // Only cache the markup here. Do NOT import player.js yet: its DOMContentLoaded handler would run
+      // immediately (see the safe-DOMContentLoaded hook in ui-shared.js) against the page currently shown,
+      // re-rendering the header with "FOH Player" active and setting body[data-page="player"].
+      // The module is imported on first navigation to /player instead.
     }
   } catch (_e) {
     // Preload failure is non-critical

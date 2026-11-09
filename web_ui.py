@@ -1073,6 +1073,8 @@ class AudioServerHandler(BaseHTTPRequestHandler):
                 self.send_error(404, "File not found")
         elif path == "/api/system":
             self.send_json(200, check_system_binaries())
+        elif path == "/api/undo-rename":
+            self.send_json(200, {"ok": True, "last": fs_browser.peek_rename_history()})
         elif path == "/api/remote/info":
             qs = parse_qs(parsed.query)
             force_ip = qs.get("refresh", ["0"])[0] == "1"
@@ -1297,6 +1299,14 @@ class AudioServerHandler(BaseHTTPRequestHandler):
             self._handle_post_rename(payload)
         elif path == "/api/batch-rename":
             self._handle_post_batch_rename(payload)
+        elif path == "/api/organize-folders":
+            self._handle_post_organize_folders(payload)
+        elif path == "/api/undo-rename":
+            ok, msg, pairs = fs_browser.undo_last_batch_rename()
+            if ok:
+                for cur, restored in pairs:
+                    metadata_cache.rename_entry(cur, restored)
+            self.send_json(200 if ok else 409, {"ok": ok, "message": msg} if ok else {"error": msg})
         elif path == "/api/delete":
             self._handle_post_delete(payload)
         elif path == "/api/splitter/inspect":
@@ -1426,11 +1436,71 @@ class AudioServerHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             self.send_json(400, {"error": str(exc)})
 
+    def _handle_post_organize_folders(self, payload: dict) -> None:
+        raw_src = payload.get("source_dir")
+        rel_paths = payload.get("rel_paths")
+        template = str(payload.get("template") or "artist_album")
+        preview_only = bool(payload.get("preview_only", payload.get("preview", False)))
+        expected_raw = payload.get("expected_plan")
+        expected_plan = (
+            {str(k): str(v) for k, v in expected_raw.items()}
+            if isinstance(expected_raw, dict) and not preview_only else None
+        )
+        try:
+            src_dir = resolve_safe_dir(raw_src, INBOX_DIR, must_exist=True) if raw_src else INBOX_DIR.resolve()
+            ok, msg, plan = fs_browser.organize_into_folders(
+                source_dir=src_dir,
+                rel_paths=rel_paths if isinstance(rel_paths, list) else [],
+                template=template,
+                preview_only=preview_only,
+                expected_plan=expected_plan,
+            )
+            if not ok:
+                self.send_json(409 if expected_plan is not None and "changed since the preview" in msg else 400, {"error": msg})
+                return
+            if not preview_only:
+                for item in plan:
+                    if item.get("applied"):
+                        metadata_cache.rename_entry(item["old_path"], item["new_path"])
+            public_plan = [
+                {
+                    "rel_path": item["rel_path"],
+                    "new_rel_path": item["new_rel_path"],
+                    "folder": item["folder"],
+                    "old_name": item["old_name"],
+                    "new_name": item["new_name"],
+                    "changed": item["changed"],
+                    "reason": item.get("reason", ""),
+                }
+                for item in plan
+            ]
+            self.send_json(200, {
+                "ok": True,
+                "message": msg,
+                "preview_only": preview_only,
+                "changed_count": sum(1 for i in plan if i.get("changed")),
+                "total_count": len(plan),
+                "items": public_plan,
+            })
+        except Exception as exc:
+            self.send_json(400, {"error": str(exc)})
+
     def _handle_post_batch_rename(self, payload: dict) -> None:
         raw_src = payload.get("source_dir")
         rel_paths = payload.get("rel_paths")
-        options = payload.get("options") if isinstance(payload.get("options"), dict) else {}
-        preview_only = bool(payload.get("preview_only", False))
+        if isinstance(payload.get("options"), dict):
+            options = payload["options"]
+        else:
+            # Frontend sends options flat at the top level.
+            option_keys = ("numbering_mode", "start_number", "strip_yt_id", "strip_junk_tags", "clean_spaces", "sort_by")
+            options = {k: payload[k] for k in option_keys if k in payload}
+        # Accept both "preview_only" and the frontend's "preview" flag.
+        preview_only = bool(payload.get("preview_only", payload.get("preview", False)))
+        expected_raw = payload.get("expected_plan")
+        expected_plan = (
+            {str(k): str(v) for k, v in expected_raw.items()}
+            if isinstance(expected_raw, dict) and not preview_only else None
+        )
 
         try:
             src_dir = resolve_safe_dir(raw_src, INBOX_DIR, must_exist=True) if raw_src else INBOX_DIR.resolve()
@@ -1439,34 +1509,37 @@ class AudioServerHandler(BaseHTTPRequestHandler):
                 rel_paths=rel_paths if isinstance(rel_paths, list) else [],
                 options=options,
                 preview_only=preview_only,
+                expected_plan=expected_plan,
             )
             if not ok:
-                self.send_json(400, {"error": msg})
+                self.send_json(409 if expected_plan is not None and "changed since the preview" in msg else 400, {"error": msg})
                 return
 
             if not preview_only:
                 for item in plan:
-                    if item.get("changed"):
+                    if item.get("changed") and item.get("applied"):
                         metadata_cache.rename_entry(item["old_path"], item["new_path"])
 
             changed_count = sum(1 for item in plan if item.get("changed"))
+            public_plan = [
+                {
+                    "rel_path": item["rel_path"],
+                    "new_rel_path": item["new_rel_path"],
+                    "folder": item["folder"],
+                    "old_name": item["old_name"],
+                    "new_name": item["new_name"],
+                    "changed": item["changed"],
+                }
+                for item in plan
+            ]
             self.send_json(200, {
                 "ok": True,
                 "message": msg,
                 "preview_only": preview_only,
                 "changed_count": changed_count,
                 "total_count": len(plan),
-                "plan": [
-                    {
-                        "rel_path": item["rel_path"],
-                        "new_rel_path": item["new_rel_path"],
-                        "folder": item["folder"],
-                        "old_name": item["old_name"],
-                        "new_name": item["new_name"],
-                        "changed": item["changed"],
-                    }
-                    for item in plan
-                ],
+                "plan": public_plan,
+                "items": public_plan,
             })
         except Exception as exc:
             self.send_json(400, {"error": str(exc)})

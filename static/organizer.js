@@ -24,6 +24,10 @@ document.addEventListener('DOMContentLoaded', () => {
   initAppHeader({ activePage: 'organizer' });
 
   const numberingModeSelect = document.getElementById('numberingModeSelect');
+  const sortBySelect = document.getElementById('sortBySelect');
+  const organizeTemplateSelect = document.getElementById('organizeTemplateSelect');
+  const btnOrganizeFolders = document.getElementById('btnOrganizeFolders');
+  const btnOrganizeFoldersText = document.getElementById('btnOrganizeFoldersText');
   const startNumberInput = document.getElementById('startNumberInput');
   const chkStripYtId = document.getElementById('chkStripYtId');
   const chkStripJunkTags = document.getElementById('chkStripJunkTags');
@@ -73,6 +77,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const rowElementsByPath = new Map();
   const groupDomMap = new Map();
   let previewDebounceTimer = null;
+  let lastPreviewPlan = null; // {rel_path: new_rel_path} from the latest preview, sent back on apply
 
   const groupCollapseCtrl = createGroupCollapseController({
     collapsedGroups,
@@ -97,6 +102,7 @@ document.addEventListener('DOMContentLoaded', () => {
       strip_yt_id: chkStripYtId ? chkStripYtId.checked : true,
       strip_junk_tags: chkStripJunkTags ? chkStripJunkTags.checked : true,
       clean_spaces: chkCleanSpaces ? chkCleanSpaces.checked : true,
+      sort_by: sortBySelect ? sortBySelect.value : 'selection',
     };
   }
 
@@ -113,10 +119,11 @@ document.addEventListener('DOMContentLoaded', () => {
       stem = stem.replace(/\s*\[[A-Za-z0-9_-]{11}\]$/g, '');
     }
     if (opts.strip_junk_tags) {
-      stem = stem.replace(
-        /\s*(?:[\(\[【](?:official\s*(?:music\s*)?video|official\s*audio|official\s*lyric\s*video|lyric\s*video|lyrics?|lirik|audio|visualizer|mv|hd|4k|hq|full\s*album|live(?:\s*performance)?|karaoke|ost|original\s*soundtrack)[\)\]】]|(?:[｜|•·]| - )\s*(?:official\s*(?:music\s*)?video|official\s*audio|official\s*lyric\s*video|lyric\s*video|lyrics?|lirik|visualizer|mv|hd|4k|hq)(?=\s*(?:[\(\[【｜|•·]|$)))/gi,
-        ''
-      );
+      // Mirrors fs_browser.py: bracketed tags (any junk word), then strong trailing "- Official Video" style tags.
+      const junkAll = '(?:official\\s*(?:music\\s*)?(?:video|audio|lyric\\s*video|lyrics|visualizer|mv)|music\\s*video|lyric\\s*video|lyrics?|lirik(?:\\s*lagu)?|video\\s*klip|visualizer|audio\\s*only|full\\s*album|karaoke(?:\\s*version)?|hd|hq|4k(?:\\s*uhd)?|1080p|720p|mv|ost)';
+      const junkStrong = '(?:official\\s*(?:music\\s*)?(?:video|audio|lyric\\s*video|lyrics|visualizer|mv)|music\\s*video|lyric\\s*video|lyrics?|lirik(?:\\s*lagu)?|video\\s*klip|visualizer|audio\\s*only|full\\s*album)';
+      stem = stem.replace(new RegExp(`[\\(\\[\\{]\\s*${junkAll}\\s*[\\)\\]\\}]`, 'gi'), ' ');
+      stem = stem.replace(new RegExp(`(?:[｜|\\-–—]+\\s*)${junkStrong}\\s*$`, 'i'), '');
     }
     if (opts.clean_spaces) {
       stem = stem.replace(/_/g, ' ');
@@ -126,7 +133,7 @@ document.addEventListener('DOMContentLoaded', () => {
       stem = stem.replace(/^[\s\-–—.]+|[\s\-–—.]+$/g, '');
     }
     if (opts.numbering_mode !== 'none' && trackIdx !== null) {
-      stem = stem.replace(/^\d{1,3}\s*(?:[-–—.]\s*|\s+)/, '');
+      stem = stem.replace(/^\s*\d{1,3}\s*(?:[-._)]+|\s+-)\s*(?!\d)/, '');
     }
     stem = stem.trim() || stemRaw.trim() || 'Track';
 
@@ -150,7 +157,7 @@ document.addEventListener('DOMContentLoaded', () => {
       currentSourceDir.endsWith('\\library\\inbox');
     if (activeSourceBadge) {
       activeSourceBadge.textContent = isDefault
-        ? 'library/inbox (Koleksi Default Aplikasi)'
+        ? 'library/inbox (App Default Collection)'
         : currentSourceDir;
       activeSourceBadge.title = currentSourceDir || 'library/inbox';
     }
@@ -168,8 +175,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!ok) {
       notify({
         type: 'error',
-        title: 'Gagal Memuat Koleksi',
-        message: error || 'Tidak dapat membaca folder sumber.',
+        title: 'Failed to Load Collection',
+        message: error || 'Could not read the source folder.',
         playSound: true,
       });
       return false;
@@ -206,12 +213,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const fragment = document.createDocumentFragment();
 
     fragment.appendChild(
-      createPlaylistCard('ALL', 'Semua Koleksi (Tampilkan Semua)', `${totalSongs} lagu total`, `${totalMp3} MP3`)
+      createPlaylistCard('ALL', 'All Collections (Show All)', `${totalSongs} songs total`, `${totalMp3} MP3`)
     );
 
     allPlaylists.forEach(pl => {
       const displayLabel = pl.label || ('📁 ' + pl.name);
-      const subText = `${pl.total} lagu`;
+      const subText = `${pl.total} songs`;
       const badgeText = pl.mp3_count > 0 ? `${pl.mp3_count} MP3` : `${pl.other_count} Native`;
       fragment.appendChild(createPlaylistCard(pl.name, displayLabel, subText, badgeText));
     });
@@ -293,7 +300,7 @@ document.addEventListener('DOMContentLoaded', () => {
       tr.className = 'empty-row';
       const td = document.createElement('td');
       td.setAttribute('colspan', '6');
-      td.textContent = 'Tidak ada file audio yang cocok dengan filter saat ini.';
+      td.textContent = 'No audio files match the current filter.';
       tr.appendChild(td);
       organizerTableBody.appendChild(tr);
       return;
@@ -317,7 +324,7 @@ document.addEventListener('DOMContentLoaded', () => {
       tdGroupCheck.className = 'col-check';
       const groupChk = document.createElement('input');
       groupChk.type = 'checkbox';
-      groupChk.title = `Pilih semua lagu di grup "${group.label}"`;
+      groupChk.title = `Select all songs in group "${group.label}"`;
       groupChk.addEventListener('click', (e) => {
         e.stopPropagation();
         const checkAll = groupChk.checked;
@@ -371,7 +378,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const chk = document.createElement('input');
         chk.type = 'checkbox';
         chk.checked = isSelected;
-        chk.setAttribute('aria-label', 'Pilih ' + f.name);
+        chk.setAttribute('aria-label', 'Select ' + f.name);
         chk.addEventListener('click', (e) => {
           e.stopPropagation();
           handleRowSelect(currentFlatIdx, f.rel_path, chk.checked, e.shiftKey);
@@ -491,12 +498,12 @@ document.addEventListener('DOMContentLoaded', () => {
       organizerPreviewList.replaceChildren();
       const emptyDiv = document.createElement('div');
       emptyDiv.className = 'notif-empty';
-      emptyDiv.textContent = 'Centang lagu atau folder playlist di tabel bawah untuk menampilkan simulasi perubahan nama file secara langsung.';
+      emptyDiv.textContent = 'Check songs or playlist folders in the table below to see a live simulation of the file renames.';
       organizerPreviewList.appendChild(emptyDiv);
-      if (previewSummaryBadge) previewSummaryBadge.textContent = '0 dipilih';
-      if (studioTargetHint) studioTargetHint.textContent = 'Centang lagu di tabel bawah untuk melihat preview perubahan nama';
+      if (previewSummaryBadge) previewSummaryBadge.textContent = '0 selected';
+      if (studioTargetHint) studioTargetHint.textContent = 'Check songs in the table below to preview the renames';
       if (btnApplyBatchRename) btnApplyBatchRename.disabled = true;
-      if (btnApplyBatchRenameText) btnApplyBatchRenameText.textContent = 'Terapkan Rename (0 File)';
+      if (btnApplyBatchRenameText) btnApplyBatchRenameText.textContent = 'Apply Rename (0 Files)';
       return;
     }
 
@@ -509,24 +516,36 @@ document.addEventListener('DOMContentLoaded', () => {
       strip_yt_id: opts.strip_yt_id,
       strip_junk_tags: opts.strip_junk_tags,
       clean_spaces: opts.clean_spaces,
+      sort_by: opts.sort_by,
       preview: true,
     });
 
     if (!ok || !data) return;
 
     const items = data.items || [];
+    lastPreviewPlan = {};
+    items.forEach(it => { lastPreviewPlan[it.rel_path] = it.new_rel_path; });
+
+    // The server plan is authoritative: reflect it in the inline "new name" column of the table.
+    items.forEach(it => {
+      const entry = rowElementsByPath.get(it.rel_path);
+      if (!entry || !entry.simSpan) return;
+      entry.simSpan.textContent = it.new_name;
+      entry.simSpan.style.color = it.changed ? '#34d399' : 'var(--text-muted)';
+      entry.simSpan.style.fontWeight = it.changed ? '600' : '400';
+    });
     const changedCount = data.changed_count || 0;
     if (previewSummaryBadge) {
-      previewSummaryBadge.textContent = `${changedCount} berubah • ${items.length - changedCount} tetap`;
+      previewSummaryBadge.textContent = `${changedCount} changed • ${items.length - changedCount} unchanged`;
     }
     if (studioTargetHint) {
-      studioTargetHint.textContent = `${changedCount} dari ${items.length} file terpilih siap diganti namanya`;
+      studioTargetHint.textContent = `${changedCount} of ${items.length} selected files ready to rename`;
     }
     if (btnApplyBatchRename) {
       btnApplyBatchRename.disabled = changedCount === 0;
     }
     if (btnApplyBatchRenameText) {
-      btnApplyBatchRenameText.textContent = `Terapkan Rename (${changedCount} File)`;
+      btnApplyBatchRenameText.textContent = `Apply Rename (${changedCount} Files)`;
     }
 
     organizerPreviewList.replaceChildren();
@@ -550,7 +569,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const newLine = document.createElement('div');
       newLine.className = 'batch-rename-new';
-      newLine.textContent = item.changed ? `→ ${item.new_name}` : '  (Sudah rapi / tidak berubah)';
+      newLine.textContent = item.changed ? `→ ${item.new_name}` : '  (Already tidy / unchanged)';
       namesCol.appendChild(newLine);
 
       row.appendChild(namesCol);
@@ -618,13 +637,19 @@ document.addEventListener('DOMContentLoaded', () => {
   function updateSelectionUI() {
     const count = selectedPaths.size;
     if (selectionCounterPill) {
-      selectionCounterPill.textContent = `${count} dipilih`;
+      selectionCounterPill.textContent = `${count} selected`;
     }
     if (btnDeleteSelectedText) {
-      btnDeleteSelectedText.textContent = `Hapus Terpilih (${count})`;
+      btnDeleteSelectedText.textContent = `Delete Selected (${count})`;
     }
     if (btnDeleteSelected) {
       btnDeleteSelected.disabled = count === 0;
+    }
+    if (btnOrganizeFolders) {
+      btnOrganizeFolders.disabled = count === 0;
+    }
+    if (btnOrganizeFoldersText) {
+      btnOrganizeFoldersText.textContent = `Organize into Folders (${count} Files)`;
     }
   }
 
@@ -641,7 +666,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const opts = getStudioOptions();
       btnApplyBatchRename.disabled = true;
-      if (btnApplyBatchRenameText) btnApplyBatchRenameText.textContent = 'Menerapkan Rename...';
+      if (btnApplyBatchRenameText) btnApplyBatchRenameText.textContent = 'Applying Rename...';
 
       const { ok, data, error } = await apiPost('/api/batch-rename', {
         source_dir: currentSourceDir || null,
@@ -651,15 +676,18 @@ document.addEventListener('DOMContentLoaded', () => {
         strip_yt_id: opts.strip_yt_id,
         strip_junk_tags: opts.strip_junk_tags,
         clean_spaces: opts.clean_spaces,
+        sort_by: opts.sort_by,
         preview: false,
+        expected_plan: lastPreviewPlan,
       });
 
       if (!ok) {
         btnApplyBatchRename.disabled = false;
+        scheduleStudioPreview();
         notify({
           type: 'error',
-          title: 'Gagal Menerapkan Batch Rename',
-          message: error || 'Terjadi kesalahan saat mengubah nama file.',
+          title: 'Failed to Apply Batch Rename',
+          message: error || 'An error occurred while renaming files.',
           playSound: true,
         });
         return;
@@ -667,20 +695,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
       selectedPaths.clear();
       lastClickedIndex = null;
+      lastPreviewPlan = null;
       notify({
         type: 'success',
-        title: 'Batch Auto-Number & Rename Selesai',
-        message: data?.message || 'Nama file berhasil dirapikan.',
+        title: 'Batch Auto-Number & Rename Complete',
+        message: data?.message || 'File names cleaned up successfully.',
         playSound: true,
       });
       await fetchLibrary();
+      refreshUndoState();
     });
   }
 
   // Single & Group Rename / Delete Handlers
   function handleRenameFile(fileObj) {
     openRenameModal({
-      title: 'Ubah Nama File Audio',
+      title: 'Rename Audio File',
       oldName: fileObj.name,
       isFolder: false,
       onSave: async (newName) => {
@@ -690,11 +720,11 @@ document.addEventListener('DOMContentLoaded', () => {
           new_name: newName,
           is_folder: false,
         });
-        if (!ok) throw new Error(error || 'Gagal mengubah nama file.');
+        if (!ok) throw new Error(error || 'Failed to rename the file.');
         notify({
           type: 'success',
-          title: 'File Berhasil Diubah',
-          message: `Nama file diubah menjadi: ${data?.new_name || newName}`,
+          title: 'File Renamed',
+          message: `File renamed to: ${data?.new_name || newName}`,
         });
         await fetchLibrary();
       },
@@ -703,7 +733,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function handleRenameFolder(group) {
     openRenameModal({
-      title: 'Ubah Nama Folder Playlist',
+      title: 'Rename Playlist Folder',
       oldName: group.key.split('/').pop(),
       isFolder: true,
       onSave: async (newName) => {
@@ -713,14 +743,14 @@ document.addEventListener('DOMContentLoaded', () => {
           new_name: newName,
           is_folder: true,
         });
-        if (!ok) throw new Error(error || 'Gagal mengubah nama folder.');
+        if (!ok) throw new Error(error || 'Failed to rename the folder.');
         if (activePlaylist === group.key) {
           activePlaylist = data?.rel_path || 'ALL';
         }
         notify({
           type: 'success',
-          title: 'Folder Berhasil Diubah',
-          message: `Nama folder diubah menjadi: ${data?.new_name || newName}`,
+          title: 'Folder Renamed',
+          message: `Folder renamed to: ${data?.new_name || newName}`,
         });
         await fetchLibrary();
       },
@@ -729,22 +759,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function handleDeleteFile(fileObj) {
     openDeleteModal({
-      title: 'Hapus File Audio',
-      message: 'Apakah Anda yakin ingin menghapus file audio ini secara permanen dari disk?',
+      title: 'Delete Audio File',
+      message: 'Are you sure you want to permanently delete this audio file from disk?',
       items: [fileObj.rel_path || fileObj.name],
-      confirmLabel: 'Hapus File',
+      confirmLabel: 'Delete File',
       onConfirm: async () => {
         const { ok, data, error } = await apiPost('/api/delete', {
           source_dir: currentSourceDir,
           rel_path: fileObj.rel_path,
           is_folder: false,
         });
-        if (!ok) throw new Error(error || 'Gagal menghapus file audio.');
+        if (!ok) throw new Error(error || 'Failed to delete the audio file.');
         selectedPaths.delete(fileObj.rel_path);
         notify({
           type: 'info',
           title: 'File Audio Dihapus',
-          message: data?.message || `File "${fileObj.name}" berhasil dihapus.`,
+          message: data?.message || `File "${fileObj.name}" deleted successfully.`,
         });
         await fetchLibrary();
       },
@@ -753,23 +783,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function handleDeleteFolder(group) {
     openDeleteModal({
-      title: 'Hapus Folder Playlist',
-      message: `Seluruh folder playlist "${group.label}" beserta ${group.files.length} file audio (${group.totalSizeMb} MB) di dalamnya akan dihapus permanen:`,
-      items: [`📁 ${group.label} (${group.files.length} lagu • ${group.totalSizeMb} MB)`],
-      confirmLabel: 'Hapus Folder & Lagu',
+      title: 'Delete Playlist Folder',
+      message: `The entire playlist folder "${group.label}" and its ${group.files.length} audio files (${group.totalSizeMb} MB) will be permanently deleted:`,
+      items: [`📁 ${group.label} (${group.files.length} songs • ${group.totalSizeMb} MB)`],
+      confirmLabel: 'Delete Folder & Songs',
       onConfirm: async () => {
         const { ok, data, error } = await apiPost('/api/delete', {
           source_dir: currentSourceDir,
           rel_path: group.key,
           is_folder: true,
         });
-        if (!ok) throw new Error(error || 'Gagal menghapus folder playlist.');
+        if (!ok) throw new Error(error || 'Failed to delete the playlist folder.');
         group.files.forEach(f => selectedPaths.delete(f.rel_path));
         if (activePlaylist === group.key) activePlaylist = 'ALL';
         notify({
           type: 'info',
-          title: 'Folder Playlist Dihapus',
-          message: data?.message || `Folder "${group.label}" berhasil dihapus.`,
+          title: 'Playlist Folder Deleted',
+          message: data?.message || `Folder "${group.label}" deleted successfully.`,
         });
         await fetchLibrary();
       },
@@ -780,23 +810,23 @@ document.addEventListener('DOMContentLoaded', () => {
     const relPaths = group.files.map(f => f.rel_path);
     if (relPaths.length === 0) return;
     openDeleteModal({
-      title: `Hapus Grup: ${group.label}`,
-      message: `Sebanyak ${relPaths.length} file audio (${group.totalSizeMb} MB) dalam grup "${group.label}" akan dihapus permanen:`,
+      title: `Delete Group: ${group.label}`,
+      message: `${relPaths.length} audio files (${group.totalSizeMb} MB) in group "${group.label}" will be permanently deleted:`,
       items: relPaths,
-      confirmLabel: `Hapus ${relPaths.length} File`,
+      confirmLabel: `Delete ${relPaths.length} Files`,
       onConfirm: async () => {
         const { ok, data, error } = await apiPost('/api/delete', {
           source_dir: currentSourceDir,
           rel_paths: relPaths,
           is_folder: false,
         });
-        if (!ok) throw new Error(error || 'Gagal menghapus file dalam grup.');
+        if (!ok) throw new Error(error || 'Failed to delete the files in the group.');
         relPaths.forEach(rp => selectedPaths.delete(rp));
         lastClickedIndex = null;
         notify({
           type: 'info',
-          title: 'Grup File Dihapus',
-          message: data?.message || `Berhasil menghapus ${relPaths.length} file.`,
+          title: 'Group Files Deleted',
+          message: data?.message || `Deleted ${relPaths.length} files.`,
         });
         await fetchLibrary();
       },
@@ -808,23 +838,23 @@ document.addEventListener('DOMContentLoaded', () => {
       if (selectedPaths.size === 0) return;
       const relPaths = Array.from(selectedPaths);
       openDeleteModal({
-        title: `Hapus Batch (${relPaths.length} Lagu Terpilih)`,
-        message: `Sebanyak ${relPaths.length} file audio yang dicentang akan dihapus permanen dari disk:`,
+        title: `Delete Batch (${relPaths.length} Selected Songs)`,
+        message: `${relPaths.length} checked audio files will be permanently deleted from disk:`,
         items: relPaths,
-        confirmLabel: `Hapus ${relPaths.length} Lagu`,
+        confirmLabel: `Delete ${relPaths.length} Songs`,
         onConfirm: async () => {
           const { ok, data, error } = await apiPost('/api/delete', {
             source_dir: currentSourceDir,
             rel_paths: relPaths,
             is_folder: false,
           });
-          if (!ok) throw new Error(error || 'Gagal menghapus lagu terpilih.');
+          if (!ok) throw new Error(error || 'Failed to delete the selected songs.');
           selectedPaths.clear();
           lastClickedIndex = null;
           notify({
             type: 'info',
-            title: 'Batch Delete Selesai',
-            message: data?.message || `Berhasil menghapus ${relPaths.length} file audio.`,
+            title: 'Batch Delete Complete',
+            message: data?.message || `Deleted ${relPaths.length} audio files.`,
           });
           await fetchLibrary();
         },
@@ -845,17 +875,17 @@ document.addEventListener('DOMContentLoaded', () => {
       persistWorkspaceState();
       notify({
         type: count > 0 ? 'info' : 'warning',
-        title: count > 0 ? `${count} File Non-MP3 Dipilih` : 'Tidak Ada File Non-MP3',
+        title: count > 0 ? `${count} Non-MP3 Files Selected` : 'No Non-MP3 Files',
         message: count > 0
-          ? 'File .opus/.webm/.m4a telah dipilih dan siap dihapus atau dirapikan.'
-          : 'Semua file yang tampil sudah berformat .mp3.',
+          ? '.opus/.webm/.m4a files are selected and ready to delete or tidy up.'
+          : 'All visible files are already .mp3.',
         duration: 3000,
       });
     });
   }
 
   // Studio Rule Change Listeners
-  [numberingModeSelect, startNumberInput, chkStripYtId, chkStripJunkTags, chkCleanSpaces].forEach(el => {
+  [numberingModeSelect, sortBySelect, startNumberInput, chkStripYtId, chkStripJunkTags, chkCleanSpaces].forEach(el => {
     if (!el) return;
     el.addEventListener('change', scheduleStudioPreview);
     el.addEventListener('input', scheduleStudioPreview);
@@ -934,5 +964,96 @@ document.addEventListener('DOMContentLoaded', () => {
     },
   });
 
+  // Undo last batch rename
+  const btnUndoRename = document.getElementById('btnUndoRename');
+  const btnUndoRenameText = document.getElementById('btnUndoRenameText');
+
+  async function refreshUndoState() {
+    if (!btnUndoRename) return;
+    const { ok, data } = await apiGet('/api/undo-rename');
+    const last = ok && data ? data.last : null;
+    btnUndoRename.disabled = !last;
+    if (btnUndoRenameText) {
+      btnUndoRenameText.textContent = last ? `Undo Last Rename (${last.count} Files)` : 'Undo Last Rename';
+    }
+  }
+
+  if (btnUndoRename) {
+    btnUndoRename.addEventListener('click', async () => {
+      btnUndoRename.disabled = true;
+      const { ok, data, error } = await apiPost('/api/undo-rename', {});
+      notify({
+        type: ok ? 'success' : 'error',
+        title: ok ? 'Undo Rename Successful' : 'Undo Rename Failed',
+        message: ok ? (data?.message || 'Rename undone.') : (error || 'Failed to undo the rename.'),
+        playSound: true,
+      });
+      await fetchLibrary();
+      await refreshUndoState();
+    });
+  }
+
+  // Organize selected songs into Artist/Album folders based on tags
+  if (btnOrganizeFolders) {
+    btnOrganizeFolders.addEventListener('click', async () => {
+      if (selectedPaths.size === 0) return;
+      const relPaths = Array.from(selectedPaths);
+      const template = organizeTemplateSelect ? organizeTemplateSelect.value : 'artist_album';
+      btnOrganizeFolders.disabled = true;
+
+      const prev = await apiPost('/api/organize-folders', {
+        source_dir: currentSourceDir || null,
+        rel_paths: relPaths,
+        template,
+        preview: true,
+      });
+      if (!prev.ok) {
+        updateSelectionUI();
+        notify({ type: 'error', title: 'Folder Organize Preview Failed', message: prev.error || 'Failed to read tags.', playSound: true });
+        return;
+      }
+
+      const items = prev.data.items || [];
+      const movable = items.filter(it => it.changed);
+      if (movable.length === 0) {
+        updateSelectionUI();
+        notify({ type: 'info', title: 'No Changes', message: prev.data.message || 'All files are already in the right folders.' });
+        return;
+      }
+      const expected = {};
+      items.forEach(it => { expected[it.rel_path] = it.new_rel_path; });
+
+      updateSelectionUI();
+      openDeleteModal({
+        title: `Organize ${movable.length} Songs into Folders`,
+        message: `${prev.data.message || ''} Songs will be moved (can be undone with Undo):`,
+        items: movable.map(it => `${it.rel_path}  →  ${it.new_rel_path}`),
+        confirmLabel: `Move ${movable.length} Files`,
+        onConfirm: async () => {
+          const res = await apiPost('/api/organize-folders', {
+            source_dir: currentSourceDir || null,
+            rel_paths: relPaths,
+            template,
+            preview: false,
+            expected_plan: expected,
+          });
+          if (!res.ok) throw new Error(res.error || 'Failed to move the files.');
+          selectedPaths.clear();
+          lastClickedIndex = null;
+          lastPreviewPlan = null;
+          notify({
+            type: 'success',
+            title: 'Organize Folders Complete',
+            message: res.data?.message || 'Files moved successfully.',
+            playSound: true,
+          });
+          await fetchLibrary();
+          refreshUndoState();
+        },
+      });
+    });
+  }
+
   fetchLibrary(currentSourceDir);
+  refreshUndoState();
 });

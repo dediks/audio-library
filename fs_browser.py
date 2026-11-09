@@ -2,12 +2,15 @@
 """Filesystem Browser, Path Boundary Validation & URL Allowlist Helpers."""
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
 import string
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -130,14 +133,14 @@ def resolve_safe_dir(raw_path: str | None, default_dir: Path = INBOX_DIR, must_e
     allowed_roots = get_allowed_roots()
     matched_root = next((r for r in allowed_roots if resolved.is_relative_to(r)), None)
     if matched_root is None:
-        raise ValueError(f"Akses folder ditolak (di luar Home / Windows /mnt / Media / Project): {resolved}")
+        raise ValueError(f"Folder access denied (outside Home / Windows /mnt / Media / Project): {resolved}")
 
     rel_parts = resolved.relative_to(matched_root).parts
     if any(part.startswith(".") for part in rel_parts):
-        raise ValueError("Tidak diizinkan mengakses folder sistem tersembunyi (dot-folder).")
+        raise ValueError("Access to hidden system folders (dot-folders) is not allowed.")
 
     if must_exist and not resolved.is_dir():
-        raise ValueError(f"Folder tidak ditemukan: {resolved}")
+        raise ValueError(f"Folder not found: {resolved}")
     return resolved
 
 
@@ -368,7 +371,7 @@ def to_windows_path(linux_path: Path | str) -> str:
 def open_in_file_manager(target_path: Path) -> tuple[bool, str]:
     """Opens a directory or highlights a file in Windows File Explorer (or host file manager)."""
     if not target_path.exists():
-        return False, f"Jalur tidak ditemukan di sistem: {target_path}"
+        return False, f"Path not found on this system: {target_path}"
 
     win_path = to_windows_path(target_path)
 
@@ -441,7 +444,7 @@ def open_in_file_manager(target_path: Path) -> tuple[bool, str]:
         except Exception as exc:
             return False, f"Gagal menjalankan open: {exc}"
 
-    return False, "Tidak dapat menemukan explorer.exe atau file manager di sistem host."
+    return False, "Could not find explorer.exe or a file manager on the host system."
 
 
 FORBIDDEN_NAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -451,14 +454,21 @@ def sanitize_entry_name(name: str) -> str:
     """Sanitizes a proposed filename or folder name."""
     clean = name.strip()
     if not clean:
-        raise ValueError("Nama tidak boleh kosong.")
+        raise ValueError("Name must not be empty.")
     if clean in (".", "..") or clean.startswith("."):
-        raise ValueError("Nama tidak boleh diawali tanda titik (.) atau berupa nama tersembunyi.")
+        raise ValueError("Name must not start with a dot (.) or be a hidden name.")
     if FORBIDDEN_NAME_CHARS.search(clean):
-        raise ValueError('Nama mengandung karakter tidak valid (< > : " / \\ | ? * atau kontrol).')
+        raise ValueError('Name contains invalid characters (< > : " / \\ | ? * or control characters).')
     if len(clean) > 255:
-        raise ValueError("Nama terlalu panjang (maksimum 255 karakter).")
+        raise ValueError("Name is too long (maximum 255 characters).")
     return clean
+
+
+def _is_same_file(a: Path, b: Path) -> bool:
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return False
 
 
 def rename_fs_entry(
@@ -473,16 +483,16 @@ def rename_fs_entry(
         tuple[bool, message, old_resolved_path, new_resolved_path]
     """
     if not rel_path or not isinstance(rel_path, str):
-        return False, "Jalur file/folder sumber tidak valid.", Path(), Path()
+        return False, "Invalid source file/folder path.", Path(), Path()
 
     clean_new_name = sanitize_entry_name(new_name)
 
     base = source_dir.resolve()
     target_path = (base / rel_path.strip().lstrip("/\\")).resolve()
     if not target_path.is_relative_to(base):
-        return False, "Akses jalur ditolak (di luar batas direktori sumber).", Path(), Path()
+        return False, "Path access denied (outside the source directory).", Path(), Path()
     if not target_path.exists():
-        return False, f"File atau folder tidak ditemukan: {rel_path}", Path(), Path()
+        return False, f"File or folder not found: {rel_path}", Path(), Path()
 
     target_is_dir = target_path.is_dir() if is_folder is None else bool(is_folder)
     parent_dir = target_path.parent
@@ -490,11 +500,11 @@ def rename_fs_entry(
     if target_is_dir:
         new_path = (parent_dir / clean_new_name).resolve()
         if not new_path.is_relative_to(base):
-            return False, "Akses jalur ditolak saat menentukan folder tujuan.", Path(), Path()
-        if new_path == target_path:
-            return True, "Nama folder tidak berubah.", target_path, new_path
-        if new_path.exists():
-            return False, f"Folder dengan nama '{clean_new_name}' sudah ada.", Path(), Path()
+            return False, "Path access denied while resolving the destination folder.", Path(), Path()
+        if new_path.name == target_path.name:
+            return True, "Folder name is unchanged.", target_path, new_path
+        if new_path.exists() and not _is_same_file(new_path, target_path):
+            return False, f"A folder named '{clean_new_name}' already exists.", Path(), Path()
     else:
         orig_ext = target_path.suffix.lower()
         if not clean_new_name.lower().endswith(orig_ext):
@@ -502,18 +512,28 @@ def rename_fs_entry(
 
         new_path = (parent_dir / clean_new_name).resolve()
         if not new_path.is_relative_to(base):
-            return False, "Akses jalur ditolak saat menentukan file tujuan.", Path(), Path()
-        if new_path == target_path:
-            return True, "Nama file tidak berubah.", target_path, new_path
-        if new_path.exists():
-            return False, f"File dengan nama '{clean_new_name}' sudah ada.", Path(), Path()
+            return False, "Path access denied while resolving the destination file.", Path(), Path()
+        if new_path.name == target_path.name:
+            return True, "File name is unchanged.", target_path, new_path
+        if new_path.exists() and not _is_same_file(new_path, target_path):
+            return False, f"A file named '{clean_new_name}' already exists.", Path(), Path()
 
     try:
-        target_path.rename(new_path)
-        msg = f"Berhasil mengubah nama menjadi '{new_path.name}'"
+        if new_path.exists():
+            # Case-only rename on a case-insensitive filesystem: go through a temp name.
+            tmp_p = target_path.with_name(f".swararia_case_tmp_{os.getpid()}{target_path.suffix}")
+            target_path.rename(tmp_p)
+            try:
+                tmp_p.rename(new_path)
+            except OSError:
+                tmp_p.rename(target_path)
+                raise
+        else:
+            target_path.rename(new_path)
+        msg = f"Renamed successfully to '{new_path.name}'"
         return True, msg, target_path, new_path
     except OSError as exc:
-        return False, f"Gagal mengubah nama di sistem: {exc}", Path(), Path()
+        return False, f"Rename failed on the file system: {exc}", Path(), Path()
 
 
 SAFE_COMPANION_EXTS = {
@@ -536,7 +556,7 @@ def delete_fs_entries(
     base = source_dir.resolve()
     allowed_roots = get_allowed_roots()
     if not any(base.is_relative_to(r) for r in allowed_roots):
-        return False, "Akses direktori sumber ditolak.", [], []
+        return False, "Source directory access denied.", [], []
 
     raw_targets: list[str] = []
     if isinstance(rel_paths, list):
@@ -555,21 +575,21 @@ def delete_fs_entries(
             unique_targets.append(t)
 
     if not unique_targets:
-        return False, "Tidak ada file atau folder yang dipilih untuk dihapus.", [], []
+        return False, "No files or folders selected for deletion.", [], []
 
     validated_paths: list[Path] = []
     for raw_rel in unique_targets:
         clean_rel = raw_rel.strip().lstrip("/\\")
         if not clean_rel or clean_rel in (".", ".."):
-            return False, "Jalur file/folder tidak valid.", [], []
+            return False, "Invalid file/folder path.", [], []
         target_path = (base / clean_rel).resolve()
         if not target_path.is_relative_to(base) or target_path == base:
-            return False, "Akses jalur ditolak (di luar batas direktori sumber).", [], []
+            return False, "Path access denied (outside the source directory).", [], []
         rel_parts = target_path.relative_to(base).parts
         if any(p.startswith(".") or p.startswith("$") or p in SKIP_SYSTEM_DIRS for p in rel_parts):
-            return False, "Tidak diizinkan menghapus file atau folder sistem/tersembunyi.", [], []
+            return False, "Deleting system or hidden files/folders is not allowed.", [], []
         if target_path.is_symlink():
-            return False, "Tidak diizinkan menghapus symbolic link.", [], []
+            return False, "Deleting symbolic links is not allowed.", [], []
         validated_paths.append(target_path)
 
     deleted_files: list[Path] = []
@@ -579,12 +599,12 @@ def delete_fs_entries(
 
     for target_path in validated_paths:
         if not target_path.exists():
-            errors.append(f"Tidak ditemukan: {target_path.name}")
+            errors.append(f"Not found: {target_path.name}")
             continue
 
         if target_path.is_dir():
             if is_folder is False:
-                errors.append(f"'{target_path.name}' adalah folder, bukan file audio.")
+                errors.append(f"'{target_path.name}' is a folder, not an audio file.")
                 continue
             # Ensure folder only contains audio or safe companion files before rmtree
             unsafe_found = False
@@ -602,12 +622,12 @@ def delete_fs_entries(
                             unsafe_found = True
                             break
             except OSError as exc:
-                errors.append(f"Gagal memeriksa isi folder '{target_path.name}': {exc}")
+                errors.append(f"Failed to inspect folder '{target_path.name}': {exc}")
                 continue
 
             if unsafe_found:
                 errors.append(
-                    f"Folder '{target_path.name}' berisi file non-audio lain sehingga tidak dihapus otomatis demi keamanan."
+                    f"Folder '{target_path.name}' contains other non-audio files, so it was not deleted automatically for safety."
                 )
                 continue
 
@@ -616,10 +636,10 @@ def delete_fs_entries(
                 deleted_folders.append(target_path)
                 deleted_files.extend(folder_audio_files)
             except OSError as exc:
-                errors.append(f"Gagal menghapus folder '{target_path.name}': {exc}")
+                errors.append(f"Failed to delete folder '{target_path.name}': {exc}")
         else:
             if target_path.suffix.lower() not in audio_manager.EXTENSIONS:
-                errors.append(f"File '{target_path.name}' bukan format audio yang didukung.")
+                errors.append(f"File '{target_path.name}' is not a supported audio format.")
                 continue
             parent_dir = target_path.parent
             try:
@@ -628,7 +648,7 @@ def delete_fs_entries(
                 if parent_dir != base and parent_dir.is_relative_to(base):
                     parent_dirs_to_check.add(parent_dir)
             except OSError as exc:
-                errors.append(f"Gagal menghapus '{target_path.name}': {exc}")
+                errors.append(f"Failed to delete '{target_path.name}': {exc}")
 
     # Clean up any playlist subfolders that became completely empty after file deletion
     for pdir in sorted(parent_dirs_to_check, key=lambda p: len(p.parts), reverse=True):
@@ -640,20 +660,20 @@ def delete_fs_entries(
             pass
 
     if not deleted_files and not deleted_folders:
-        err_detail = "; ".join(errors[:3]) if errors else "File atau folder tidak ditemukan."
-        return False, f"Gagal menghapus: {err_detail}", [], []
+        err_detail = "; ".join(errors[:3]) if errors else "File or folder not found."
+        return False, f"Delete failed: {err_detail}", [], []
 
     if is_folder and len(deleted_folders) == 1 and len(unique_targets) == 1:
         folder_name = deleted_folders[0].name
-        msg = f"Folder '{folder_name}' ({len(deleted_files)} lagu) berhasil dihapus."
+        msg = f"Folder '{folder_name}' ({len(deleted_files)} songs) deleted successfully."
     elif len(deleted_files) == 1 and not errors:
-        msg = f"File '{deleted_files[0].name}' berhasil dihapus."
+        msg = f"File '{deleted_files[0].name}' deleted successfully."
     else:
-        msg = f"Berhasil menghapus {len(deleted_files)} file audio"
+        msg = f"Deleted {len(deleted_files)} audio file(s)"
         if deleted_folders and not is_folder:
-            msg += f" ({len(deleted_folders)} folder kosong ikut dibersihkan)"
+            msg += f" ({len(deleted_folders)} empty folder(s) also cleaned up)"
         if errors:
-            msg += f" • {len(errors)} gagal"
+            msg += f" • {len(errors)} failed"
         msg += "."
 
     return True, msg, deleted_files, deleted_folders
@@ -665,12 +685,26 @@ JUNK_TAG_WORDS = (
     r"visualizer|audio\s*only|full\s*album|karaoke(?:\s*version)?|"
     r"hd|hq|4k(?:\s*uhd)?|1080p|720p|mv|ost)"
 )
+# Unambiguous junk words that are safe to strip even without brackets (only at the end of the title).
+JUNK_TRAILING_WORDS = (
+    r"(?:official\s*(?:music\s*)?(?:video|audio|lyric\s*video|lyrics|visualizer|mv)|"
+    r"music\s*video|lyric\s*video|lyrics?|lirik(?:\s*lagu)?|video\s*klip|"
+    r"visualizer|audio\s*only|full\s*album)"
+)
+# Bracketed tags: any junk word. Ambiguous words (hd, mv, ost, ...) are only removed inside brackets.
 JUNK_TAG_PATTERN = re.compile(
-    rf"(?:[\(\[\{{]\s*{JUNK_TAG_WORDS}\s*[\)\]\}}]|(?:[｜|\-–—]+\s*){JUNK_TAG_WORDS}\b)",
+    rf"[\(\[\{{]\s*{JUNK_TAG_WORDS}\s*[\)\]\}}]",
+    flags=re.IGNORECASE,
+)
+# Dash-separated trailing tag, e.g. "Title - Official Video". Anchored to the end so "Song - OST Remix" stays intact.
+JUNK_TRAILING_PATTERN = re.compile(
+    rf"(?:[｜|\-–—]+\s*){JUNK_TRAILING_WORDS}\s*$",
     flags=re.IGNORECASE,
 )
 YT_ID_SUFFIX_PATTERN = re.compile(r"\s*\[([A-Za-z0-9_-]{11})\]$")
-LEADING_TRACK_NUM_PATTERN = re.compile(r"^\s*\d{1,3}\s*(?:[-._)]+|\s+-)\s*")
+# Leading track number such as "01 - ", "01. ", "01)". Not stripped when followed by another digit
+# (e.g. "1-800-273-8255") and never for 4-digit numbers like "1999 - Prince".
+LEADING_TRACK_NUM_PATTERN = re.compile(r"^\s*\d{1,3}\s*(?:[-._)]+|\s+-)\s*(?!\d)")
 
 
 def clean_and_number_filename(
@@ -697,6 +731,7 @@ def clean_and_number_filename(
 
     if strip_junk_tags:
         stem = JUNK_TAG_PATTERN.sub(" ", stem)
+        stem = JUNK_TRAILING_PATTERN.sub("", stem.rstrip())
 
     if numbering_mode in ("dash", "dot", "strip"):
         stem = LEADING_TRACK_NUM_PATTERN.sub("", stem)
@@ -723,29 +758,58 @@ def clean_and_number_filename(
     return sanitize_entry_name(proposed)
 
 
+def _natural_key(text: str) -> list:
+    """Natural sort key: 'Track 2' < 'Track 10', case-insensitive."""
+    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", text)]
+
+
+# Numbering modes sent by the UI (2digit_dash, ...) mapped to (internal mode, minimum zero-pad width).
+_NUMBERING_ALIASES: dict[str, tuple[str, int]] = {
+    "2digit_dash": ("dash", 2),
+    "3digit_dash": ("dash", 3),
+    "2digit_dot": ("dot", 2),
+    "none": ("keep", 2),
+}
+
+
+def _normalize_numbering_mode(raw: object) -> tuple[str, int]:
+    mode = str(raw or "dash").strip().lower()
+    if mode in _NUMBERING_ALIASES:
+        return _NUMBERING_ALIASES[mode]
+    if mode in ("dash", "dot", "strip", "keep"):
+        return mode, 2
+    return "dash", 2
+
+
 def batch_rename_entries(
     source_dir: Path,
     rel_paths: list[str],
     options: dict | None = None,
     preview_only: bool = False,
+    expected_plan: dict[str, str] | None = None,
 ) -> tuple[bool, str, list[dict]]:
-    """Previews or executes batch track numbering & tag cleaning per folder within source_dir."""
+    """Previews or executes batch track numbering & tag cleaning per folder within source_dir.
+
+    When expected_plan ({rel_path: new_rel_path}) is given on apply, the freshly computed plan must
+    match it exactly, otherwise nothing is renamed.
+    """
     base = source_dir.resolve()
     allowed_roots = get_allowed_roots()
     if not any(base.is_relative_to(r) for r in allowed_roots):
-        return False, "Akses direktori sumber ditolak.", []
+        return False, "Source directory access denied.", []
 
     if not isinstance(rel_paths, list) or not rel_paths:
-        return False, "Tidak ada file audio yang dipilih untuk di-rename.", []
+        return False, "No audio files selected for renaming.", []
 
     opts = options or {}
-    numbering_mode = str(opts.get("numbering_mode", "dash")).strip().lower()
-    if numbering_mode not in ("dash", "dot", "strip", "keep"):
-        numbering_mode = "dash"
+    numbering_mode, min_pad = _normalize_numbering_mode(opts.get("numbering_mode", "dash"))
     try:
-        start_number = max(1, int(opts.get("start_number", 1)))
+        start_number = max(0, int(opts.get("start_number", 1)))
     except (TypeError, ValueError):
         start_number = 1
+    sort_by = str(opts.get("sort_by", "selection")).strip().lower()
+    if sort_by not in ("selection", "name", "mtime"):
+        sort_by = "selection"
     strip_yt_id = bool(opts.get("strip_yt_id", True))
     strip_junk_tags = bool(opts.get("strip_junk_tags", True))
     clean_spaces = bool(opts.get("clean_spaces", True))
@@ -761,7 +825,7 @@ def batch_rename_entries(
             continue
         target_p = (base / clean_rel).resolve()
         if not target_p.is_relative_to(base) or target_p == base:
-            return False, "Akses jalur ditolak (di luar batas direktori sumber).", []
+            return False, "Path access denied (outside the source directory).", []
         if not target_p.is_file() or target_p.suffix.lower() not in audio_manager.EXTENSIONS:
             continue
         if target_p in seen_paths:
@@ -770,12 +834,21 @@ def batch_rename_entries(
         grouped_by_parent.setdefault(target_p.parent, []).append(target_p)
 
     if not seen_paths:
-        return False, "Tidak ada file audio valid yang ditemukan.", []
+        return False, "No valid audio files found.", []
 
     plan: list[dict] = []
     for parent_dir, folder_files in grouped_by_parent.items():
+        if sort_by == "name":
+            folder_files = sorted(folder_files, key=lambda p: _natural_key(p.name))
+        elif sort_by == "mtime":
+            def _mtime(p: Path) -> float:
+                try:
+                    return p.stat().st_mtime
+                except OSError:
+                    return 0.0
+            folder_files = sorted(folder_files, key=lambda p: (_mtime(p), _natural_key(p.name)))
         max_num = start_number + len(folder_files) - 1
-        pad_width = 3 if max_num >= 100 else 2
+        pad_width = max(min_pad, 3 if max_num >= 100 else 2)
         reserved_names: set[str] = set()
         # Pre-populate existing unselected files in the same folder so we never collide with them
         try:
@@ -822,15 +895,26 @@ def batch_rename_entries(
 
     changed_items = [item for item in plan if item["changed"]]
     if preview_only:
-        msg = f"Preview siap: {len(changed_items)} dari {len(plan)} file akan diubah namanya."
+        msg = f"Preview ready: {len(changed_items)} of {len(plan)} files will be renamed."
         return True, msg, plan
 
+    # Guard against drift between what the user previewed and what would be applied now.
+    if expected_plan is not None:
+        current = {item["rel_path"]: item["new_rel_path"] for item in plan}
+        if current != expected_plan:
+            return False, "The folder contents or settings changed since the preview. Reload the preview and try again.", plan
+
     if not changed_items:
-        return True, "Semua nama file sudah rapi sesuai pengaturan (tidak ada perubahan).", plan
+        return True, "All file names already match the settings (no changes).", plan
 
     # Two-phase rename to prevent any collision when swapping numbers (e.g. 02 -> 01 and 01 -> 02)
     staged: list[tuple[Path, Path, Path, dict]] = []
     errors: list[str] = []
+    for item in changed_items:
+        item["applied"] = False
+
+    # Phase 1 is all-or-nothing: if any file cannot be staged, roll back every staged file.
+    stage_failed = False
     for idx, item in enumerate(changed_items):
         old_p = Path(item["old_path"])
         new_p = Path(item["new_path"])
@@ -840,27 +924,304 @@ def batch_rename_entries(
             staged.append((old_p, tmp_p, new_p, item))
         except OSError as exc:
             errors.append(f"{old_p.name}: {exc}")
+            stage_failed = True
+            break
+
+    if stage_failed:
+        for old_p, tmp_p, _new_p, _item in reversed(staged):
+            try:
+                tmp_p.rename(old_p)
+            except OSError as exc:
+                errors.append(f"Rollback failed for {old_p.name} (kept as {tmp_p.name}): {exc}")
+        return False, f"Rename failed, all changes were rolled back: {'; '.join(errors[:3])}", plan
 
     renamed_count = 0
     for old_p, tmp_p, new_p, item in staged:
         try:
+            if new_p.exists():
+                raise FileExistsError(f"Destination already exists: {new_p.name}")
             tmp_p.rename(new_p)
+            item["applied"] = True
             renamed_count += 1
         except OSError as exc:
             errors.append(f"{old_p.name} -> {new_p.name}: {exc}")
+            restore_p = old_p
+            if restore_p.exists():
+                restore_p = old_p.with_name(f"{old_p.stem} (restored){old_p.suffix}")
+                n = 2
+                while restore_p.exists():
+                    restore_p = old_p.with_name(f"{old_p.stem} (restored {n}){old_p.suffix}")
+                    n += 1
             try:
-                if tmp_p.exists() and not old_p.exists():
-                    tmp_p.rename(old_p)
-            except OSError:
-                pass
+                tmp_p.rename(restore_p)
+            except OSError as exc2:
+                errors.append(f"Rollback failed for {old_p.name} (kept as {tmp_p.name}): {exc2}")
 
     if renamed_count == 0 and errors:
-        return False, f"Gagal mengubah nama file: {'; '.join(errors[:3])}", plan
+        return False, f"Failed to rename files: {'; '.join(errors[:3])}", plan
 
-    msg = f"Berhasil merapikan & memberi nomor urut pada {renamed_count} file audio."
+    msg = f"Cleaned up and numbered {renamed_count} audio file(s) successfully."
     if errors:
-        msg += f" ({len(errors)} gagal)"
+        msg += f" ({len(errors)} failed)"
+    record_rename_history([
+        (Path(item["old_path"]), Path(item["new_path"])) for item in changed_items if item.get("applied")
+    ])
     return True, msg, plan
+
+
+# ---------------------------------------------------------------------------
+# Organize songs into Artist/Album folders based on embedded tags
+# ---------------------------------------------------------------------------
+ORGANIZE_TEMPLATES = ("artist_album", "artist")
+UNKNOWN_ARTIST = "Unknown Artist"
+UNKNOWN_ALBUM = "Singles"
+
+
+def read_audio_tags(path: Path) -> dict[str, str]:
+    """Reads lowercase tag keys (artist, album, title, ...) via ffprobe. Returns {} on failure."""
+    try:
+        proc = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format_tags", "-of", "json", str(path)],
+            capture_output=True, text=True, timeout=20, check=True,
+        )
+        raw = json.loads(proc.stdout or "{}").get("format", {}).get("tags", {}) or {}
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return {}
+    return {str(k).lower(): str(v).strip() for k, v in raw.items() if isinstance(v, (str, int, float))}
+
+
+def _safe_folder_component(value: str, fallback: str) -> str:
+    """Turns a tag value into a safe single folder name (never raises)."""
+    clean = FORBIDDEN_NAME_CHARS.sub("_", value or "").strip().strip(".").strip()
+    clean = re.sub(r"\s{2,}", " ", clean)[:100].strip()
+    return clean or fallback
+
+
+def organize_into_folders(
+    source_dir: Path,
+    rel_paths: list[str],
+    template: str = "artist_album",
+    preview_only: bool = False,
+    expected_plan: dict[str, str] | None = None,
+    tag_reader=None,
+) -> tuple[bool, str, list[dict]]:
+    """Moves audio files into Artist/Album (or Artist) folders under source_dir based on their tags.
+
+    Files are never overwritten: a destination that already exists (or is claimed twice) is
+    reported with a `reason` and skipped. Applied moves are recorded for undo.
+    """
+    base = source_dir.resolve()
+    if not any(base.is_relative_to(r) for r in get_allowed_roots()):
+        return False, "Source directory access denied.", []
+    if template not in ORGANIZE_TEMPLATES:
+        template = "artist_album"
+    if not isinstance(rel_paths, list) or not rel_paths:
+        return False, "No audio files selected.", []
+    read_tags = tag_reader or read_audio_tags
+
+    plan: list[dict] = []
+    claimed: set[Path] = set()
+    seen: set[Path] = set()
+    for raw_rel in rel_paths:
+        if not isinstance(raw_rel, str) or not raw_rel.strip():
+            continue
+        src = (base / raw_rel.strip().lstrip("/\\")).resolve()
+        if not src.is_relative_to(base) or src == base:
+            return False, "Path access denied (outside the source directory).", []
+        if src in seen or not src.is_file() or src.suffix.lower() not in audio_manager.EXTENSIONS:
+            continue
+        seen.add(src)
+
+        tags = read_tags(src)
+        artist = _safe_folder_component(tags.get("album_artist") or tags.get("artist") or "", UNKNOWN_ARTIST)
+        parts = [artist]
+        if template == "artist_album":
+            parts.append(_safe_folder_component(tags.get("album") or "", UNKNOWN_ALBUM))
+        dest = base.joinpath(*parts, src.name).resolve()
+
+        reason = ""
+        if not dest.is_relative_to(base):
+            reason = "Destination is outside the source directory"
+        elif dest == src:
+            reason = ""
+        elif dest.exists() or dest in claimed:
+            reason = "A file with the same name already exists in the destination folder"
+        else:
+            claimed.add(dest)
+        changed = dest != src and not reason
+        plan.append({
+            "rel_path": str(src.relative_to(base)),
+            "new_rel_path": str(dest.relative_to(base)) if dest.is_relative_to(base) else str(src.relative_to(base)),
+            "folder": str(Path(*parts)),
+            "old_name": src.name,
+            "new_name": src.name,
+            "changed": changed,
+            "reason": reason,
+            "old_path": str(src),
+            "new_path": str(dest),
+        })
+
+    if not plan:
+        return False, "No valid audio files found.", []
+
+    # Items that cannot be moved keep their current location in the expected-plan comparison
+    for item in plan:
+        if item["reason"]:
+            item["new_rel_path"] = item["rel_path"]
+
+    movable = [i for i in plan if i["changed"]]
+    if preview_only:
+        skipped = sum(1 for i in plan if i["reason"])
+        msg = f"Preview ready: {len(movable)} of {len(plan)} files will be moved into folders."
+        if skipped:
+            msg += f" {skipped} skipped (name conflict)."
+        return True, msg, plan
+
+    if expected_plan is not None:
+        current = {i["rel_path"]: i["new_rel_path"] for i in plan}
+        if current != expected_plan:
+            return False, "The folder contents or tags changed since the preview. Reload the preview and try again.", plan
+    if not movable:
+        return True, "All files are already in the right folders (no changes).", plan
+
+    errors: list[str] = []
+    moved: list[tuple[Path, Path]] = []
+    for item in movable:
+        src, dest = Path(item["old_path"]), Path(item["new_path"])
+        item["applied"] = False
+        try:
+            if dest.exists():
+                raise FileExistsError(f"Destination already exists: {dest.name}")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            src.rename(dest)
+            item["applied"] = True
+            moved.append((src, dest))
+        except OSError as exc:
+            errors.append(f"{src.name}: {exc}")
+
+    record_rename_history(moved)
+    if not moved:
+        return False, f"Failed to move files: {'; '.join(errors[:3])}", plan
+    msg = f"Moved {len(moved)} file(s) into folders based on tags."
+    if errors:
+        msg += f" ({len(errors)} failed)"
+    return True, msg, plan
+
+
+# ---------------------------------------------------------------------------
+# Undo log for batch renames
+# ---------------------------------------------------------------------------
+RENAME_HISTORY_FILE = BASE_DIR / "library" / "rename_history.json"
+RENAME_HISTORY_LIMIT = 10
+_history_lock = threading.Lock()
+
+
+def _load_rename_history() -> list[dict]:
+    try:
+        data = json.loads(RENAME_HISTORY_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def _save_rename_history(history: list[dict]) -> None:
+    try:
+        RENAME_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        RENAME_HISTORY_FILE.write_text(json.dumps(history, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def record_rename_history(moves: list[tuple[Path, Path]]) -> None:
+    """Appends a batch of (old_path, new_path) moves so the batch can be undone later."""
+    if not moves:
+        return
+    with _history_lock:
+        history = _load_rename_history()
+        history.append({
+            "time": time.time(),
+            "moves": [[str(o), str(n)] for o, n in moves],
+        })
+        _save_rename_history(history[-RENAME_HISTORY_LIMIT:])
+
+
+def peek_rename_history() -> dict | None:
+    """Returns summary of the latest undoable batch, or None."""
+    with _history_lock:
+        history = _load_rename_history()
+    if not history:
+        return None
+    last = history[-1]
+    return {"time": last.get("time"), "count": len(last.get("moves", []))}
+
+
+def undo_last_batch_rename() -> tuple[bool, str, list[tuple[Path, Path]]]:
+    """Reverts the most recent batch rename. All-or-nothing.
+
+    Returns (ok, message, [(current_path, restored_path), ...]).
+    """
+    with _history_lock:
+        history = _load_rename_history()
+        if not history:
+            return False, "No rename history available to undo.", []
+        last = history[-1]
+        roots = get_allowed_roots()
+        pairs: list[tuple[Path, Path]] = []  # (current, restore_to)
+        for old_s, new_s in last.get("moves", []):
+            cur, restore = Path(new_s), Path(old_s)
+            if not any(cur.resolve().is_relative_to(r) and restore.parent.resolve().is_relative_to(r) for r in roots):
+                return False, "History points outside the allowed directories.", []
+            if not cur.exists():
+                return False, f"Cannot undo: '{cur.name}' no longer exists or was moved.", []
+            if restore.exists():
+                return False, f"Cannot undo: '{restore.name}' already exists again.", []
+            pairs.append((cur, restore))
+
+        staged: list[tuple[Path, Path, Path]] = []
+        failed: str | None = None
+        for idx, (cur, restore) in enumerate(pairs):
+            tmp_p = cur.with_name(f".swararia_undo_tmp_{os.getpid()}_{idx}{cur.suffix}")
+            try:
+                cur.rename(tmp_p)
+                staged.append((cur, tmp_p, restore))
+            except OSError as exc:
+                failed = f"{cur.name}: {exc}"
+                break
+        if failed is None:
+            for i, (cur, tmp_p, restore) in enumerate(staged):
+                try:
+                    restore.parent.mkdir(parents=True, exist_ok=True)
+                    tmp_p.rename(restore)
+                except OSError as exc:
+                    failed = f"{cur.name}: {exc}"
+                    # put back everything not yet restored
+                    staged = staged[i:]
+                    break
+            else:
+                staged = []
+        if failed is not None:
+            for cur, tmp_p, _restore in reversed(staged):
+                try:
+                    tmp_p.rename(cur)
+                except OSError:
+                    pass
+            return False, f"Undo failed, nothing was changed: {failed}", []
+
+        _save_rename_history(history[:-1])
+        # Remove folders left empty by undoing an "organize into folders" batch. Walk upward but never
+        # remove the original folder of the file (or any of its ancestors) or an allowed root.
+        for cur, restore in pairs:
+            parent = cur.parent
+            keep = {restore.parent, *restore.parent.parents}
+            while parent not in keep and not any(parent.resolve() == r for r in roots):
+                try:
+                    if not parent.is_dir() or any(parent.iterdir()):
+                        break
+                    parent.rmdir()
+                except OSError:
+                    break
+                parent = parent.parent
+    return True, f"Undid the rename of {len(pairs)} file(s).", pairs
 
 
 AUDIO_MIME_TYPES: dict[str, str] = {

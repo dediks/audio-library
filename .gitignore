@@ -71,3 +71,6 @@ Desktop.ini
 *.swo
 *~
 .vendor/
+
+# Rename undo history (runtime state)
+library/rename_history.json

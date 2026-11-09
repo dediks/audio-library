@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="id">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -30,8 +30,8 @@
               </svg>
             </span>
             <div>
-              <h2 id="tagStudioHeading">4. Auto-Numbering &amp; Pembersih Tag</h2>
-              <p class="panel-sub">Urutkan nomor track untuk layar CDJ/Mixer &amp; bersihkan tag sampah YouTube</p>
+              <h2 id="tagStudioHeading">4. Auto-Numbering &amp; Tag Cleaner</h2>
+              <p class="panel-sub">Number tracks for CDJ/mixer displays &amp; clean YouTube junk tags</p>
             </div>
           </div>
           <span class="panel-badge">FOH Track Sequencer</span>
@@ -41,55 +41,85 @@
           <div class="batch-rename-controls-grid">
             <div class="field-group compact-field">
               <label for="numberingModeSelect" class="field-label">
-                <span>A. Format Nomor Urut Track</span>
+                <span>A. Track Number Format</span>
               </label>
               <select id="numberingModeSelect" class="toolbar-select">
-                <option value="2digit_dash">01 - Judul Lagu (2 Digit + Strip)</option>
-                <option value="3digit_dash">001 - Judul Lagu (3 Digit + Strip)</option>
-                <option value="2digit_dot">01. Judul Lagu (2 Digit + Titik)</option>
-                <option value="none">Tanpa Nomor Urut (Hanya Bersihkan Nama)</option>
+                <option value="2digit_dash">01 - Song Title (2 digits + dash)</option>
+                <option value="3digit_dash">001 - Song Title (3 digits + dash)</option>
+                <option value="2digit_dot">01. Song Title (2 digits + dot)</option>
+                <option value="none">No Numbering (Only Clean Names)</option>
               </select>
             </div>
 
             <div class="field-group compact-field">
               <label for="startNumberInput" class="field-label">
-                <span>B. Mulai No.</span>
+                <span>B. Start No.</span>
               </label>
               <input type="number" id="startNumberInput" class="toolbar-input" value="1" min="0" max="9999">
+            </div>
+
+            <div class="field-group compact-field">
+              <label for="sortBySelect" class="field-label">
+                <span>Numbering Order</span>
+              </label>
+              <select id="sortBySelect" class="toolbar-select">
+                <option value="selection">Selection order</option>
+                <option value="name">File name (A-Z, natural)</option>
+                <option value="mtime">Date modified (oldest first)</option>
+              </select>
             </div>
           </div>
 
           <div class="field-group compact-field">
             <div class="field-label">
-              <span>C. Aturan Pembersih Judul Otomatis</span>
-              <span class="label-hint">Diterapkan secara berurutan pada lagu yang dipilih</span>
+              <span>C. Automatic Title Cleaning Rules</span>
+              <span class="label-hint">Applied in order to the selected songs</span>
             </div>
             <div class="batch-rename-checks">
               <label class="batch-rename-check-item">
                 <input type="checkbox" id="chkStripYtId" checked>
-                <span>Hapus ID YouTube di akhir judul (contoh: <code>[dQw4w9WgXcQ]</code>)</span>
+                <span>Remove the YouTube ID at the end of the title (e.g. <code>[dQw4w9WgXcQ]</code>)</span>
               </label>
               <label class="batch-rename-check-item">
                 <input type="checkbox" id="chkStripJunkTags" checked>
-                <span>Hapus tag sampah (<code>Official Video</code>, <code>Lyrics</code>, <code>HD</code>, <code>4K</code>, <code>Visualizer</code>)</span>
+                <span>Remove junk tags (<code>Official Video</code>, <code>Lyrics</code>, <code>HD</code>, <code>4K</code>, <code>Visualizer</code>)</span>
               </label>
               <label class="batch-rename-check-item">
                 <input type="checkbox" id="chkCleanSpaces" checked>
-                <span>Rapikan garis bawah (<code>_</code>), karakter pipa (<code>｜</code>), dan spasi ganda</span>
+                <span>Tidy underscores (<code>_</code>), pipe characters (<code>｜</code>), and double spaces</span>
               </label>
+            </div>
+          </div>
+
+          <div class="field-group compact-field">
+            <div class="field-label">
+              <span>D. Organize into Folders by Tag</span>
+              <span class="label-hint">Moves the selected songs into folders based on their artist/album tags (can be undone)</span>
+            </div>
+            <div class="batch-rename-checks">
+              <select id="organizeTemplateSelect" class="toolbar-select">
+                <option value="artist_album">Artist / Album /</option>
+                <option value="artist">Artist /</option>
+              </select>
+              <button type="button" id="btnOrganizeFolders" class="btn-secondary" disabled>
+                <span id="btnOrganizeFoldersText">Organize into Folders (0 Files)</span>
+              </button>
             </div>
           </div>
 
           <div class="action-footer compact-footer">
             <div class="format-spec-tag">
               <span class="spec-dot"></span>
-              <span id="studioTargetHint">Centang lagu di tabel bawah untuk melihat preview perubahan nama</span>
+              <span id="studioTargetHint">Check songs in the table below to preview the renames</span>
             </div>
             <button type="button" id="btnApplyBatchRename" class="btn-primary" disabled>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
                 <polyline points="20 6 9 17 4 12"></polyline>
               </svg>
-              <span id="btnApplyBatchRenameText">Terapkan Rename (0 File)</span>
+              <span id="btnApplyBatchRenameText">Apply Rename (0 Files)</span>
+            </button>
+            <button type="button" id="btnUndoRename" class="btn-secondary" disabled title="Undo the last batch rename">
+              <span id="btnUndoRenameText">Undo Last Rename</span>
             </button>
           </div>
         </div>
@@ -106,17 +136,17 @@
               </svg>
             </span>
             <div>
-              <h2 id="previewHeading">Live Preview Perubahan Nama</h2>
-              <p class="panel-sub">Simulasi nama lama vs nama baru sebelum diterapkan ke disk</p>
+              <h2 id="previewHeading">Live Rename Preview</h2>
+              <p class="panel-sub">Old vs. new name simulation before anything is applied to disk</p>
             </div>
           </div>
-          <span class="queue-counter" id="previewSummaryBadge">0 dipilih</span>
+          <span class="queue-counter" id="previewSummaryBadge">0 selected</span>
         </div>
 
         <div class="monitor-body">
           <div class="delete-target-list organizer-live-preview-box" id="organizerPreviewList">
             <div class="notif-empty">
-              Centang lagu atau folder playlist di tabel bawah untuk menampilkan simulasi perubahan nama file secara langsung.
+              Check songs or playlist folders in the table below to see a live simulation of the file renames.
             </div>
           </div>
         </div>
@@ -133,24 +163,24 @@
             </svg>
           </span>
           <div>
-            <h2 id="organizerTableHeading">Manajemen File, Grouping Tipe &amp; Batch Delete</h2>
-            <p class="panel-sub">Kelompokkan lagu berdasarkan Folder atau Tipe File (.opus/.webm/.mp3) untuk rename atau hapus massal</p>
+            <h2 id="organizerTableHeading">File Management, Type Grouping &amp; Batch Delete</h2>
+            <p class="panel-sub">Group songs by folder or file type (.opus/.webm/.mp3) for bulk rename or delete</p>
           </div>
         </div>
 
         <div class="library-actions">
-          <button type="button" id="btnOpenExplorer" class="btn-secondary" title="Buka folder sumber di File Explorer">
+          <button type="button" id="btnOpenExplorer" class="btn-secondary" title="Open the source folder in File Explorer">
             <span>📁 Explorer</span>
           </button>
-          <button type="button" id="btnSelectNonMp3" class="btn-secondary" title="Pilih semua file mentah .opus / .webm / .m4a yang tampil">
-            <span>Pilih Non-MP3 (.opus/.webm)</span>
+          <button type="button" id="btnSelectNonMp3" class="btn-secondary" title="Select all visible raw .opus / .webm / .m4a files">
+            <span>Select Non-MP3 (.opus/.webm)</span>
           </button>
-          <button type="button" id="btnDeleteSelected" class="btn-danger" disabled title="Hapus permanen semua file yang dicentang">
+          <button type="button" id="btnDeleteSelected" class="btn-danger" disabled title="Permanently delete all checked files">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
               <polyline points="3 6 5 6 21 6"></polyline>
               <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
             </svg>
-            <span id="btnDeleteSelectedText">Hapus Terpilih (0)</span>
+            <span id="btnDeleteSelectedText">Delete Selected (0)</span>
           </button>
         </div>
       </div>
@@ -159,18 +189,18 @@
       <div class="source-playlist-bar">
         <div class="source-location-row">
           <div class="source-location-info">
-            <span class="source-location-label">📂 Sumber:</span>
-            <code id="activeSourceBadge" class="source-location-badge">library/inbox (Koleksi Default)</code>
+            <span class="source-location-label">📂 Source:</span>
+            <code id="activeSourceBadge" class="source-location-badge">library/inbox (Default Collection)</code>
             <input type="hidden" id="sourceDirInput">
           </div>
           <div class="source-location-actions">
-            <span class="label-hint">Gunakan dropdown "Grup: Tipe File" di bawah untuk memisahkan .opus/.webm dari .mp3</span>
-            <button type="button" id="btnBrowseSource" class="btn-chip">📁 Ganti Folder Sumber / USB...</button>
-            <button type="button" id="btnResetInbox" class="btn-chip hidden">↩️ Kembali ke Inbox</button>
+            <span class="label-hint">Use the "Group: File Type" dropdown below to separate .opus/.webm from .mp3</span>
+            <button type="button" id="btnBrowseSource" class="btn-chip">📁 Change Source Folder / USB...</button>
+            <button type="button" id="btnResetInbox" class="btn-chip hidden">↩️ Back to Inbox</button>
           </div>
         </div>
 
-        <div class="playlist-selector-grid" id="playlistGrid" aria-label="Filter Folder Playlist"></div>
+        <div class="playlist-selector-grid" id="playlistGrid" aria-label="Filter Playlist Folder"></div>
       </div>
 
       <!-- Filter & Grouping Toolbar -->
@@ -180,17 +210,17 @@
             type="search"
             id="searchInput"
             class="toolbar-input"
-            placeholder="Cari judul lagu atau folder..."
-            aria-label="Cari lagu"
+            placeholder="Search song title or folder..."
+            aria-label="Search songs"
           >
-          <select id="groupByMode" class="toolbar-select" aria-label="Kelompokkan Berdasarkan">
-            <option value="folder">Grup: 📁 Folder Playlist</option>
-            <option value="type">Grup: 🎵 Tipe File (.opus/.webm/.mp3)</option>
-            <option value="folder_type">Grup: 📁 Folder + 🎵 Tipe File</option>
-            <option value="rate">Grup: 🎛️ Sample Rate</option>
+          <select id="groupByMode" class="toolbar-select" aria-label="Group By">
+            <option value="folder">Group: 📁 Playlist Folder</option>
+            <option value="type">Group: 🎵 File Type (.opus/.webm/.mp3)</option>
+            <option value="folder_type">Group: 📁 Folder + 🎵 File Type</option>
+            <option value="rate">Group: 🎛️ Sample Rate</option>
           </select>
           <select id="filterFormat" class="toolbar-select" aria-label="Filter Format">
-            <option value="ALL">Semua Format</option>
+            <option value="ALL">All Formats</option>
             <option value=".opus">Opus (.opus)</option>
             <option value=".webm">WebM (.webm)</option>
             <option value=".mp3">MP3 (.mp3)</option>
@@ -199,11 +229,11 @@
         </div>
 
         <div class="toolbar-selection-btns">
-          <span class="selection-counter-pill" id="selectionCounterPill">0 dipilih</span>
-          <button type="button" id="btnCollapseAllGroups" class="btn-chip">Lipat</button>
-          <button type="button" id="btnExpandAllGroups" class="btn-chip">Buka</button>
-          <button type="button" id="btnSelectVisible" class="btn-chip">Pilih Semua Tampil</button>
-          <button type="button" id="btnClearSelection" class="btn-chip">Reset Pilih</button>
+          <span class="selection-counter-pill" id="selectionCounterPill">0 selected</span>
+          <button type="button" id="btnCollapseAllGroups" class="btn-chip">Collapse</button>
+          <button type="button" id="btnExpandAllGroups" class="btn-chip">Expand</button>
+          <button type="button" id="btnSelectVisible" class="btn-chip">Select All Visible</button>
+          <button type="button" id="btnClearSelection" class="btn-chip">Clear Selection</button>
         </div>
       </div>
 
@@ -213,18 +243,18 @@
           <thead>
             <tr>
               <th scope="col" class="col-check">
-                <input type="checkbox" id="chkSelectAllVisible" title="Pilih semua lagu yang tampil">
+                <input type="checkbox" id="chkSelectAllVisible" title="Select all visible songs">
               </th>
-              <th scope="col">Nama File Saat Ini (Klik ✏️ / 🗑️)</th>
-              <th scope="col">Simulasi Nama Baru (Auto-Number &amp; Clean)</th>
-              <th scope="col">Folder Playlist</th>
-              <th scope="col">Tipe File</th>
-              <th scope="col">Ukuran</th>
+              <th scope="col">Current File Name (Click ✏️ / 🗑️)</th>
+              <th scope="col">New Name Simulation (Auto-Number &amp; Clean)</th>
+              <th scope="col">Playlist Folder</th>
+              <th scope="col">File Type</th>
+              <th scope="col">Size</th>
             </tr>
           </thead>
           <tbody id="organizerTableBody">
             <tr class="empty-row">
-              <td colspan="6">Memuat daftar file dari <code>library/inbox</code>...</td>
+              <td colspan="6">Loading file list from <code>library/inbox</code>...</td>
             </tr>
           </tbody>
         </table>
@@ -240,24 +270,24 @@
   <div class="modal-backdrop hidden" id="folderModal" role="dialog" aria-modal="true" aria-labelledby="folderModalTitle">
     <div class="modal-card">
       <div class="modal-header">
-        <h3 id="folderModalTitle">Pilih Folder Sumber</h3>
-        <button type="button" id="btnCloseModal" class="btn-text">✕ Tutup</button>
+        <h3 id="folderModalTitle">Choose Source Folder</h3>
+        <button type="button" id="btnCloseModal" class="btn-text">✕ Close</button>
       </div>
       <div class="modal-body">
         <div class="modal-shortcuts" id="modalShortcuts"></div>
         <div class="modal-current-bar">
-          <button type="button" id="btnModalUp" class="btn-chip">⬆️ Naik 1 Level</button>
+          <button type="button" id="btnModalUp" class="btn-chip">⬆️ Up 1 Level</button>
           <code class="modal-current-path" id="modalCurrentPath">/</code>
         </div>
         <div class="modal-dir-list" id="modalDirList"></div>
         <div class="modal-newfolder-bar">
-          <input type="text" id="newFolderNameInput" class="toolbar-input" placeholder="Buat subfolder baru di sini (opsional)...">
-          <button type="button" id="btnCreateSubfolder" class="btn-chip">+ Buat Folder</button>
+          <input type="text" id="newFolderNameInput" class="toolbar-input" placeholder="Create a new subfolder here (optional)...">
+          <button type="button" id="btnCreateSubfolder" class="btn-chip">+ Create Folder</button>
         </div>
       </div>
       <div class="modal-footer">
-        <button type="button" id="btnCancelModal" class="btn-secondary">Batal</button>
-        <button type="button" id="btnSelectModalDir" class="btn-primary">Pilih Folder Ini</button>
+        <button type="button" id="btnCancelModal" class="btn-secondary">Cancel</button>
+        <button type="button" id="btnSelectModalDir" class="btn-primary">Choose This Folder</button>
       </div>
     </div>
   </div>
