@@ -67,15 +67,36 @@ function captureCurrentView(routePath) {
   const currentMain = document.querySelector('main.app-container');
   if (!currentMain) return;
 
+  const currentFooter = document.querySelector('footer.app-footer');
   const modals = Array.from(document.querySelectorAll('.modal-backdrop'));
 
   viewCache.set(resolved.path, {
     mainEl: currentMain,
+    footerEl: currentFooter,
     modalEls: modals,
     title: document.title,
     pageKey: resolved.config.key,
     scrollTop: window.scrollY || 0,
   });
+}
+
+function insertViewElements(mainEl, footerEl, modalEls) {
+  const header = document.querySelector('header.app-header') || document.body.firstElementChild;
+  if (header && header.parentElement === document.body) {
+    header.after(mainEl);
+  } else {
+    document.body.prepend(mainEl);
+  }
+
+  if (footerEl) {
+    mainEl.after(footerEl);
+  }
+
+  if (Array.isArray(modalEls)) {
+    modalEls.forEach(m => {
+      document.body.appendChild(m);
+    });
+  }
 }
 
 export async function spaNavigate(targetUrl, isPopState = false) {
@@ -110,6 +131,9 @@ export async function spaNavigate(targetUrl, isPopState = false) {
     if (oldMain && oldMain.parentElement) {
       oldMain.remove();
     }
+    const oldFooters = document.querySelectorAll('footer.app-footer');
+    oldFooters.forEach(f => f.remove());
+
     const oldModals = document.querySelectorAll('.modal-backdrop');
     oldModals.forEach(m => m.remove());
 
@@ -121,8 +145,7 @@ export async function spaNavigate(targetUrl, isPopState = false) {
 
     if (targetView) {
       // Restore from cache
-      document.body.appendChild(targetView.mainEl);
-      targetView.modalEls.forEach(m => document.body.appendChild(m));
+      insertViewElements(targetView.mainEl, targetView.footerEl, targetView.modalEls);
       document.title = targetView.title;
       document.body.dataset.page = targetView.pageKey;
       updateHeaderNavTabs(targetView.pageKey);
@@ -150,11 +173,11 @@ export async function spaNavigate(targetUrl, isPopState = false) {
       const newMain = doc.querySelector('main.app-container');
       if (!newMain) throw new Error(`Halaman ${targetUrl} tidak memiliki elemen <main class="app-container">`);
 
+      const newFooter = doc.querySelector('footer.app-footer');
       const newModals = Array.from(doc.querySelectorAll('.modal-backdrop'));
       const newTitle = doc.querySelector('title')?.textContent || resolved.config.title;
 
-      document.body.appendChild(newMain);
-      newModals.forEach(m => document.body.appendChild(m));
+      insertViewElements(newMain, newFooter, newModals);
       document.title = newTitle;
       document.body.dataset.page = resolved.config.key;
       updateHeaderNavTabs(resolved.config.key);
@@ -166,6 +189,7 @@ export async function spaNavigate(targetUrl, isPopState = false) {
 
       viewCache.set(resolved.path, {
         mainEl: newMain,
+        footerEl: newFooter,
         modalEls: newModals,
         title: newTitle,
         pageKey: resolved.config.key,
@@ -265,12 +289,14 @@ async function preloadPlayerConsole() {
     const htmlText = await res.text();
     const doc = new DOMParser().parseFromString(htmlText, 'text/html');
     const main = doc.querySelector('main.app-container');
+    const footer = doc.querySelector('footer.app-footer');
     const modals = Array.from(doc.querySelectorAll('.modal-backdrop'));
     const title = doc.querySelector('title')?.textContent || 'SWARARIA AUDIO LAB // 7. FOH Live Player';
 
     if (main) {
       viewCache.set('/player', {
         mainEl: main,
+        footerEl: footer,
         modalEls: modals,
         title,
         pageKey: 'player',
