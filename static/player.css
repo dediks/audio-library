@@ -277,6 +277,89 @@
   to { box-shadow: none; }
 }
 
+@media (max-width: 600px) {
+  #nowPlayingQcBanner,
+  .now-playing-qc-banner {
+    display: none !important;
+  }
+
+  .foh-deck-screen {
+    padding: 0.55rem 0.55rem;
+    gap: 0.45rem;
+  }
+
+  .now-playing-index {
+    min-width: 28px;
+    height: 28px;
+    font-size: 0.76rem;
+  }
+
+  .now-playing-title {
+    font-size: 0.92rem;
+    line-height: 1.25;
+  }
+
+  .timecode-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .timecode-box {
+    padding: 0.35rem 0.15rem;
+    min-width: 0;
+    text-align: center;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .timecode-label {
+    font-size: 0.52rem;
+    letter-spacing: 0.04em;
+  }
+
+  .timecode-val {
+    font-size: 1.05rem;
+    letter-spacing: -0.01em;
+    line-height: 1.15;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: clip;
+  }
+
+  .play-mode-strip {
+    display: flex !important;
+    justify-content: stretch;
+    padding: 0.35rem 0 0;
+    margin-top: 0.2rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    width: 100%;
+  }
+
+  .play-mode-buttons {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
+    gap: 0.25rem;
+    padding: 0.2rem;
+    background: var(--bg-recessed);
+    border-radius: var(--radius-sm);
+  }
+
+  .btn-mode {
+    padding: 0.38rem 0.15rem;
+    font-size: clamp(0.64rem, 2.7vw, 0.74rem);
+    font-weight: 600;
+    text-align: center;
+    justify-content: center;
+    white-space: nowrap;
+    border-radius: var(--radius-sm);
+  }
+
+  .shortcut-hint-row {
+    display: none !important;
+  }
+}
+
 /* Seekbar & Nudge Strip */
 .seekbar-section {
   display: flex;
@@ -1153,6 +1236,45 @@
   white-space: nowrap;
 }
 
+.folder-picker-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 0.35rem 0.65rem;
+  margin-bottom: 0.35rem;
+}
+
+.folder-picker-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--accent-cyan);
+  white-space: nowrap;
+}
+
+.folder-picker-select {
+  flex: 1;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-heading);
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.28rem 0.55rem;
+  outline: none;
+  cursor: pointer;
+}
+
+.folder-picker-select:focus {
+  border-color: var(--accent-cyan);
+}
+
 /* Setlist Table Row Actions & Auto-Fit No-Scroll Layout */
 .library-panel {
   min-width: 0;
@@ -1516,8 +1638,8 @@
 
 .remote-mobile-tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.38rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
 }
 
 .remote-mobile-tab {
@@ -1932,13 +2054,25 @@ body.remote-controller-mode #appHeader,
 body.remote-controller-mode .app-footer,
 body.remote-controller-mode #btnOpenRemoteModal,
 body.remote-controller-mode .shortcut-hint-row,
+body.remote-controller-mode #cuePadsCard,
+body.remote-controller-mode .remote-mobile-tabs,
 body.remote-controller-mode .cue-pads-hint-text,
 body.remote-controller-mode #btnToggleCuePads,
 body.remote-controller-mode .output-device-row,
 body.remote-controller-mode .source-location-row,
 body.remote-controller-mode #btnOpenExplorer,
 body.remote-controller-mode #btnQuickAuditSetlist,
-body.remote-controller-mode .player-card-header .panel-sub {
+body.remote-controller-mode .library-actions,
+body.remote-controller-mode .btn-group-action,
+body.remote-controller-mode .group-header-right,
+body.remote-controller-mode .btn-file-rename,
+body.remote-controller-mode .player-card-header .panel-sub,
+body.remote-controller-mode .player-dsp-card > .panel-header,
+body.remote-controller-mode .player-dsp-card .rta-visualizer-wrap,
+body.remote-controller-mode .player-dsp-card .dsp-rack-container,
+body.remote-controller-mode .gain-controls-grid .fader-box:nth-child(2),
+body.remote-controller-mode #nowPlayingQcBanner,
+body.remote-controller-mode .now-playing-qc-banner {
   display: none !important;
 }
 
@@ -1946,46 +2080,208 @@ body.remote-controller-mode .app-container.player-page-stack {
   max-width: 600px;
   margin: 0 auto;
   padding: 0.45rem 0.55rem 1.5rem;
-  gap: 0.6rem;
+  gap: 0.5rem;
 }
 
 body.remote-controller-mode .player-console-grid {
   grid-template-columns: 1fr;
-  gap: 0.6rem;
+  gap: 0.5rem;
 }
 
-/* Tab 1: Deck & Vol (Transport + Master Volume Fader on one screen) */
-body.remote-controller-mode[data-remote-view="deck"] #cuePadsCard,
-body.remote-controller-mode[data-remote-view="deck"] .library-panel,
-body.remote-controller-mode[data-remote-view="deck"] .player-dsp-card > .panel-header,
-body.remote-controller-mode[data-remote-view="deck"] .player-dsp-card .rta-visualizer-wrap,
-body.remote-controller-mode[data-remote-view="deck"] .player-dsp-card .dsp-rack-container {
+body.remote-controller-mode .player-transport-card,
+body.remote-controller-mode .player-dsp-card {
+  padding: 0.55rem 0.65rem;
+}
+
+body.remote-controller-mode .gain-controls-grid {
+  grid-template-columns: 1fr;
+  margin: 0;
+}
+
+/* Compact OLED Display Deck & Timecode Readout for Handheld Mobile */
+body.remote-controller-mode .foh-deck-screen {
+  padding: 0.5rem 0.55rem;
+  gap: 0.45rem;
+}
+
+body.remote-controller-mode .now-playing-index {
+  min-width: 28px;
+  height: 28px;
+  font-size: 0.76rem;
+}
+
+body.remote-controller-mode .now-playing-title {
+  font-size: 0.92rem;
+  line-height: 1.25;
+}
+
+body.remote-controller-mode .timecode-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: 100%;
+}
+
+body.remote-controller-mode .timecode-box {
+  padding: 0.35rem 0.15rem;
+  min-width: 0;
+  text-align: center;
+  align-items: center;
+  justify-content: center;
+}
+
+body.remote-controller-mode .timecode-label {
+  font-size: 0.52rem;
+  letter-spacing: 0.04em;
+}
+
+body.remote-controller-mode .timecode-val {
+  font-size: 1.05rem;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
+}
+
+/* Mobile Segmented Play Mode Strip (Cue / Continuous / Loop) */
+body.remote-controller-mode .play-mode-strip {
+  display: flex !important;
+  justify-content: stretch;
+  padding: 0.35rem 0 0;
+  margin-top: 0.2rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  width: 100%;
+}
+
+body.remote-controller-mode .play-mode-buttons {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: 100%;
+  gap: 0.25rem;
+  padding: 0.2rem;
+  background: var(--bg-recessed);
+  border-radius: var(--radius-sm);
+}
+
+body.remote-controller-mode .btn-mode {
+  padding: 0.38rem 0.15rem;
+  font-size: clamp(0.64rem, 2.7vw, 0.74rem);
+  font-weight: 600;
+  text-align: center;
+  justify-content: center;
+  white-space: nowrap;
+  border-radius: var(--radius-sm);
+}
+
+/* Compact Mobile Song List (Setlist) - No Cue, No Pad, Clean & High Density */
+body.remote-controller-mode .library-panel {
+  padding: 0.5rem 0.65rem;
+}
+
+body.remote-controller-mode .library-panel .player-card-header {
+  padding: 0.25rem 0;
+  margin-bottom: 0.35rem;
+}
+
+body.remote-controller-mode .library-panel .icon-chip {
   display: none !important;
 }
 
-/* Tab 2: Cue Pads (8 Big Touch Pads) */
-body.remote-controller-mode[data-remote-view="pads"] .player-console-grid,
-body.remote-controller-mode[data-remote-view="pads"] .library-panel {
+body.remote-controller-mode .library-panel #setlistHeading {
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+/* Enhanced Mobile Directory Navigation */
+body.remote-controller-mode .folder-picker-bar {
+  padding: 0.42rem 0.65rem;
+  background: var(--bg-surface-elevated);
+  border: 1px solid rgba(0, 229, 255, 0.35);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+  margin-bottom: 0.38rem;
+  gap: 0.45rem;
+}
+
+body.remote-controller-mode .folder-picker-label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--accent-cyan);
+}
+
+body.remote-controller-mode .folder-picker-select {
+  font-size: 0.84rem;
+  padding: 0.35rem 0.6rem;
+  background: var(--bg-oled);
+  border: 1px solid rgba(0, 229, 255, 0.25);
+  color: #ffffff;
+  font-weight: 700;
+  width: 100%;
+}
+
+body.remote-controller-mode .playlist-selector-grid {
+  display: flex;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  gap: 0.35rem;
+  padding: 0.1rem 0 0.35rem;
+  margin-bottom: 0.35rem;
+  scrollbar-width: none;
+}
+
+body.remote-controller-mode .playlist-selector-grid::-webkit-scrollbar {
+  display: none;
+}
+
+body.remote-controller-mode .playlist-card {
+  flex-shrink: 0;
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.28rem 0.65rem;
+  font-size: 0.74rem;
+  font-weight: 600;
+  border-radius: 9999px;
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  transition: all var(--transition-fast);
+}
+
+body.remote-controller-mode .playlist-card:active,
+body.remote-controller-mode .playlist-card.active {
+  background: rgba(0, 229, 255, 0.18);
+  border-color: var(--accent-cyan);
+  color: #ffffff;
+  box-shadow: 0 0 10px rgba(0, 229, 255, 0.25);
+}
+
+body.remote-controller-mode .playlist-card-top {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+body.remote-controller-mode .playlist-card-badge {
   display: none !important;
 }
 
-body.remote-controller-mode[data-remote-view="pads"] #cuePadsBody {
-  display: block !important;
+body.remote-controller-mode .playlist-card-sub {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--accent-cyan);
+  font-weight: 700;
 }
 
-body.remote-controller-mode .cue-pads-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.55rem;
+body.remote-controller-mode .player-toolbar {
+  padding: 0;
+  margin-bottom: 0.35rem;
 }
 
-body.remote-controller-mode .cue-pad-slot {
-  min-height: 76px;
-}
-
-/* Tab 3: Pilih Lagu / Mobile Setlist (No Horizontal Scroll) */
-body.remote-controller-mode[data-remote-view="setlist"] .player-console-grid,
-body.remote-controller-mode[data-remote-view="setlist"] #cuePadsCard {
-  display: none !important;
+body.remote-controller-mode #searchInput {
+  padding: 0.36rem 0.65rem;
+  font-size: 0.78rem;
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface-elevated);
 }
 
 body.remote-controller-mode #groupByMode,
@@ -1995,6 +2291,17 @@ body.remote-controller-mode .toolbar-selection-btns {
   display: none !important;
 }
 
+body.remote-controller-mode .table-responsive {
+  border-radius: var(--radius-sm);
+  max-height: 58vh;
+  overflow-y: auto;
+}
+
+body.remote-controller-mode .player-table thead {
+  display: none !important;
+}
+
+/* Hide Technical Metadata Columns 3 to 8 on Mobile */
 body.remote-controller-mode .player-table th:nth-child(3),
 body.remote-controller-mode .player-table td:nth-child(3),
 body.remote-controller-mode .player-table th:nth-child(4),
@@ -2010,34 +2317,108 @@ body.remote-controller-mode .player-table td:nth-child(8) {
   display: none !important;
 }
 
-/* Tab 4: RTA & EQ (Spectrum + Master Faders + 3-Band EQ + Phase Matrix) */
-body.remote-controller-mode[data-remote-view="dsp"] .player-transport-card,
-body.remote-controller-mode[data-remote-view="dsp"] #cuePadsCard,
-body.remote-controller-mode[data-remote-view="dsp"] .library-panel {
+/* Hide Cue and Pad Buttons on Mobile */
+body.remote-controller-mode .btn-row-cue,
+body.remote-controller-mode .btn-row-pad {
   display: none !important;
 }
 
-/* Mobile Smartphone Ergonomics for HP Remote Controller */
-@media (max-width: 680px) {
-  .foh-transport-controls {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
+body.remote-controller-mode .player-table tbody tr {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  transition: background var(--transition-fast);
+}
 
-  .btn-transport-play,
-  .btn-transport-stop {
-    min-height: 50px;
-    font-size: 0.9rem;
-  }
+body.remote-controller-mode .player-table td {
+  padding: 0.32rem 0.4rem;
+  vertical-align: middle;
+}
 
-  .gain-controls-grid {
-    grid-template-columns: 1fr;
-  }
+body.remote-controller-mode .col-play-actions {
+  width: 44px;
+  min-width: 44px;
+  max-width: 44px;
+  padding: 0.28rem 0.2rem 0.28rem 0.35rem !important;
+  text-align: center;
+}
 
-  .eq-strip {
-    grid-template-columns: 1fr;
-  }
+body.remote-controller-mode .row-play-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
 
-  .cue-pads-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
+/* Compact Rounded Play / Pause Button */
+body.remote-controller-mode .btn-row-play {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 0.76rem;
+  background: rgba(0, 245, 155, 0.12);
+  border: 1px solid rgba(0, 245, 155, 0.45);
+  color: var(--accent-green);
+  cursor: pointer;
+}
+
+body.remote-controller-mode .btn-row-play.active {
+  background: var(--accent-green);
+  color: #04130d;
+  box-shadow: 0 0 10px rgba(0, 245, 155, 0.4);
+}
+
+body.remote-controller-mode .file-name-cell {
+  padding-left: 0.35rem !important;
+  cursor: pointer;
+}
+
+body.remote-controller-mode .file-name-inline {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+body.remote-controller-mode .track-index-badge {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  min-width: 18px;
+}
+
+body.remote-controller-mode .playlist-folder-badge.row-folder-tag {
+  font-size: 0.64rem;
+  padding: 0.1rem 0.35rem;
+}
+
+body.remote-controller-mode .file-title-text {
+  font-size: 0.82rem;
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--text-primary);
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+body.remote-controller-mode .player-table tbody tr.is-active-track {
+  background: rgba(0, 229, 255, 0.08);
+}
+
+body.remote-controller-mode .player-table tbody tr.is-playing-track {
+  background: rgba(0, 245, 155, 0.11);
+  border-left: 3px solid var(--accent-green);
+}
+
+body.remote-controller-mode .group-header-row td {
+  padding: 0.28rem 0.5rem;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+body.remote-controller-mode .group-header-bar {
+  padding: 0.15rem 0;
+  font-size: 0.74rem;
 }

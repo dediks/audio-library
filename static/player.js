@@ -126,6 +126,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnBrowseSource = document.getElementById('btnBrowseSource');
   const btnResetInbox = document.getElementById('btnResetInbox');
   const playlistGrid = document.getElementById('playlistGrid');
+  const playlistSelectDropdown = document.getElementById('playlistSelectDropdown');
 
   const searchInput = document.getElementById('searchInput');
   const groupByMode = document.getElementById('groupByMode');
@@ -869,13 +870,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function setRemoteMobileView(viewName) {
     if (!isRemoteController) return;
-    const valid = ['deck', 'pads', 'setlist', 'dsp'].includes(viewName) ? viewName : 'deck';
+    const valid = ['setlist', 'pads'].includes(viewName) ? viewName : 'setlist';
     document.body.dataset.remoteView = valid;
     const tabBtns = document.querySelectorAll('#remoteMobileTabs .remote-mobile-tab');
     tabBtns.forEach(btn => {
       btn.classList.toggle('active', btn.dataset.remoteView === valid);
     });
-    window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   function loadTrack(fileObj, autoPlay = false, opts = {}) {
@@ -885,7 +885,6 @@ document.addEventListener('DOMContentLoaded', () => {
         rel_path: fileObj.rel_path,
         auto_play: Boolean(autoPlay),
       });
-      setRemoteMobileView('deck');
       return;
     }
     cancelActiveFade();
@@ -1894,7 +1893,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const fragment = document.createDocumentFragment();
 
     fragment.appendChild(
-      createPlaylistCard('ALL', 'All Tracks', `${totalSongs} tracks`, `${totalMp3} MP3`)
+      createPlaylistCard('ALL', 'Semua Lagu', `${totalSongs} tracks`, `${totalMp3} MP3`)
     );
 
     allPlaylists.forEach(pl => {
@@ -1905,6 +1904,26 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     playlistGrid.appendChild(fragment);
+
+    // Sync Mobile / Quick Dropdown Selector
+    if (playlistSelectDropdown) {
+      playlistSelectDropdown.replaceChildren();
+      const allOpt = document.createElement('option');
+      allOpt.value = 'ALL';
+      allOpt.textContent = `📁 Semua Lagu (${totalSongs})`;
+      allOpt.selected = activePlaylist === 'ALL';
+      playlistSelectDropdown.appendChild(allOpt);
+
+      allPlaylists.forEach(pl => {
+        const displayLabel = pl.label ? pl.label.replace(/^📁\s*/, '') : pl.name;
+        const opt = document.createElement('option');
+        opt.value = pl.name;
+        opt.textContent = `📁 ${displayLabel} (${pl.total} Lagu)`;
+        opt.selected = activePlaylist === pl.name;
+        playlistSelectDropdown.appendChild(opt);
+      });
+      playlistSelectDropdown.value = activePlaylist || 'ALL';
+    }
   }
 
   function createPlaylistCard(id, title, countText, badgeText) {
@@ -1936,6 +1955,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     btn.addEventListener('click', () => {
       activePlaylist = id;
+      if (playlistSelectDropdown) playlistSelectDropdown.value = id;
       renderPlaylists();
       applyFiltersAndRenderTable();
       persistWorkspaceState();
@@ -2012,7 +2032,9 @@ document.addEventListener('DOMContentLoaded', () => {
       groupTd.colSpan = 8;
 
       const { bar, chevron, toggleHint } = createGroupHeaderBar(group, isCollapsed, {
-        onOpenExplorer: g => openFolderInExplorer(g.folderPath, currentSourceDir),
+        onOpenExplorer: isRemoteController
+          ? null
+          : g => openFolderInExplorer(g.folderPath, currentSourceDir),
       });
 
       groupTd.appendChild(bar);
@@ -2059,8 +2081,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnPlay = document.createElement('button');
     btnPlay.type = 'button';
     btnPlay.className = 'btn-row-play';
-    btnPlay.textContent = '▶ Play';
-    btnPlay.title = 'Instant Playback';
+    btnPlay.textContent = isRemoteController ? '▶' : '▶ Play';
+    btnPlay.title = 'Putar lagu ini di Master Deck';
     btnPlay.addEventListener('click', e => {
       e.stopPropagation();
       if (activeTrackObj && activeTrackObj.rel_path === fileObj.rel_path && isDeckPlaying()) {
@@ -2123,6 +2145,11 @@ document.addEventListener('DOMContentLoaded', () => {
       index: trackIdx,
       showFolderBadge,
     });
+    if (isRemoteController) {
+      tdName.style.cursor = 'pointer';
+      tdName.title = 'Ketuk untuk Cue lagu ini ke Master Deck';
+      tdName.addEventListener('click', () => loadTrack(fileObj, false));
+    }
 
     // Column 3: Codec & Sample Rate
     const tdCodec = document.createElement('td');
@@ -2208,7 +2235,11 @@ document.addEventListener('DOMContentLoaded', () => {
       const playBtn = tr.querySelector('.btn-row-play');
       if (playBtn) {
         playBtn.classList.toggle('active', isActive && isPlaying);
-        playBtn.textContent = isActive && isPlaying ? '❚❚ Pause' : '▶ Play';
+        if (isRemoteController) {
+          playBtn.textContent = isActive && isPlaying ? '❚❚' : '▶';
+        } else {
+          playBtn.textContent = isActive && isPlaying ? '❚❚ Pause' : '▶ Play';
+        }
       }
     });
   }
@@ -2333,7 +2364,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (activePlayModeBadge) {
       if (playMode === 'cue') activePlayModeBadge.textContent = 'CUE (AUTO-STOP)';
-      else if (playMode === 'continuous') activePlayModeBadge.textContent = 'BGM (AUTO-NEXT)';
+      else if (playMode === 'continuous') activePlayModeBadge.textContent = 'CONTINUOUS';
       else activePlayModeBadge.textContent = 'LOOP 1 TRACK';
     }
     savePlayerPrefs();
@@ -2489,6 +2520,17 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Filter & Search Listeners
+  if (playlistSelectDropdown) {
+    playlistSelectDropdown.addEventListener('change', () => {
+      activePlaylist = playlistSelectDropdown.value;
+      renderPlaylists();
+      applyFiltersAndRenderTable();
+      persistWorkspaceState();
+      if (isRemoteController) {
+        sendRemoteCommand('select_playlist', { playlist: activePlaylist });
+      }
+    });
+  }
   if (searchInput) searchInput.addEventListener('input', applyFiltersAndRenderTable);
   if (groupByMode) groupByMode.addEventListener('change', applyFiltersAndRenderTable);
   if (filterQcStatus) filterQcStatus.addEventListener('change', applyFiltersAndRenderTable);
@@ -3241,6 +3283,7 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'select_playlist':
         if (typeof p.playlist === 'string') {
           activePlaylist = p.playlist;
+          if (playlistSelectDropdown) playlistSelectDropdown.value = activePlaylist;
           renderPlaylists();
           applyFiltersAndRenderTable();
           persistWorkspaceState();
@@ -3296,6 +3339,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // 2. Sync Active Playlist if changed
     if (typeof st.active_playlist === 'string' && st.active_playlist !== activePlaylist) {
       activePlaylist = st.active_playlist;
+      if (playlistSelectDropdown) playlistSelectDropdown.value = activePlaylist;
       renderPlaylists();
       applyFiltersAndRenderTable();
     }
@@ -3446,13 +3490,6 @@ document.addEventListener('DOMContentLoaded', () => {
     syncRemotePinButtonText();
     if (isRemoteController) {
       document.body.classList.add('remote-controller-mode');
-      setRemoteMobileView('deck');
-      const mobileTabBtns = document.querySelectorAll('#remoteMobileTabs .remote-mobile-tab');
-      mobileTabBtns.forEach(btn => {
-        btn.addEventListener('click', () => {
-          setRemoteMobileView(btn.dataset.remoteView || 'deck');
-        });
-      });
       if (remoteModeBanner) remoteModeBanner.classList.remove('hidden');
       if (btnExitRemoteSim && isLocalhostHost) {
         btnExitRemoteSim.classList.remove('hidden');
@@ -3483,8 +3520,8 @@ document.addEventListener('DOMContentLoaded', () => {
   renderCuePads();
   if (!isRemoteController) {
     refreshAudioOutputDevices();
+    startRtaRenderLoop();
   }
-  startRtaRenderLoop();
   fetchLibrary(currentSourceDir);
   initRemoteModeEngine();
 });

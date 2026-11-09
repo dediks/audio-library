@@ -17,7 +17,7 @@
   <header class="app-header" id="appHeader" data-page="player"></header>
 
   <main class="app-container player-page-stack">
-    <!-- FOH Wireless Remote Mode Banner & Handheld Tab Switcher (Active when opened on Smartphone / ?remote=1) -->
+    <!-- FOH Wireless Remote Mode Banner (Active when opened on Smartphone / ?remote=1) -->
     <div class="remote-mode-banner hidden" id="remoteModeBanner" role="status" aria-live="polite">
       <div class="remote-banner-top-row">
         <div class="remote-banner-left">
@@ -33,21 +33,6 @@
           </button>
         </div>
       </div>
-
-      <nav class="remote-mobile-tabs" id="remoteMobileTabs" aria-label="Menu Kontroler HP">
-        <button type="button" class="remote-mobile-tab active" data-remote-view="deck">
-          <span>Deck &amp; Vol</span>
-        </button>
-        <button type="button" class="remote-mobile-tab" data-remote-view="pads">
-          <span>Cue Pads (8)</span>
-        </button>
-        <button type="button" class="remote-mobile-tab" data-remote-view="setlist">
-          <span>Pilih Lagu</span>
-        </button>
-        <button type="button" class="remote-mobile-tab" data-remote-view="dsp">
-          <span>RTA &amp; EQ</span>
-        </button>
-      </nav>
     </div>
 
     <!-- Top FOH Console Grid: Left = Transport & Timecode Deck, Right = RTA Analyzer & DSP Rack -->
@@ -160,13 +145,13 @@
         <!-- Play Mode Segmented Bar & Keyboard Shortcuts -->
         <div class="play-mode-strip" role="group" aria-label="Playback Mode">
           <div class="play-mode-buttons">
-            <button type="button" class="btn-mode active" id="modeBtnCue" data-mode="cue" title="Auto-Stop after 1 track finishes (Stage Cue Mode)">
+            <button type="button" class="btn-mode active" id="modeBtnCue" data-mode="cue" title="Cue (Auto-Stop): Berhenti otomatis setelah 1 lagu selesai">
               Cue (Auto-Stop)
             </button>
-            <button type="button" class="btn-mode" id="modeBtnContinuous" data-mode="continuous" title="Auto-advance to next track (BGM Continuous Playback)">
-              BGM (Auto-Next)
+            <button type="button" class="btn-mode" id="modeBtnContinuous" data-mode="continuous" title="Continuous: Putar otomatis berlanjut ke lagu berikutnya">
+              Continuous
             </button>
-            <button type="button" class="btn-mode" id="modeBtnLoop" data-mode="loop" title="Repeat current track continuously (Loop 1 Track)">
+            <button type="button" class="btn-mode" id="modeBtnLoop" data-mode="loop" title="Loop 1 Track: Putar berulang-ulang lagu yang sama">
               Loop 1 Track
             </button>
           </div>
@@ -415,6 +400,13 @@
             <button type="button" id="btnBrowseSource" class="btn-chip">Browse Source Folder...</button>
             <button type="button" id="btnResetInbox" class="btn-chip hidden">Reset to Inbox</button>
           </div>
+        </div>
+
+        <div class="folder-picker-bar" id="folderPickerBar">
+          <label for="playlistSelectDropdown" class="folder-picker-label" title="Pilih Playlist / Folder">
+            <span class="folder-icon">📁</span>
+          </label>
+          <select id="playlistSelectDropdown" class="toolbar-select folder-picker-select" aria-label="Pilih Folder Playlist"></select>
         </div>
 
         <div class="playlist-selector-grid" id="playlistGrid" aria-label="Playlist Folders"></div>
