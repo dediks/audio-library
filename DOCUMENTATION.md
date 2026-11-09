@@ -10,13 +10,14 @@ Selamat datang di dokumentasi resmi **SWARARIA AUDIO LAB (Pro Audio Ingestion, S
 2. [Arsitektur 4 Halaman Dedicated (Pipeline Workstation)](#2-arsitektur-4-halaman-dedicated-pipeline-workstation)
 3. [Tiga Fitur High-Value Pro Audio / FOH](#3-tiga-fitur-high-value-pro-audio--foh)
 4. [Struktur Direktori & Modul](#4-struktur-direktori--modul)
-5. [Prasyarat & Instalasi](#5-prasyarat--instalasi)
+5. [Prasyarat, Instalasi & Packaging Desktop App](#5-prasyarat-instalasi--packaging-desktop-app)
 6. [Panduan Alur Kerja Web UI (Stage 1 s/d Stage 4)](#6-panduan-alur-kerja-web-ui-stage-1-sd-stage-4)
 7. [Panduan Penggunaan CLI (`audio_manager.py`)](#7-panduan-penggunaan-cli-audio_managerpy)
 8. [Standar Audio QC & Metrik Soundsystem (EBU R128 & Spektrum)](#8-standar-audio-qc--metrik-soundsystem-ebu-r128--spektrum)
 9. [Dokumentasi REST API Internal](#9-dokumentasi-rest-api-internal)
-10. [Keamanan Aplikasi (Secure Coding Standards)](#10-keamanan-aplikasi-secure-coding-standards)
-11. [Troubleshooting & FAQ](#11-troubleshooting--faq)
+10. [Sistem Pembaruan Otomatis (In-App GitHub Release Auto-Updater)](#10-sistem-pembaruan-otomatis-in-app-github-release-auto-updater)
+11. [Keamanan Aplikasi (Secure Coding Standards)](#11-keamanan-aplikasi-secure-coding-standards)
+12. [Troubleshooting & FAQ](#12-troubleshooting--faq)
 
 ---
 
@@ -95,7 +96,8 @@ Untuk menghindari penumpukan tombol dan kebingungan kognitif (_cognitive overloa
 ```text
 audio-library-starter/
 ├── desktop_app.py            # Launcher aplikasi desktop mandiri (pywebview Native Window + App-Mode fallback)
-├── build_desktop.py          # Script builder otomatis menuju aplikasi desktop portable (.exe / .app)
+├── build_desktop.py          # Script builder otomatis desktop app + Inno Setup compiler (--installer)
+├── build_installer.bat       # 1-Click Builder Windows Setup Wizard (.exe) dari nol hingga jadi
 ├── SwarariaAudioLab.spec     # Konfigurasi bundling PyInstaller (menyertakan static/, yt-dlp, & FFmpeg)
 ├── installer.iss             # Konfigurasi Inno Setup untuk membuat installer Windows (SwarariaAudioLab_Setup.exe)
 ├── run.bat                   # 1-Click Runner Script untuk Windows (Auto .venv, pip, verify FFmpeg & launch Desktop)
@@ -105,9 +107,14 @@ audio-library-starter/
 ├── task_engine.py            # Worker antrian FIFO latar belakang, caching metadata/QC, & orkestrasi batch
 ├── fs_browser.py             # Operasi filesystem aman: rename, batch auto-number/clean, delete, & directory picker
 ├── splitter_engine.py        # Engine pemotong multitrack WAV / video konser losslessly
-├── web_ui.py                 # Server HTTP lokal (127.0.0.1:8765) & routing 4 halaman + REST API
+├── web_ui.py                 # Server HTTP lokal (127.0.0.1:8765) & routing 4 halaman + REST API + Auto-Update
 ├── README.md                 # Panduan ringkas proyek
 ├── DOCUMENTATION.md          # Dokumentasi teknis lengkap (file ini)
+├── tests/
+│   ├── run_tests.py          # Minimal test runner
+│   ├── test_ingest.py        # Unit test ingest & selector yt-dlp
+│   ├── test_organizer.py     # Unit test auto-numbering & tag cleaner
+│   └── test_update_checker.py # Unit test semver parsing & GitHub update checker
 ├── library/
 │   ├── downloaded_ids.txt    # Arsip ID lagu untuk mencegah unduhan duplikat
 │   └── inbox/                # Direktori default koleksi audio (mendukung subfolder playlist)
@@ -153,26 +160,40 @@ Proyek ini telah dilengkapi dengan script inisialisasi cerdas yang secara otomat
   ./run.sh --web    # Meluncurkan mode Web Server saja (127.0.0.1:8765)
   ```
 
-### B. Membuat Aplikasi Desktop Mandiri (`.exe` / Installer) untuk Orang Awam
+### B. Membuat Installer Ala Wizard Windows (`SwarariaAudioLab_Setup.exe`) untuk Orang Awam
 
-Agar pengguna akhir (Sound Engineer, DJ, Event Organizer) dapat menjalankan aplikasi **tanpa perlu menginstall Python maupun FFmpeg**, gunakan builder otomatis:
+Agar pengguna akhir (Sound Engineer, DJ, Event Organizer) dapat menginstal aplikasi seperti aplikasi profesional umumnya (*Next $\rightarrow$ Next $\rightarrow$ Install $\rightarrow$ Finish*) **tanpa perlu menginstall Python maupun FFmpeg**:
 
-1. **Jalankan Builder Otomatis:**
-   ```bash
-   python build_desktop.py --install-deps
-   ```
-   Script ini akan:
-   - Menyalin binary `ffmpeg` dan `ffprobe` ke dalam `.vendor/bin/`.
-   - Mengkompilasi seluruh aplikasi Python, `yt-dlp`, `pywebview`, dan aset `static/` menggunakan `SwarariaAudioLab.spec`.
-   - Menghasilkan folder aplikasi mandiri di **`dist/SwarariaAudioLab/`**.
+#### 1. Prasyarat Sistem Windows (Hanya saat mem-build):
+- **Python 3.10+** (pastikan centang *"Add python.exe to PATH"* saat instalasi).
+- **Inno Setup 6** (Compiler installer Windows resmi):
+  ```cmd
+  winget install JRSoftware.InnoSetup
+  ```
 
-2. **Opsi Distribusi 1 — Portable ZIP:**
-   Kompres folder `dist/SwarariaAudioLab` menjadi `.zip`. Pengguna cukup mengekstrak dan klik 2x `SwarariaAudioLab.exe`.
+> **Catatan untuk Pengguna WSL:**
+> PyInstaller **tidak mendukung cross-compilation** (PyInstaller di Linux menghasilkan binary Linux ELF, bukan file `.exe` Windows). Jika kode berada di dalam WSL, buka folder WSL dari Windows PowerShell menggunakan path `\\wsl.localhost\Ubuntu\home\dedik\project\audio-library-starter` lalu jalankan proses build menggunakan **Python Windows**.
 
-3. **Opsi Distribusi 2 — Windows Setup Installer (`SwarariaAudioLab_Setup.exe`):**
-   - Buka file **`installer.iss`** menggunakan [Inno Setup Compiler](https://jrsoftware.org/isdl.php).
-   - Klik **Build $\rightarrow$ Compile**.
-   - File installer tunggal `dist\SwarariaAudioLab_Setup.exe` siap dibagikan (lengkap dengan pembuatan shortcut Desktop, Start Menu, dan Uninstaller resmi).
+#### 2. Cara 1-Klik di Windows (Rekomendasi):
+Cukup klik ganda file **`build_installer.bat`**. Script ini akan secara otomatis:
+- Memeriksa instalasi Python dan Inno Setup.
+- Mengunduh dependensi build (`pyinstaller` & `pywebview`).
+- Mengemas seluruh aplikasi ke `dist/SwarariaAudioLab/`.
+- Memanggil compiler Inno Setup (`ISCC.exe`) untuk menghasilkan **`dist\SwarariaAudioLab_Setup.exe`**.
+- Membuka folder `dist` di Windows Explorer secara otomatis saat selesai.
+
+#### 3. Cara Command Line:
+```bash
+# Build desktop app + kompilasi Setup Wizard otomatis:
+python build_desktop.py --install-deps --installer
+
+# Opsi pembersihan cache sebelum build (rekomendasi pasca update kode):
+python build_desktop.py --clean --installer
+```
+
+#### 4. Opsi Distribusi:
+- **Installer Wizard (`dist\SwarariaAudioLab_Setup.exe`)**: File setup tunggal (~160 MB). Otomatis membuat shortcut Desktop & Start Menu, izin folder pustaka aman, dan registrasi Uninstaller di *Windows Settings*.
+- **Portable Folder (`dist\SwarariaAudioLab\`)**: Bisa langsung dikompres ke `.zip` untuk dijalankan tanpa instalasi.
 
 ### C. Menjalankan Manual (Mode Developer)
 
@@ -274,10 +295,12 @@ Server lokal [`web_ui.py`](file:///home/dedik/project/audio-library-starter/web_
 
 | Method | Endpoint                | Deskripsi                                                                                                                                                                                                                   |
 | :----- | :---------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET`  | `/api/system`           | Memeriksa status ketersediaan binary (`python`, `yt_dlp`, `ffmpeg`, `ffprobe`).                                                                                                                                             |
+| `GET`  | `/api/system`           | Memeriksa status ketersediaan binary (`python`, `yt_dlp`, `ffmpeg`, `ffprobe`, `app_version`).                                                                                                                              |
 | `GET`  | `/api/queue`            | Mengambil status tugas aktif, persentase progress, _live logs_, dan riwayat antrian.                                                                                                                                        |
 | `GET`  | `/api/library`          | Mengambil daftar file audio, ringkasan folder playlist, dan cache QC (mendukung query `?source_dir=...`).                                                                                                                   |
 | `GET`  | `/api/fs/list`          | Menjelajahi daftar direktori lokal & shortcut drive/USB untuk modal pemilih folder (`?path=...`).                                                                                                                           |
+| `GET`  | `/api/check-update`     | Memeriksa rilis terbaru di GitHub Releases (`dediks/audio-library`), membandingkan semver `APP_VERSION`, dan mengekstrak aset `.exe`.                                                                                       |
+| `POST` | `/api/install-update`   | Mengunduh paket installer resmi dan meluncurkan installer untuk pembaruan in-place otomatis (`download_url`).                                                                                                               |
 | `POST` | `/api/fs/mkdir`         | Membuat subfolder baru di dalam direktori tujuan (`parent_dir`, `name`).                                                                                                                                                    |
 | `POST` | `/api/fs/open-explorer` | Membuka folder sumber/playlist di File Manager sistem operasi (`source_dir`, `rel_path`).                                                                                                                                   |
 | `POST` | `/api/download`         | Menjadwalkan tugas Batch Ingestion (`urls`, `audio_format`, `audio_bitrate`, `is_playlist`, `use_cookies`, `auto_scan`).                                                                                                    |
@@ -290,16 +313,50 @@ Server lokal [`web_ui.py`](file:///home/dedik/project/audio-library-starter/web_
 
 ---
 
-## 10. Keamanan Aplikasi (Secure Coding Standards)
+## 10. Sistem Pembaruan Otomatis (In-App GitHub Release Auto-Updater)
+
+Aplikasi telah dilengkapi subsistem pembaruan mandiri terintegrasi dengan GitHub Releases repository [dediks/audio-library](https://github.com/dediks/audio-library):
+
+### A. Alur Kerja Pengguna Akhir (User Experience)
+1. **Status Pill Interaktif**: Pada header pojok kanan atas, terdapat pill versi aplikasi (contoh `Ver: v1.0.0`).
+2. **Background Polling**: Saat aplikasi dibuka, thread latar belakang mengecek GitHub API `GET /repos/dediks/audio-library/releases/latest`.
+3. **Indikator Update**: Jika versi rilis lebih tinggi dari versi yang sedang berjalan:
+   - Badge berubah menjadi warna hijau menyala (`v1.0.1 ⚡`).
+   - Notifikasi mengambang muncul memberitahukan tersedianya pembaruan.
+4. **Dialog Changelog & 1-Click Update**:
+   - Pengguna mengklik badge versi untuk membuka modal interaktif.
+   - Modal menampilkan perbandingan versi, tanggal rilis, dan **Catatan Rilis (Changelog)** asli dari GitHub.
+   - Pengguna cukup menekan tombol **`⚡ Unduh & Pasang Pembaruan`**. Sistem akan mengunduh file `.exe` ke folder temporary, menjalankan installer wizard, dan menutup aplikasi lama untuk proses pembaruan otomatis tanpa menghapus data musik pengguna.
+
+### B. Alur Kerja Rilis Pengembang (Developer Release Flow)
+Setiap kali ada perbaikan bug atau penambahan fitur:
+1. **Perbarui Nomor Versi**:
+   - `web_ui.py`: Ubah `APP_VERSION = "1.0.1"`
+   - `installer.iss`: Ubah `#define MyAppVersion "1.0.1"`
+2. **Rebuild Installer Windows**:
+   ```cmd
+   python build_desktop.py --clean --installer
+   ```
+   *(Atau jalankan `build_installer.bat`)*.
+3. **Terbitkan Rilis di GitHub**:
+   - Buka `https://github.com/dediks/audio-library/releases/new`.
+   - Masukkan Tag (contoh: `v1.0.1`), judul rilis, dan ringkasan pembaruan.
+   - Unggah (*Attach*) berkas **`dist/SwarariaAudioLab_Setup.exe`**.
+   - Klik **Publish release**. Seluruh instalasi pengguna akan otomatis mendeteksi rilis baru ini.
+
+---
+
+## 11. Keamanan Aplikasi (Secure Coding Standards)
 
 1. **Strict Localhost Binding:** Server HTTP diikat secara eksklusif ke `127.0.0.1:8765` dan tidak membuka port ke jaringan publik (`0.0.0.0`).
 2. **Zero DOM XSS:** Seluruh kode JavaScript di `static/` menggunakan `document.createElement()`, `document.createElementNS()`, dan `textContent`. Tidak ada penggunaan `innerHTML`, `outerHTML`, `insertAdjacentHTML`, atau `document.write`.
 3. **Strict Path Boundary Validation:** Semua operasi baca/ubah/hapus di [`fs_browser.py`](file:///home/dedik/project/audio-library-starter/fs_browser.py) meresolusi path absolut (`Path.resolve()`) dan memverifikasi bahwa target berada tepat di bawah direktori sumber yang diizinkan (mencegah _Path Traversal_ `../`).
 4. **Safe Subprocess Execution:** Pemanggilan `ffmpeg`, `ffprobe`, dan `yt-dlp` selalu menggunakan array argumen terstruktur tanpa `shell=True`.
+5. **Verified Release Sinks:** Endpoint `/api/install-update` hanya menerima permintaan dari klien localhost dan memvalidasi awalan URL unduhan terhadap allow-list domain rilis resmi GitHub (`https://github.com/dediks/audio-library/releases/download/`).
 
 ---
 
-## 11. Troubleshooting & FAQ
+## 12. Troubleshooting & FAQ
 
 #### Q: Mengapa muncul peringatan "Database is locked" pada log Chrome?
 
@@ -312,3 +369,11 @@ Server lokal [`web_ui.py`](file:///home/dedik/project/audio-library-starter/web_
 #### Q: Bagaimana cara menghapus semua file `.opus`/`.webm` setelah saya mengonversinya ke `.mp3`?
 
 **J:** Buka halaman **`4. Tag & File Organizer`** (`/organizer`), klik tombol **`Pilih Non-MP3 (.opus/.webm)`** di kanan atas tabel (atau kelompokkan tabel dengan **`Grup: 🎵 Tipe File`**), lalu klik **`Hapus Terpilih`**.
+
+#### Q: Apakah file audio yang sudah diunduh di `library/inbox/` akan terhapus saat melakukan update versi baru?
+
+**J:** Tidak. Installer Inno Setup (`installer.iss`) dirancang melakukan pembaruan secara *in-place*. File program binary diperbarui, namun direktori pustaka lagu `library/inbox/` tetap aman dan tidak tersentuh.
+
+#### Q: Saya mengembangkan kode di dalam WSL (Ubuntu), bagaimana cara mem-build file `.exe` Windows?
+
+**J:** Buka terminal PowerShell di Windows, masuk ke folder WSL via network path `cd \\wsl.localhost\Ubuntu\home\dedik\project\audio-library-starter`, lalu jalankan `python build_desktop.py --install-deps --installer` menggunakan Python Windows. PyInstaller membutuhkan environment Windows agar dapat menghasilkan file `.exe` Windows.

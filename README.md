@@ -84,6 +84,16 @@ Saat file ini dijalankan di komputer Windows mana pun:
 
 ---
 
+## 🔄 Pembaruan Otomatis (In-App GitHub Update Checker)
+
+Aplikasi ini telah dilengkapi fitur **Pemeriksa Pembaruan Otomatis** terintegrasi dengan repository GitHub [dediks/audio-library](https://github.com/dediks/audio-library):
+
+1. **Badge Versi di Header**: Menampilkan versi saat ini (misal `v1.0.0`). Pengguna dapat mengkliknya kapan saja untuk memeriksa pembaruan.
+2. **Deteksi Otomatis di Background**: Jika Anda merilis versi baru di GitHub Releases (misal `v1.0.1`), indikator akan menyala hijau (`v1.0.1 ⚡`) dan notifikasi muncul.
+3. **1-Click Auto Install**: Pengguna dapat membaca *Changelog* / Catatan Rilis langsung di dalam modal aplikasi, lalu menekan tombol **"Unduh & Pasang Pembaruan"**. Aplikasi akan mengunduh installer baru dan memperbarui sistem secara otomatis.
+
+---
+
 ### Alternatif Manual (Mode Developer):
 
 ```bash

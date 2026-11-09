@@ -68,6 +68,8 @@ export {
   initSpaRouter,
   initPersistentDock,
   ensureFohAudioElement,
+  openUpdateModal,
+  checkForUpdatesUI,
 };
 
 /**
@@ -327,11 +329,18 @@ export function initAppHeader(opts = {}) {
   const ytdlpPill = createPill('statusYtdlp', 'ytdlpDot', 'yt-dlp:', 'ytdlpVal', 'checking...');
   const ffmpegPill = createPill('statusFfmpeg', 'ffmpegDot', 'FFmpeg:', 'ffmpegVal', 'checking...');
   const cookiesPill = createPill('statusCookies', 'cookiesDot', 'Premium:', 'cookiesVal', 'checking...');
+  const updatePill = createPill('statusUpdate', 'updateDot', 'Ver:', 'updateVal', '1.0.0', true);
+  updatePill.pill.classList.add('clickable-pill');
+  updatePill.pill.title = 'Swararia Audio Lab — Klik untuk memeriksa rilis pembaruan GitHub';
+  updatePill.pill.addEventListener('click', () => {
+    openUpdateModal(true);
+  });
 
   statusGroup.appendChild(pyPill.pill);
   statusGroup.appendChild(ytdlpPill.pill);
   statusGroup.appendChild(ffmpegPill.pill);
   statusGroup.appendChild(cookiesPill.pill);
+  statusGroup.appendChild(updatePill.pill);
 
   // 4. Notification Bell & History Popover in Header
   const notifWrapper = createHeaderNotificationCenter();
@@ -351,6 +360,7 @@ export function initAppHeader(opts = {}) {
       requireFfprobe: true,
       cookiesDot: cookiesPill.dot,
       cookiesVal: cookiesPill.val,
+      updateVal: updatePill.val,
       onData: opts.onSystemData,
       onError: opts.onSystemError,
     });
@@ -358,6 +368,12 @@ export function initAppHeader(opts = {}) {
 
   refreshStatus();
   initSpaRouter();
+
+  // Background check for GitHub updates shortly after startup
+  setTimeout(() => {
+    checkForUpdatesUI(updatePill, false);
+  }, 2500);
+
   return { refreshStatus };
 }
 
@@ -436,6 +452,10 @@ export async function checkSystemStatus(opts = {}) {
     }
   }
 
+  if (opts.updateVal && data.app_version) {
+    opts.updateVal.textContent = 'v' + data.app_version;
+  }
+
   if (typeof opts.onData === 'function') {
     opts.onData(data);
   }
@@ -478,4 +498,281 @@ export async function openFolderInExplorer(folderPath = '', sourceDir = '') {
     });
     return false;
   }
+}
+
+// ==============================================================================
+// GITHUB RELEASE UPDATE CHECKER & IN-APP AUTO-INSTALLER
+// ==============================================================================
+
+let cachedUpdateData = null;
+let isCheckingUpdate = false;
+
+/**
+ * Checks for software updates from GitHub Releases API and updates header status pill.
+ * @param {{ val?: HTMLElement, dot?: HTMLElement, pill?: HTMLElement } | null} updatePill
+ * @param {boolean} [isManual=false]
+ * @returns {Promise<any>}
+ */
+export async function checkForUpdatesUI(updatePill, isManual = false) {
+  if (isCheckingUpdate) return cachedUpdateData;
+  isCheckingUpdate = true;
+  if (updatePill && isManual && updatePill.val) {
+    updatePill.val.textContent = 'checking...';
+  }
+
+  try {
+    const { ok, data } = await apiGet('/api/check-update');
+    isCheckingUpdate = false;
+    if (ok && data) {
+      cachedUpdateData = data;
+      if (updatePill) {
+        if (data.has_update) {
+          if (updatePill.val) updatePill.val.textContent = (data.latest_version || 'new') + ' ⚡';
+          if (updatePill.dot) updatePill.dot.className = 'status-indicator update-available';
+          if (updatePill.pill) {
+            updatePill.pill.classList.add('has-update');
+            updatePill.pill.title = 'Versi baru ' + data.latest_version + ' tersedia! Klik untuk perbarui.';
+          }
+          if (!isManual) {
+            notify({
+              type: 'info',
+              title: 'Pembaruan Tersedia',
+              message: 'Swararia Audio Lab ' + data.latest_version + ' telah dirilis. Klik badge versi untuk detail.',
+              duration: 8000,
+            });
+          }
+        } else {
+          if (updatePill.val) updatePill.val.textContent = 'v' + (data.current_version || '1.0.0');
+          if (updatePill.dot) updatePill.dot.className = 'status-indicator active';
+          if (updatePill.pill) {
+            updatePill.pill.classList.remove('has-update');
+            updatePill.pill.title = 'Swararia Audio Lab v' + (data.current_version || '1.0.0') + ' (Versi Terbaru)';
+          }
+        }
+      }
+      return data;
+    }
+  } catch (err) {
+    isCheckingUpdate = false;
+    console.error('[Update Checker] Gagal memeriksa update:', err);
+  }
+  return null;
+}
+
+/**
+ * Opens the release update modal dialog with changelog and 1-click installer.
+ * @param {boolean} [isManual=true]
+ */
+export function openUpdateModal(isManual = true) {
+  const existing = document.getElementById('updateModalBackdrop');
+  if (existing) existing.remove();
+
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.id = 'updateModalBackdrop';
+
+  const card = document.createElement('div');
+  card.className = 'modal-card modal-update-card';
+
+  // 1. Header
+  const header = document.createElement('div');
+  header.className = 'modal-header';
+
+  const h3 = document.createElement('h3');
+  h3.textContent = 'Pembaruan Swararia Audio Lab';
+
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.className = 'modal-close-btn';
+  closeBtn.title = 'Tutup';
+  closeBtn.appendChild(createSvgIcon([
+    { tag: 'line', attrs: { x1: '18', y1: '6', x2: '6', y2: '18' } },
+    { tag: 'line', attrs: { x1: '6', y1: '6', x2: '18', y2: '18' } },
+  ]));
+  closeBtn.addEventListener('click', () => backdrop.remove());
+
+  header.appendChild(h3);
+  header.appendChild(closeBtn);
+
+  // 2. Body
+  const body = document.createElement('div');
+  body.className = 'modal-body';
+
+  const loadingWrap = document.createElement('div');
+  loadingWrap.className = 'update-loading-wrap';
+  loadingWrap.textContent = 'Memeriksa rilis terbaru dari GitHub dediks/audio-library...';
+  body.appendChild(loadingWrap);
+
+  // 3. Footer
+  const footer = document.createElement('div');
+  footer.className = 'modal-footer';
+
+  const btnClose = document.createElement('button');
+  btnClose.type = 'button';
+  btnClose.className = 'btn-modal-cancel';
+  btnClose.textContent = 'Tutup';
+  btnClose.addEventListener('click', () => backdrop.remove());
+  footer.appendChild(btnClose);
+
+  card.appendChild(header);
+  card.appendChild(body);
+  card.appendChild(footer);
+  backdrop.appendChild(card);
+  document.body.appendChild(backdrop);
+
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) backdrop.remove();
+  });
+
+  const onKeyDown = (e) => {
+    if (e.key === 'Escape') {
+      backdrop.remove();
+      window.removeEventListener('keydown', onKeyDown);
+    }
+  };
+  window.addEventListener('keydown', onKeyDown);
+
+  const renderData = (data) => {
+    body.replaceChildren();
+
+    if (!data || !data.ok) {
+      const banner = document.createElement('div');
+      banner.className = 'update-banner-card error';
+
+      const title = document.createElement('h4');
+      title.className = 'update-banner-title';
+      title.textContent = '⚠️ Tidak Dapat Memeriksa Rilis';
+
+      const desc = document.createElement('p');
+      desc.className = 'update-banner-sub';
+      desc.textContent = (data && data.error) ? data.error : 'Pastikan komputer terhubung ke internet atau periksa repositori GitHub.';
+
+      banner.appendChild(title);
+      banner.appendChild(desc);
+      body.appendChild(banner);
+
+      const actions = document.createElement('div');
+      actions.className = 'update-actions-bar';
+
+      const ghLink = document.createElement('a');
+      ghLink.className = 'btn-update-secondary';
+      ghLink.href = (data && data.html_url) || 'https://github.com/dediks/audio-library';
+      ghLink.target = '_blank';
+      ghLink.rel = 'noopener noreferrer';
+      ghLink.textContent = '🌐 Buka Repository GitHub';
+      actions.appendChild(ghLink);
+
+      body.appendChild(actions);
+      return;
+    }
+
+    if (data.has_update) {
+      const banner = document.createElement('div');
+      banner.className = 'update-banner-card has-update';
+
+      const title = document.createElement('h4');
+      title.className = 'update-banner-title';
+      title.textContent = '⚡ Versi Baru Tersedia: ' + data.latest_version;
+
+      const sub = document.createElement('p');
+      sub.className = 'update-banner-sub';
+      const pubDate = data.published_at ? data.published_at.substring(0, 10) : '';
+      sub.textContent = 'Versi Anda saat ini: v' + data.current_version + (pubDate ? ' • Dirilis pada: ' + pubDate : '');
+
+      banner.appendChild(title);
+      banner.appendChild(sub);
+      body.appendChild(banner);
+
+      if (data.release_name && data.release_name !== data.latest_version) {
+        const relName = document.createElement('div');
+        relName.className = 'update-section-title';
+        relName.textContent = data.release_name;
+        body.appendChild(relName);
+      }
+
+      const notesTitle = document.createElement('div');
+      notesTitle.className = 'update-section-title';
+      notesTitle.textContent = 'Catatan Rilis (Changelog):';
+      body.appendChild(notesTitle);
+
+      const changelog = document.createElement('pre');
+      changelog.className = 'update-changelog';
+      changelog.textContent = data.release_notes || 'Tidak ada catatan rilis tertulis.';
+      body.appendChild(changelog);
+
+      const actions = document.createElement('div');
+      actions.className = 'update-actions-bar';
+
+      if (data.download_url) {
+        const btnInstall = document.createElement('button');
+        btnInstall.type = 'button';
+        btnInstall.className = 'btn-update-primary';
+        btnInstall.textContent = '⚡ Unduh & Pasang Pembaruan';
+        btnInstall.addEventListener('click', async () => {
+          btnInstall.disabled = true;
+          btnInstall.textContent = 'Mengunduh... Mohon tunggu (aplikasi akan restart)';
+          try {
+            const res = await apiPost('/api/install-update', { download_url: data.download_url });
+            if (res.ok) {
+              btnInstall.textContent = 'Installer sedang dibuka... Menutup aplikasi.';
+            } else {
+              btnInstall.disabled = false;
+              btnInstall.textContent = 'Gagal memasang: ' + (res.data?.message || res.error || 'Unknown error');
+            }
+          } catch (err) {
+            btnInstall.disabled = false;
+            btnInstall.textContent = 'Gagal: ' + err.message;
+          }
+        });
+        actions.appendChild(btnInstall);
+      }
+
+      const ghLink = document.createElement('a');
+      ghLink.className = 'btn-update-secondary';
+      ghLink.href = data.html_url || 'https://github.com/dediks/audio-library/releases';
+      ghLink.target = '_blank';
+      ghLink.rel = 'noopener noreferrer';
+      ghLink.textContent = '🌐 Buka Rilis di GitHub';
+      actions.appendChild(ghLink);
+
+      body.appendChild(actions);
+    } else {
+      const banner = document.createElement('div');
+      banner.className = 'update-banner-card up-to-date';
+
+      const title = document.createElement('h4');
+      title.className = 'update-banner-title';
+      title.textContent = '✅ Anda Menggunakan Versi Terbaru (v' + data.current_version + ')';
+
+      const sub = document.createElement('p');
+      sub.className = 'update-banner-sub';
+      sub.textContent = data.message || 'Sistem telah memeriksa rilis resmi terbaru di GitHub dediks/audio-library.';
+
+      banner.appendChild(title);
+      banner.appendChild(sub);
+      body.appendChild(banner);
+
+      const actions = document.createElement('div');
+      actions.className = 'update-actions-bar';
+
+      const ghLink = document.createElement('a');
+      ghLink.className = 'btn-update-secondary';
+      ghLink.href = data.html_url || 'https://github.com/dediks/audio-library';
+      ghLink.target = '_blank';
+      ghLink.rel = 'noopener noreferrer';
+      ghLink.textContent = '🌐 Kunjungi Repository GitHub';
+      actions.appendChild(ghLink);
+
+      body.appendChild(actions);
+    }
+  };
+
+  const pill = document.getElementById('statusUpdate');
+  checkForUpdatesUI(pill ? { val: document.getElementById('updateVal'), dot: document.getElementById('updateDot'), pill } : null, true)
+    .then((data) => {
+      renderData(data);
+    })
+    .catch((err) => {
+      renderData({ ok: false, error: String(err) });
+    });
 }
