@@ -169,6 +169,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnSaveRemotePin = document.getElementById('btnSaveRemotePin');
   const remotePinFeedback = document.getElementById('remotePinFeedback');
   const btnOpenRemoteSimTab = document.getElementById('btnOpenRemoteSimTab');
+  const remoteClientsList = document.getElementById('remoteClientsList');
+  const btnKickAllRemotes = document.getElementById('btnKickAllRemotes');
+  const remoteBlockedSection = document.getElementById('remoteBlockedSection');
+  const remoteBlockedList = document.getElementById('remoteBlockedList');
 
   // Detect whether this tab is Master FOH Deck (Laptop/PC) or Wireless Remote Controller (HP)
   const initialUrlParams = new URLSearchParams(window.location.search);
@@ -194,10 +198,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   let remoteClientId = 'rm_default';
   try {
-    let cid = sessionStorage.getItem(REMOTE_CLIENT_ID_KEY);
+    const clientStorage = isLocalhostHost ? sessionStorage : localStorage;
+    let cid = clientStorage.getItem(REMOTE_CLIENT_ID_KEY);
     if (!cid) {
       cid = 'rm_' + Math.random().toString(36).slice(2, 10);
-      sessionStorage.setItem(REMOTE_CLIENT_ID_KEY, cid);
+      clientStorage.setItem(REMOTE_CLIENT_ID_KEY, cid);
     }
     remoteClientId = cid;
   } catch (_e) {
@@ -642,6 +647,8 @@ document.addEventListener('DOMContentLoaded', () => {
   // ---------------------------------------------------------------------------
   // 3. Real-Time RTA Spectrum & L/R VU Meter Canvas Loop
   // ---------------------------------------------------------------------------
+  let requestRtaWake = null;
+
   function startRtaRenderLoop() {
     if (!rtaCanvas) return;
     const ctx = rtaCanvas.getContext('2d');
@@ -653,8 +660,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 32 logarithmic frequency bands from ~25 Hz to ~19 kHz
     const numBands = 32;
+    let isRunning = false;
+    let idleDecayFrames = 0;
 
     function renderFrame() {
+      const isPlaying = isDeckPlaying();
+      if (!isPlaying) {
+        if (idleDecayFrames <= 0) {
+          isRunning = false;
+          latestVuL = 0;
+          latestVuR = 0;
+          return;
+        }
+        idleDecayFrames--;
+      } else {
+        idleDecayFrames = 4;
+      }
+
       const w = rtaCanvas.width;
       const h = rtaCanvas.height;
       ctx.fillStyle = '#050507';
@@ -675,8 +697,6 @@ document.addEventListener('DOMContentLoaded', () => {
       const rtaWidth = w - meterAreaWidth - 8;
       const barStep = rtaWidth / numBands;
       const barWidth = Math.max(4, barStep - 3);
-
-      const isPlaying = isDeckPlaying();
 
       if (isRemoteController) {
         if (isPlaying && Array.isArray(remoteRtaBands) && remoteRtaBands.length > 0) {
@@ -705,7 +725,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const singleMeterW = 16;
         drawVuBar(ctx, meterX, 4, singleMeterW, h - 8, isPlaying ? remoteVuL : 0);
         drawVuBar(ctx, meterX + singleMeterW + 6, 4, singleMeterW, h - 8, isPlaying ? remoteVuR : 0);
-        requestAnimationFrame(renderFrame);
+
+        if (isRunning) {
+          requestAnimationFrame(renderFrame);
+        }
         return;
       }
 
@@ -775,10 +798,12 @@ document.addEventListener('DOMContentLoaded', () => {
       // Draw L & R Vertical VU Bars on the right side of the canvas
       const meterX = rtaWidth + 8;
       const singleMeterW = 16;
-      drawVuBar(ctx, meterX, 4, singleMeterW, h - 8, peakL);
-      drawVuBar(ctx, meterX + singleMeterW + 6, 4, singleMeterW, h - 8, peakR);
+      drawVuBar(ctx, meterX, 4, singleMeterW, h - 8, isPlaying ? peakL : 0);
+      drawVuBar(ctx, meterX + singleMeterW + 6, 4, singleMeterW, h - 8, isPlaying ? peakR : 0);
 
-      requestAnimationFrame(renderFrame);
+      if (isRunning) {
+        requestAnimationFrame(renderFrame);
+      }
     }
 
     function drawVuBar(c, x, y, width, height, peakLin) {
@@ -801,7 +826,18 @@ document.addEventListener('DOMContentLoaded', () => {
       c.fillRect(x, fillY, width, fillH);
     }
 
-    requestAnimationFrame(renderFrame);
+    function wakeRtaLoop() {
+      idleDecayFrames = 4;
+      if (!isRunning) {
+        isRunning = true;
+        requestAnimationFrame(renderFrame);
+      }
+    }
+    requestRtaWake = wakeRtaLoop;
+
+    // Render single initial frame, then sleep until playback begins
+    idleDecayFrames = 1;
+    renderFrame();
   }
 
   function updatePeakBadge() {
@@ -978,6 +1014,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     try {
       await audioEl.play();
+      if (requestRtaWake) requestRtaWake();
       pendingAutoResumeOnGesture = false;
       setTransportStateBadge('PLAYING');
       syncPlayPauseButton(true);
@@ -1193,15 +1230,25 @@ document.addEventListener('DOMContentLoaded', () => {
   // ---------------------------------------------------------------------------
   // 5. Audio Element Events & Play Mode Transitions
   // ---------------------------------------------------------------------------
+  let lastSessionSaveTime = 0;
+  function savePlaybackSessionStateThrottled(minIntervalMs = 2000) {
+    const now = Date.now();
+    if (now - lastSessionSaveTime >= minIntervalMs) {
+      lastSessionSaveTime = now;
+      savePlaybackSessionState();
+    }
+  }
+
   if (audioEl) {
     audioEl.addEventListener('timeupdate', () => {
       updateTimecodeUI();
       if (!isPageUnloading) {
-        savePlaybackSessionState();
+        savePlaybackSessionStateThrottled(2000);
       }
     });
     audioEl.addEventListener('loadedmetadata', updateTimecodeUI);
     audioEl.addEventListener('play', () => {
+      if (requestRtaWake) requestRtaWake();
       if (!isPageUnloading) savePlaybackSessionState(true);
     });
     audioEl.addEventListener('pause', () => {
@@ -2438,7 +2485,12 @@ document.addEventListener('DOMContentLoaded', () => {
       applyGainAndEqNodes();
       savePlayerPrefs();
       if (isRemoteController) {
-        sendRemoteCommand('set_volume', { volume: Number(volumeSlider.value) });
+        sendThrottledRemoteCommand('set_volume', { volume: Number(volumeSlider.value) }, 60);
+      }
+    });
+    volumeSlider.addEventListener('change', () => {
+      if (isRemoteController) {
+        flushThrottledRemoteCommand('set_volume', { volume: Number(volumeSlider.value) });
       }
     });
   }
@@ -2460,7 +2512,12 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!isRemoteController) ensureAudioGraph();
       applyGainAndEqNodes();
       if (isRemoteController) {
-        sendRemoteCommand('set_preamp', { preamp_db: Number(preampSlider.value) });
+        sendThrottledRemoteCommand('set_preamp', { preamp_db: Number(preampSlider.value) }, 60);
+      }
+    });
+    preampSlider.addEventListener('change', () => {
+      if (isRemoteController) {
+        flushThrottledRemoteCommand('set_preamp', { preamp_db: Number(preampSlider.value) });
       }
     });
   }
@@ -2481,7 +2538,16 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!isRemoteController) ensureAudioGraph();
         applyGainAndEqNodes();
         if (isRemoteController) {
-          sendRemoteCommand('set_eq', {
+          sendThrottledRemoteCommand('set_eq', {
+            low_db: eqLowSlider ? Number(eqLowSlider.value) : 0,
+            mid_db: eqMidSlider ? Number(eqMidSlider.value) : 0,
+            high_db: eqHighSlider ? Number(eqHighSlider.value) : 0,
+          }, 60);
+        }
+      });
+      slider.addEventListener('change', () => {
+        if (isRemoteController) {
+          flushThrottledRemoteCommand('set_eq', {
             low_db: eqLowSlider ? Number(eqLowSlider.value) : 0,
             mid_db: eqMidSlider ? Number(eqMidSlider.value) : 0,
             high_db: eqHighSlider ? Number(eqHighSlider.value) : 0,
@@ -2531,7 +2597,13 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
   }
-  if (searchInput) searchInput.addEventListener('input', applyFiltersAndRenderTable);
+  let searchDebounceTimer = null;
+  if (searchInput) {
+    searchInput.addEventListener('input', () => {
+      clearTimeout(searchDebounceTimer);
+      searchDebounceTimer = setTimeout(applyFiltersAndRenderTable, 120);
+    });
+  }
   if (groupByMode) groupByMode.addEventListener('change', applyFiltersAndRenderTable);
   if (filterQcStatus) filterQcStatus.addEventListener('change', applyFiltersAndRenderTable);
   if (filterFormat) filterFormat.addEventListener('change', applyFiltersAndRenderTable);
@@ -2822,6 +2894,201 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  let lastRenderedClientsSig = '';
+  function renderConnectedRemoteClients(activeList = [], blockedList = [], forceRender = false) {
+    if (!remoteClientsList) return;
+    const safeActive = Array.isArray(activeList) ? activeList : [];
+    const safeBlocked = Array.isArray(blockedList) ? blockedList : [];
+
+    // Signature excluding idle_seconds so DOM buttons aren't recreated every 350ms while user hovers/clicks
+    const sigObj = {
+      a: safeActive.map(c => `${c.client_id}:${c.role}:${c.commands_sent || 0}:${c.ip}:${c.label}`),
+      b: safeBlocked.map(b => `${b.client_id}:${b.ip}:${b.label}`),
+    };
+    const sig = JSON.stringify(sigObj);
+    if (!forceRender && sig === lastRenderedClientsSig) {
+      return;
+    }
+    lastRenderedClientsSig = sig;
+
+    if (btnKickAllRemotes) {
+      btnKickAllRemotes.classList.toggle('hidden', safeActive.length === 0);
+    }
+
+    remoteClientsList.replaceChildren();
+    if (safeActive.length === 0) {
+      const emptyEl = document.createElement('div');
+      emptyEl.className = 'remote-client-empty';
+      emptyEl.textContent = 'Belum ada HP yang terhubung saat ini.';
+      remoteClientsList.appendChild(emptyEl);
+    } else {
+      safeActive.forEach(client => {
+        const row = document.createElement('div');
+        row.className = 'remote-client-item';
+
+        const infoCol = document.createElement('div');
+        infoCol.className = 'remote-client-info';
+
+        const nameRow = document.createElement('div');
+        nameRow.className = 'remote-client-name';
+
+        const dot = document.createElement('span');
+        dot.className = 'remote-client-dot';
+        nameRow.appendChild(dot);
+
+        const labelSpan = document.createElement('span');
+        labelSpan.textContent = client.label || 'Perangkat HP';
+        nameRow.appendChild(labelSpan);
+
+        const metaRow = document.createElement('div');
+        metaRow.className = 'remote-client-meta';
+        const shortId = String(client.tag || client.client_id || '').slice(-4);
+        const cmdCount = Number(client.commands_sent || client.cmd_count) || 0;
+        metaRow.textContent = `IP: ${client.ip || '-'} • ID #${shortId} • ${cmdCount} aksi`;
+
+        infoCol.appendChild(nameRow);
+        infoCol.appendChild(metaRow);
+
+        const actionsCol = document.createElement('div');
+        actionsCol.className = 'remote-client-actions';
+
+        const isViewOnly = client.role === 'view_only';
+        const roleBtn = document.createElement('button');
+        roleBtn.type = 'button';
+        roleBtn.className = 'btn-client-role' + (isViewOnly ? ' view-only' : '');
+        roleBtn.textContent = isViewOnly ? '👁️ Pantau Saja' : '🎛️ Kontrol Penuh';
+        roleBtn.title = isViewOnly
+          ? 'HP ini hanya bisa melihat layar tanpa mengubah fader/lagu. Klik untuk beri Kontrol Penuh.'
+          : 'HP ini bisa mengontrol Fader & Lagu. Klik untuk ubah ke Mode Pantau Saja (View-Only).';
+        roleBtn.addEventListener('click', async () => {
+          const nextRole = isViewOnly ? 'control' : 'view_only';
+          const { ok, data } = await apiPost('/api/remote/clients', {
+            action: 'set_role',
+            client_id: client.client_id,
+            role: nextRole,
+          });
+          if (ok && data) {
+            renderConnectedRemoteClients(data.active_remotes, data.blocked_remotes, true);
+            notify({
+              type: 'info',
+              title: nextRole === 'view_only' ? 'Mode Pantau (View-Only) Aktif' : 'Mode Kontrol Penuh Aktif',
+              message: `${client.label || 'HP'} (${client.ip}) kini dalam mode ${
+                nextRole === 'view_only' ? 'Pantau Saja' : 'Kontrol Penuh'
+              }.`,
+              duration: 2800,
+            });
+          }
+        });
+
+        const kickBtn = document.createElement('button');
+        kickBtn.type = 'button';
+        kickBtn.className = 'btn-client-kick';
+        kickBtn.textContent = '✕ Putus';
+        kickBtn.title = 'Putus koneksi & blokir HP ini dari Master Deck';
+        kickBtn.addEventListener('click', async () => {
+          const { ok, data } = await apiPost('/api/remote/clients', {
+            action: 'kick',
+            client_id: client.client_id,
+          });
+          if (ok && data) {
+            renderConnectedRemoteClients(data.active_remotes, data.blocked_remotes, true);
+            const cnt = Number(data.active_remotes_count) || 0;
+            if (remoteModalClientCount) {
+              remoteModalClientCount.textContent =
+                cnt > 0 ? `● ${cnt} HP Terhubung Aktif` : '0 HP Terhubung (Siap Menerima Koneksi)';
+            }
+            if (btnOpenRemoteModal && remoteHeaderLabel) {
+              btnOpenRemoteModal.classList.toggle('connected', cnt > 0);
+              remoteHeaderLabel.textContent = cnt > 0 ? `HP Remote (${cnt})` : 'HP Remote';
+            }
+            notify({
+              type: 'info',
+              title: 'Koneksi HP Diputus',
+              message: `${client.label || 'HP'} (${client.ip}) telah diputus dari Master Deck.`,
+              duration: 3000,
+            });
+          }
+        });
+
+        actionsCol.appendChild(roleBtn);
+        actionsCol.appendChild(kickBtn);
+        row.appendChild(infoCol);
+        row.appendChild(actionsCol);
+        remoteClientsList.appendChild(row);
+      });
+    }
+
+    if (remoteBlockedSection && remoteBlockedList) {
+      remoteBlockedSection.classList.toggle('hidden', safeBlocked.length === 0);
+      remoteBlockedList.replaceChildren();
+      safeBlocked.forEach(blocked => {
+        const row = document.createElement('div');
+        row.className = 'remote-client-item blocked';
+
+        const infoCol = document.createElement('div');
+        infoCol.className = 'remote-client-info';
+
+        const nameRow = document.createElement('div');
+        nameRow.className = 'remote-client-name';
+        nameRow.textContent = `⛔ ${blocked.label || 'Perangkat HP'}`;
+
+        const metaRow = document.createElement('div');
+        metaRow.className = 'remote-client-meta';
+        const shortId = String(blocked.client_id || '').slice(-4);
+        metaRow.textContent = `IP: ${blocked.ip || '-'} • ID #${shortId} (Diblokir)`;
+
+        infoCol.appendChild(nameRow);
+        infoCol.appendChild(metaRow);
+
+        const unblockBtn = document.createElement('button');
+        unblockBtn.type = 'button';
+        unblockBtn.className = 'btn-client-unblock';
+        unblockBtn.textContent = '✓ Izinkan Lagi';
+        unblockBtn.addEventListener('click', async () => {
+          const { ok, data } = await apiPost('/api/remote/clients', {
+            action: 'unblock',
+            client_id: blocked.client_id,
+          });
+          if (ok && data) {
+            renderConnectedRemoteClients(data.active_remotes, data.blocked_remotes, true);
+            notify({
+              type: 'success',
+              title: 'Perangkat Diizinkan Kembali',
+              message: `${blocked.label || 'HP'} (${blocked.ip}) dapat terhubung kembali.`,
+              duration: 2800,
+            });
+          }
+        });
+
+        row.appendChild(infoCol);
+        row.appendChild(unblockBtn);
+        remoteBlockedList.appendChild(row);
+      });
+    }
+  }
+
+  if (btnKickAllRemotes) {
+    btnKickAllRemotes.addEventListener('click', async () => {
+      const { ok, data } = await apiPost('/api/remote/clients', { action: 'kick_all' });
+      if (ok && data) {
+        renderConnectedRemoteClients(data.active_remotes, data.blocked_remotes, true);
+        if (remoteModalClientCount) {
+          remoteModalClientCount.textContent = '0 HP Terhubung (Siap Menerima Koneksi)';
+        }
+        if (btnOpenRemoteModal && remoteHeaderLabel) {
+          btnOpenRemoteModal.classList.remove('connected');
+          remoteHeaderLabel.textContent = 'HP Remote';
+        }
+        notify({
+          type: 'info',
+          title: 'Semua HP Diputus',
+          message: 'Seluruh perangkat HP yang terhubung telah diputus.',
+          duration: 3000,
+        });
+      }
+    });
+  }
+
   async function refreshRemoteModalInfo(forceIpRefresh = false) {
     try {
       const res = await fetch('/api/remote/info' + (forceIpRefresh ? '?refresh=1' : ''), {
@@ -2846,6 +3113,7 @@ document.addEventListener('DOMContentLoaded', () => {
         remoteModalClientCount.textContent =
           cnt > 0 ? `● ${cnt} HP Terhubung Aktif` : '0 HP Terhubung (Siap Menerima Koneksi)';
       }
+      renderConnectedRemoteClients(info.active_remotes, info.blocked_remotes, true);
       renderWslBridgeStatusUI(info.wsl_bridge);
       renderRemoteUrlItems(info.interfaces, info.remote_urls, info.pin);
     } catch (_e) {
@@ -3058,6 +3326,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  let lastRemoteBlockToastAt = 0;
   async function sendRemoteCommand(action, params = {}) {
     if (!isRemoteController) return;
     try {
@@ -3081,9 +3350,58 @@ document.addEventListener('DOMContentLoaded', () => {
           title: 'PIN FOH Remote Diperlukan',
           message: 'Masukkan 4-Digit PIN yang tertera di tombol HP Remote pada Laptop.',
         });
+      } else if (res.status === 403) {
+        const now = Date.now();
+        if (now - lastRemoteBlockToastAt > 2500) {
+          lastRemoteBlockToastAt = now;
+          const errData = await res.json().catch(() => ({}));
+          if (errData.code === 'VIEW_ONLY') {
+            notify({
+              type: 'info',
+              title: 'Mode Pantau Saja (View-Only)',
+              message: 'HP ini diatur ke Mode Pantau oleh operator Master Deck (tidak bisa mengubah kontrol).',
+              duration: 2600,
+            });
+          } else if (errData.code === 'KICKED') {
+            notify({
+              type: 'error',
+              title: 'Koneksi HP Diputus',
+              message: 'Akses HP ini telah diputus oleh operator Master Deck.',
+              duration: 3200,
+            });
+          }
+        }
       }
     } catch (_e) {
       // Ignore transient network errors
+    }
+  }
+
+  const throttledRemoteTimers = new Map();
+  function sendThrottledRemoteCommand(action, params = {}, delayMs = 60) {
+    if (!isRemoteController) return;
+    const existing = throttledRemoteTimers.get(action);
+    if (existing) {
+      existing.params = { ...existing.params, ...params };
+      return;
+    }
+    const item = { params };
+    item.timerId = setTimeout(() => {
+      throttledRemoteTimers.delete(action);
+      sendRemoteCommand(action, item.params);
+    }, delayMs);
+    throttledRemoteTimers.set(action, item);
+  }
+
+  function flushThrottledRemoteCommand(action, fallbackParams = null) {
+    if (!isRemoteController) return;
+    const existing = throttledRemoteTimers.get(action);
+    if (existing) {
+      clearTimeout(existing.timerId);
+      throttledRemoteTimers.delete(action);
+      sendRemoteCommand(action, fallbackParams !== null ? fallbackParams : existing.params);
+    } else if (fallbackParams !== null) {
+      sendRemoteCommand(action, fallbackParams);
     }
   }
 
@@ -3122,9 +3440,9 @@ document.addEventListener('DOMContentLoaded', () => {
       routing_mode: routingMode,
       auto_trim: Boolean(chkAutoTrim && chkAutoTrim.checked),
       peak_db: Number.isFinite(maxPeakHoldDb) ? Number(maxPeakHoldDb.toFixed(1)) : -100,
-      rta_bands: latestRtaBands,
-      vu_l: Number(latestVuL.toFixed(3)),
-      vu_r: Number(latestVuR.toFixed(3)),
+      rta_bands: isPlayingNow ? latestRtaBands : [],
+      vu_l: isPlayingNow ? Number(latestVuL.toFixed(3)) : 0,
+      vu_r: isPlayingNow ? Number(latestVuR.toFixed(3)) : 0,
       cue_pads: cuePads,
       source_dir: currentSourceDir || '',
       active_playlist: activePlaylist || 'ALL',
@@ -3316,6 +3634,9 @@ document.addEventListener('DOMContentLoaded', () => {
           remoteModalClientCount.textContent =
             cnt > 0 ? `● ${cnt} HP Terhubung Aktif` : '0 HP Terhubung (Siap Menerima Koneksi)';
         }
+        if (remoteModal && !remoteModal.classList.contains('hidden')) {
+          renderConnectedRemoteClients(data.active_remotes, data.blocked_remotes, false);
+        }
         if (Array.isArray(data.commands) && data.commands.length > 0) {
           data.commands.forEach(cmd => executeRemoteCommandOnMaster(cmd));
         }
@@ -3349,6 +3670,10 @@ document.addEventListener('DOMContentLoaded', () => {
     remoteIsPlaying = Boolean(st.is_playing);
     remoteCurrentTime = Number(st.current_time) || 0;
     remoteDuration = Number(st.duration) || 0;
+
+    if (remoteIsPlaying && requestRtaWake) {
+      requestRtaWake();
+    }
 
     setTransportStateBadge(st.transport_state || 'STANDBY');
     syncPlayPauseButton(remoteIsPlaying);
@@ -3455,8 +3780,13 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
       if (res.status === 403) {
+        const errData = await res.json().catch(() => ({}));
         if (remoteConnStatus) {
-          remoteConnStatus.textContent = '⛔ HP Remote sedang dinonaktifkan di Laptop Master Deck';
+          if (errData.code === 'KICKED') {
+            remoteConnStatus.textContent = '⛔ Koneksi HP ini telah diputus oleh Master Deck';
+          } else {
+            remoteConnStatus.textContent = '⛔ HP Remote sedang dinonaktifkan di Laptop Master Deck';
+          }
           remoteConnStatus.className = 'remote-conn-status err';
         }
         return;
@@ -3465,8 +3795,13 @@ document.addEventListener('DOMContentLoaded', () => {
         const data = await res.json();
         if (remoteConnStatus) {
           if (data.master_online) {
-            remoteConnStatus.textContent = '● Connected to Master Deck (Audio Out: Laptop/Soundcard)';
-            remoteConnStatus.className = 'remote-conn-status online';
+            if (data.role === 'view_only') {
+              remoteConnStatus.textContent = '👁️ Mode Pantau Saja (View-Only) — Terhubung ke Master Deck';
+              remoteConnStatus.className = 'remote-conn-status warn';
+            } else {
+              remoteConnStatus.textContent = '● Connected to Master Deck (Audio Out: Laptop/Soundcard)';
+              remoteConnStatus.className = 'remote-conn-status online';
+            }
           } else {
             remoteConnStatus.textContent = '○ Menunggu halaman /player dibuka di Laptop Master Deck...';
             remoteConnStatus.className = 'remote-conn-status warn';
@@ -3520,8 +3855,8 @@ document.addEventListener('DOMContentLoaded', () => {
   renderCuePads();
   if (!isRemoteController) {
     refreshAudioOutputDevices();
-    startRtaRenderLoop();
   }
+  startRtaRenderLoop();
   fetchLibrary(currentSourceDir);
   initRemoteModeEngine();
 });

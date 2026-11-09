@@ -167,17 +167,17 @@ def _parse_windows_ipconfig() -> list[dict]:
                 continue
             if is_virtual:
                 kind = "virtual"
-                label = f"Virtual Adapter ({short_name})"
+                label = f"Virtual ({short_name})"
                 reachable = False
                 priority = 90
             elif is_wifi:
                 kind = "wifi"
-                label = f"Wi-Fi / Hotspot Laptop ({short_name})"
+                label = f"Wi-Fi ({short_name})"
                 reachable = True
                 priority = 1 if curr_gw else 2
             else:
                 kind = "lan"
-                label = f"LAN Ethernet Laptop ({short_name})"
+                label = f"LAN ({short_name})"
                 reachable = True
                 priority = 3 if curr_gw else 4
             adapters.append({
@@ -274,7 +274,7 @@ def get_network_interfaces_detail(force_refresh: bool = False) -> list[dict]:
             interfaces.append({
                 "ip": ip,
                 "adapter": "WSL2 eth0",
-                "label": "WSL2 Virtual IP (Internal Linux di dalam Laptop — Bukan IP Wi-Fi)",
+                "label": "WSL2 Internal IP",
                 "kind": "wsl_internal",
                 "has_gateway": True,
                 "reachable_from_hp": False,
@@ -284,7 +284,7 @@ def get_network_interfaces_detail(force_refresh: bool = False) -> list[dict]:
             interfaces.append({
                 "ip": ip,
                 "adapter": "Local Network",
-                "label": "Wi-Fi / LAN Laptop",
+                "label": "Wi-Fi / LAN",
                 "kind": "wifi",
                 "has_gateway": True,
                 "reachable_from_hp": True,
@@ -623,6 +623,70 @@ ALLOWED_REMOTE_ACTIONS = {
     "select_playlist",
 }
 
+COALESCING_REMOTE_ACTIONS = {
+    "set_volume",
+    "set_preamp",
+    "set_eq",
+    "seek_ratio",
+    "set_autotrim",
+    "set_routing",
+    "set_play_mode",
+}
+
+
+def _parse_client_device_label(user_agent: str, client_ip: str) -> str:
+    """Extracts a safe, human-readable device & browser label from User-Agent."""
+    ua = (user_agent or "").strip()
+    ua_low = ua.lower()
+
+    if "iphone" in ua_low:
+        os_name = "iPhone (iOS)"
+    elif "ipad" in ua_low:
+        os_name = "iPad (iPadOS)"
+    elif "android" in ua_low:
+        model_match = re.search(
+            r"android\s+[\d.]+;\s*([a-zA-Z0-9 _\-]{2,24}?)(?:\s+build/|\))",
+            ua,
+            flags=re.IGNORECASE,
+        )
+        model_str = model_match.group(1).strip() if model_match else ""
+        if model_str and model_str.upper() != "K":
+            os_name = f"Android ({model_str})"
+        else:
+            os_name = "Android"
+    elif "macintosh" in ua_low or "mac os" in ua_low:
+        os_name = "Mac"
+    elif "windows" in ua_low:
+        os_name = "Windows"
+    elif "linux" in ua_low:
+        os_name = "Linux"
+    else:
+        os_name = "Mobile"
+
+    if "edg/" in ua_low or "edga/" in ua_low or "edgios/" in ua_low:
+        browser = "Edge"
+    elif "opr/" in ua_low or "opera" in ua_low:
+        browser = "Opera"
+    elif "samsungbrowser" in ua_low:
+        browser = "Samsung"
+    elif "crios/" in ua_low or ("chrome/" in ua_low and "chromium" not in ua_low):
+        browser = "Chrome"
+    elif "fxios/" in ua_low or "firefox/" in ua_low:
+        browser = "Firefox"
+    elif "safari/" in ua_low and "chrome/" not in ua_low:
+        browser = "Safari"
+    else:
+        browser = "Browser"
+
+    if client_ip in ("127.0.0.1", "::1", "::ffff:127.0.0.1") and os_name in (
+        "Windows",
+        "Linux",
+        "Mac",
+        "Mobile",
+    ):
+        return f"Local Sim • {browser}"
+    return f"{os_name} • {browser}"
+
 
 class RemotePlayerHub:
     """Thread-safe synchronization hub between Master FOH Deck (Laptop/PC) and HP Wireless Remotes."""
@@ -657,12 +721,156 @@ class RemotePlayerHub:
         self.master_updated_at: float = 0.0
         self.command_queue: list[dict] = []
         self.next_cmd_id: int = 1
-        self.remote_clients: dict[str, float] = {}
+        self.remote_clients: dict[str, dict] = {}
+        self.blocked_clients: dict[str, dict] = {}
+        self.client_roles: dict[str, str] = {}
 
     def _prune_clients_unlocked(self, now: float) -> None:
-        stale = [cid for cid, ts in self.remote_clients.items() if (now - ts) > 10.0]
+        stale = [
+            cid
+            for cid, info in self.remote_clients.items()
+            if (now - float(info.get("last_seen", 0.0) if isinstance(info, dict) else info)) > 12.0
+        ]
         for cid in stale:
             self.remote_clients.pop(cid, None)
+
+    def _touch_client_unlocked(
+        self,
+        client_id: str,
+        client_ip: str,
+        client_tag: str,
+        user_agent: str,
+        now: float,
+        inc_cmd: bool = False,
+    ) -> dict:
+        existing = self.remote_clients.get(client_id)
+        if not isinstance(existing, dict):
+            existing = {
+                "client_id": client_id,
+                "ip": client_ip or client_id.split(":", 1)[0],
+                "tag": client_tag or "mobile",
+                "label": _parse_client_device_label(user_agent, client_ip),
+                "first_seen": now,
+                "last_seen": now,
+                "commands_sent": 0,
+            }
+            self.remote_clients[client_id] = existing
+        else:
+            existing["last_seen"] = now
+            if user_agent and existing.get("label", "").startswith("HP Remote"):
+                existing["label"] = _parse_client_device_label(user_agent, client_ip)
+        if inc_cmd:
+            existing["commands_sent"] = int(existing.get("commands_sent", 0)) + 1
+        return existing
+
+    def _get_clients_lists_unlocked(self, now: float) -> tuple[list[dict], list[dict]]:
+        self._prune_clients_unlocked(now)
+        active_list: list[dict] = []
+        for cid, raw_info in self.remote_clients.items():
+            if isinstance(raw_info, dict):
+                ip = str(raw_info.get("ip") or cid.split(":", 1)[0])
+                tag = str(raw_info.get("tag") or "")
+                label = str(raw_info.get("label") or "HP Remote")
+                first_seen = float(raw_info.get("first_seen") or now)
+                last_seen = float(raw_info.get("last_seen") or now)
+                cmds = int(raw_info.get("commands_sent") or 0)
+            else:
+                ip = cid.split(":", 1)[0]
+                tag = cid.split(":", 1)[1] if ":" in cid else "mobile"
+                label = "HP Remote"
+                first_seen = float(raw_info)
+                last_seen = float(raw_info)
+                cmds = 0
+            active_list.append({
+                "client_id": cid,
+                "ip": ip,
+                "tag": tag,
+                "label": label,
+                "role": self.client_roles.get(cid, "control"),
+                "last_seen_ago": round(max(0.0, now - last_seen), 1),
+                "connected_sec": int(max(0.0, now - first_seen)),
+                "commands_sent": cmds,
+            })
+        active_list.sort(key=lambda x: x["connected_sec"], reverse=True)
+
+        blocked_list: list[dict] = []
+        for cid, binfo in self.blocked_clients.items():
+            blocked_list.append({
+                "client_id": cid,
+                "ip": str(binfo.get("ip") or cid.split(":", 1)[0]),
+                "label": str(binfo.get("label") or "HP Remote"),
+                "blocked_ago": int(max(0.0, now - float(binfo.get("blocked_at") or now))),
+            })
+        return active_list, blocked_list
+
+    def get_clients_lists(self) -> tuple[list[dict], list[dict]]:
+        now = time.time()
+        with self.lock:
+            return self._get_clients_lists_unlocked(now)
+
+    def is_client_blocked(self, client_id: str) -> bool:
+        with self.lock:
+            return client_id in self.blocked_clients
+
+    def get_client_role(self, client_id: str) -> str:
+        with self.lock:
+            return self.client_roles.get(client_id, "control")
+
+    def kick_client(self, client_id: str) -> bool:
+        clean_id = str(client_id or "").strip()
+        if not clean_id:
+            return False
+        now = time.time()
+        with self.lock:
+            info = self.remote_clients.pop(clean_id, None)
+            ip = clean_id.split(":", 1)[0]
+            label = "HP Remote"
+            if isinstance(info, dict):
+                ip = str(info.get("ip") or ip)
+                label = str(info.get("label") or label)
+            self.blocked_clients[clean_id] = {
+                "client_id": clean_id,
+                "ip": ip,
+                "label": label,
+                "blocked_at": now,
+            }
+            self.command_queue = [c for c in self.command_queue if c.get("client_id") != clean_id]
+            return True
+
+    def kick_all_clients(self) -> int:
+        now = time.time()
+        with self.lock:
+            count = len(self.remote_clients)
+            for cid, info in list(self.remote_clients.items()):
+                ip = cid.split(":", 1)[0]
+                label = "HP Remote"
+                if isinstance(info, dict):
+                    ip = str(info.get("ip") or ip)
+                    label = str(info.get("label") or label)
+                self.blocked_clients[cid] = {
+                    "client_id": cid,
+                    "ip": ip,
+                    "label": label,
+                    "blocked_at": now,
+                }
+            self.remote_clients.clear()
+            self.command_queue.clear()
+            return count
+
+    def unblock_client(self, client_id: str) -> bool:
+        clean_id = str(client_id or "").strip()
+        if not clean_id:
+            return False
+        with self.lock:
+            return self.blocked_clients.pop(clean_id, None) is not None
+
+    def set_client_role(self, client_id: str, role: str) -> str:
+        clean_id = str(client_id or "").strip()
+        new_role = "view_only" if str(role or "").strip().lower() == "view_only" else "control"
+        if clean_id:
+            with self.lock:
+                self.client_roles[clean_id] = new_role
+        return new_role
 
     def verify_pin(self, candidate: str | None) -> bool:
         clean = str(candidate or "").strip()
@@ -675,6 +883,8 @@ class RemotePlayerHub:
         with self.lock:
             self.pin = f"{secrets.randbelow(9000) + 1000:04d}"
             self.remote_clients.clear()
+            self.blocked_clients.clear()
+            self.command_queue.clear()
             return self.pin
 
     def set_enabled(self, flag: bool) -> bool:
@@ -702,29 +912,58 @@ class RemotePlayerHub:
             self.command_queue.clear()
             return pending, len(self.remote_clients), self.pin, self.enabled
 
-    def get_remote_state(self, client_id: str) -> dict:
+    def get_remote_state(
+        self,
+        client_id: str,
+        client_ip: str = "",
+        client_tag: str = "",
+        user_agent: str = "",
+    ) -> dict:
         now = time.time()
         with self.lock:
-            self.remote_clients[client_id] = now
+            self._touch_client_unlocked(client_id, client_ip, client_tag, user_agent, now, inc_cmd=False)
             self._prune_clients_unlocked(now)
             return {
                 "ok": True,
                 "enabled": self.enabled,
+                "role": self.client_roles.get(client_id, "control"),
                 "master_online": (now - self.master_updated_at) < 5.0,
                 "master_updated_at": self.master_updated_at,
                 "active_remotes_count": len(self.remote_clients),
                 "state": self.master_state,
             }
 
-    def enqueue_command(self, action: str, params: dict | None, client_id: str) -> dict:
+    def enqueue_command(
+        self,
+        action: str,
+        params: dict | None,
+        client_id: str,
+        client_ip: str = "",
+        client_tag: str = "",
+        user_agent: str = "",
+    ) -> dict:
         now = time.time()
+        safe_params = params if isinstance(params, dict) else {}
         with self.lock:
-            self.remote_clients[client_id] = now
+            self._touch_client_unlocked(client_id, client_ip, client_tag, user_agent, now, inc_cmd=True)
             self._prune_clients_unlocked(now)
+
+            if action in COALESCING_REMOTE_ACTIONS:
+                for existing in reversed(self.command_queue):
+                    if existing["action"] == action:
+                        if action == "set_eq":
+                            existing["params"].update(safe_params)
+                        else:
+                            existing["params"] = safe_params
+                        existing["created_at"] = now
+                        existing["client_id"] = client_id
+                        return existing
+
             cmd = {
                 "id": self.next_cmd_id,
                 "action": action,
-                "params": params if isinstance(params, dict) else {},
+                "params": safe_params,
+                "client_id": client_id,
                 "created_at": now,
             }
             self.next_cmd_id += 1
@@ -739,6 +978,9 @@ remote_hub = RemotePlayerHub()
 
 class AudioServerHandler(BaseHTTPRequestHandler):
     """Secure HTTP Request Handler with FOH Mobile Remote LAN Gate."""
+
+    protocol_version = "HTTP/1.1"
+    timeout = 10.0
 
     def is_localhost_client(self) -> bool:
         client_ip = str(self.client_address[0])
@@ -786,6 +1028,7 @@ class AudioServerHandler(BaseHTTPRequestHandler):
             if path in ("/", "/index.html"):
                 self.send_response(302)
                 self.send_header("Location", "/player?remote=1")
+                self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
             allowed_lan_get = path in (
@@ -837,6 +1080,7 @@ class AudioServerHandler(BaseHTTPRequestHandler):
             lan_ips = get_local_lan_ips(force_refresh=False)
             actual_port = int(self.server.server_address[1])
             remote_port = _get_wsl_remote_bridge_port(actual_port)
+            active_list, blocked_list = remote_hub.get_clients_lists()
             info: dict = {
                 "ok": True,
                 "is_localhost": is_local,
@@ -844,10 +1088,12 @@ class AudioServerHandler(BaseHTTPRequestHandler):
                 "port": remote_port,
                 "lan_ips": lan_ips,
                 "master_online": (time.time() - remote_hub.master_updated_at) < 5.0,
-                "active_remotes_count": remote_hub.get_active_remotes_count(),
+                "active_remotes_count": len(active_list),
             }
             if is_local:
                 info["pin"] = remote_hub.pin
+                info["active_remotes"] = active_list
+                info["blocked_remotes"] = blocked_list
                 info["interfaces"] = [
                     {
                         **iface,
@@ -874,9 +1120,19 @@ class AudioServerHandler(BaseHTTPRequestHandler):
             if not remote_hub.verify_pin(pin):
                 self.send_json(401, {"ok": False, "error": "PIN FOH Remote tidak valid atau belum dimasukkan.", "code": "INVALID_PIN"})
                 return
-            client_tag = self.headers.get("X-FOH-Client-ID") or "mobile"
-            client_id = f"{self.client_address[0]}:{client_tag[:32]}"
-            self.send_json(200, remote_hub.get_remote_state(client_id))
+            client_ip = str(self.client_address[0])
+            raw_tag = (self.headers.get("X-FOH-Client-ID") or "mobile").strip()
+            client_tag = re.sub(r"[^a-zA-Z0-9_\-]", "", raw_tag)[:32] or "mobile"
+            client_id = f"{client_ip}:{client_tag}"
+            if remote_hub.is_client_blocked(client_id):
+                self.send_json(403, {
+                    "ok": False,
+                    "error": "Koneksi HP ini telah diputus oleh operator Master Deck.",
+                    "code": "KICKED",
+                })
+                return
+            ua = self.headers.get("User-Agent") or ""
+            self.send_json(200, remote_hub.get_remote_state(client_id, client_ip, client_tag, ua))
         elif path == "/api/queue":
             self.send_json(200, task_manager.get_snapshot(history_limit=10))
         elif path == "/api/library":
@@ -955,14 +1211,40 @@ class AudioServerHandler(BaseHTTPRequestHandler):
             if "enabled" in payload and isinstance(payload["enabled"], bool):
                 remote_hub.set_enabled(payload["enabled"])
             commands, active_count, current_pin, is_enabled = remote_hub.update_master_state(payload.get("state"))
+            active_list, blocked_list = remote_hub.get_clients_lists()
             self.send_json(200, {
                 "ok": True,
                 "commands": commands,
                 "active_remotes_count": active_count,
+                "active_remotes": active_list,
+                "blocked_remotes": blocked_list,
                 "pin": current_pin,
                 "enabled": is_enabled,
-                "lan_ips": get_local_lan_ips(),
                 "port": int(self.server.server_address[1]),
+            })
+        elif path == "/api/remote/clients":
+            if not is_local:
+                self.send_json(403, {"error": "Hanya Master Deck lokal yang dapat mengelola koneksi HP."})
+                return
+            op = str(payload.get("action") or "").strip().lower()
+            target_cid = str(payload.get("client_id") or "").strip()
+            if op == "kick" and target_cid:
+                remote_hub.kick_client(target_cid)
+            elif op == "kick_all":
+                remote_hub.kick_all_clients()
+            elif op == "unblock" and target_cid:
+                remote_hub.unblock_client(target_cid)
+            elif op == "set_role" and target_cid:
+                remote_hub.set_client_role(target_cid, str(payload.get("role") or "control"))
+            else:
+                self.send_json(400, {"ok": False, "error": "Perintah manajemen perangkat tidak valid."})
+                return
+            active_list, blocked_list = remote_hub.get_clients_lists()
+            self.send_json(200, {
+                "ok": True,
+                "active_remotes_count": len(active_list),
+                "active_remotes": active_list,
+                "blocked_remotes": blocked_list,
             })
         elif path == "/api/remote/command":
             if not remote_hub.enabled:
@@ -976,9 +1258,26 @@ class AudioServerHandler(BaseHTTPRequestHandler):
             if action not in ALLOWED_REMOTE_ACTIONS:
                 self.send_json(400, {"ok": False, "error": f"Action '{action}' tidak dikenali."})
                 return
-            client_tag = self.headers.get("X-FOH-Client-ID") or "mobile"
-            client_id = f"{self.client_address[0]}:{client_tag[:32]}"
-            cmd = remote_hub.enqueue_command(action, payload.get("params"), client_id)
+            client_ip = str(self.client_address[0])
+            raw_tag = (self.headers.get("X-FOH-Client-ID") or "mobile").strip()
+            client_tag = re.sub(r"[^a-zA-Z0-9_\-]", "", raw_tag)[:32] or "mobile"
+            client_id = f"{client_ip}:{client_tag}"
+            if remote_hub.is_client_blocked(client_id):
+                self.send_json(403, {
+                    "ok": False,
+                    "error": "Koneksi HP ini telah diputus oleh operator Master Deck.",
+                    "code": "KICKED",
+                })
+                return
+            if remote_hub.get_client_role(client_id) == "view_only":
+                self.send_json(403, {
+                    "ok": False,
+                    "error": "HP ini diatur ke mode Pantau Saja (View-Only) oleh Master Deck.",
+                    "code": "VIEW_ONLY",
+                })
+                return
+            ua = self.headers.get("User-Agent") or ""
+            cmd = remote_hub.enqueue_command(action, payload.get("params"), client_id, client_ip, client_tag, ua)
             self.send_json(200, {"ok": True, "command_id": cmd["id"]})
         elif path == "/api/download":
             status, resp = task_manager.enqueue_downloads(payload)
@@ -1335,6 +1634,7 @@ class AudioServerHandler(BaseHTTPRequestHandler):
                         self.send_response(416)
                         self.send_security_headers(content_type)
                         self.send_header("Content-Range", f"bytes */{file_size}")
+                        self.send_header("Content-Length", "0")
                         self.end_headers()
                         return
                 except ValueError:
@@ -1368,6 +1668,7 @@ class AudioServerHandler(BaseHTTPRequestHandler):
                     remaining -= len(chunk)
         except (BrokenPipeError, ConnectionResetError):
             # Normal when browser/WebView seeks or switches tracks mid-stream
+            self.close_connection = True
             return
         except Exception as exc:
             sys.stderr.write(f"[Stream Error] {exc}\n")

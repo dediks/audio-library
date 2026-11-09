@@ -21,15 +21,15 @@
     <div class="remote-mode-banner hidden" id="remoteModeBanner" role="status" aria-live="polite">
       <div class="remote-banner-top-row">
         <div class="remote-banner-left">
-          <span class="remote-banner-pill">FOH REMOTE</span>
-          <span class="remote-conn-status" id="remoteConnStatus">Menghubungkan ke Master Deck...</span>
+          <span class="remote-banner-pill">REMOTE</span>
+          <span class="remote-conn-status" id="remoteConnStatus">Connecting...</span>
         </div>
         <div class="remote-banner-actions">
-          <button type="button" id="btnRemotePinPrompt" class="btn-nudge remote-pin-btn" title="Masukkan atau ubah PIN Keamanan 4-Digit">
+          <button type="button" id="btnRemotePinPrompt" class="btn-nudge remote-pin-btn" title="Enter 4-Digit PIN">
             <span id="remotePinBtnText">PIN: ----</span>
           </button>
-          <button type="button" id="btnExitRemoteSim" class="btn-nudge hidden" title="Kembali ke Mode Master Deck (Laptop)">
-            <span>Mode Laptop</span>
+          <button type="button" id="btnExitRemoteSim" class="btn-nudge hidden" title="Exit Remote Mode">
+            <span>Master View</span>
           </button>
         </div>
       </div>
@@ -52,9 +52,9 @@
             </div>
           </div>
           <div class="transport-status-badges">
-            <button type="button" class="btn-remote-trigger" id="btnOpenRemoteModal" title="Kontrol FOH Player secara nirkabel menggunakan HP (Wi-Fi / Hotspot)">
+            <button type="button" class="btn-remote-trigger" id="btnOpenRemoteModal" title="FOH Wireless Remote">
               <span class="remote-dot" id="remoteHeaderDot"></span>
-              <span id="remoteHeaderLabel">HP Remote</span>
+              <span id="remoteHeaderLabel">Remote</span>
             </button>
             <span class="foh-state-pill standby" id="playerStateBadge">STANDBY</span>
             <span class="panel-badge" id="activePlayModeBadge">CUE (AUTO-STOP)</span>
@@ -544,45 +544,40 @@
   <!-- FOH Wireless Mobile Remote Modal -->
   <div class="modal-backdrop hidden" id="remoteModal" role="dialog" aria-modal="true" aria-labelledby="remoteModalTitle">
     <div class="modal-card remote-modal-card">
-      <div class="modal-header">
-        <div>
-          <h3 id="remoteModalTitle">FOH Wireless Remote — Kontrol dari HP</h3>
-          <p class="pad-picker-subtitle">Kendalikan Transport, Master Fader, 3-Band EQ, Phase, Cue Pads &amp; Setlist dari smartphone Anda</p>
-        </div>
-        <button type="button" id="btnCloseRemoteModal" class="btn-text">&#10005; Tutup</button>
+      <div class="modal-header remote-modal-header">
+        <h3 id="remoteModalTitle">FOH Wireless Remote</h3>
+        <button type="button" id="btnCloseRemoteModal" class="btn-text" aria-label="Close">&#10005;</button>
       </div>
       <div class="modal-body remote-modal-body">
         <!-- Master Deck Pairing Panel (Shown on Laptop/PC) -->
         <div id="remoteMasterSetupPanel">
           <div class="remote-status-strip">
             <div class="remote-status-info">
-              <span class="remote-status-title">Status Akses Jaringan Lokal (Wi-Fi / Hotspot)</span>
-              <span class="remote-status-sub" id="remoteModalClientCount">0 HP Terhubung</span>
+              <span class="remote-status-title">Wireless Access</span>
+              <span class="remote-status-sub" id="remoteModalClientCount">0 Connected</span>
             </div>
             <label class="autotrim-check-wrap">
               <input type="checkbox" id="chkRemoteEnabled" checked>
-              <span>Aktifkan HP Remote</span>
+              <span>Enable</span>
             </label>
           </div>
 
-          <!-- WSL2 Port Forwarding & Windows Firewall Helper Banner (Auto-shown on WSL2) -->
+          <!-- WSL2 Port Bridge Strip (Auto-shown on WSL2) -->
           <div class="remote-wsl-bridge-box hidden" id="remoteWslBridgeBox">
             <div class="remote-wsl-bridge-top">
               <div class="remote-wsl-bridge-info">
-                <strong id="remoteWslBridgeTitle">Mode WSL2 Terdeteksi: Perlu Izin Port Windows &rarr; WSL2</strong>
-                <p id="remoteWslBridgeDesc">
-                  Karena aplikasi berjalan di dalam WSL2 (Linux di atas Windows), Windows secara default memblokir akses dari HP ke dalam WSL2. Klik tombol di kanan untuk membuka jembatan port 8765 secara otomatis.
-                </p>
+                <strong id="remoteWslBridgeTitle">WSL2 Port Bridge</strong>
+                <p id="remoteWslBridgeDesc">Forward Wi-Fi port to WSL2</p>
               </div>
               <div class="remote-wsl-bridge-actions">
                 <button type="button" id="btnEnableWslBridge" class="btn-accent btn-sm">
-                  <span id="btnEnableWslBridgeText">Aktifkan Akses HP (1-Klik)</span>
+                  <span id="btnEnableWslBridgeText">Connect</span>
                 </button>
-                <button type="button" id="btnDisableWslBridge" class="btn-nudge hidden" title="Hapus kembali aturan portproxy &amp; firewall Windows setelah selesai digunakan">
-                  Tutup Port
+                <button type="button" id="btnDisableWslBridge" class="btn-nudge hidden" title="Close port bridge">
+                  Disconnect
                 </button>
-                <button type="button" id="btnCopyWslCmd" class="btn-nudge" title="Salin perintah PowerShell Administrator jika ingin dijalankan manual">
-                  Salin Cmd PowerShell
+                <button type="button" id="btnCopyWslCmd" class="btn-nudge" title="Copy PowerShell Admin command">
+                  Copy Cmd
                 </button>
               </div>
             </div>
@@ -591,26 +586,26 @@
           <div class="remote-pairing-grid">
             <div class="remote-qr-card">
               <div class="remote-qr-frame">
-                <canvas id="remoteQrCanvas" width="180" height="180" aria-label="QR Code FOH Mobile Remote"></canvas>
+                <canvas id="remoteQrCanvas" width="144" height="144" aria-label="Remote QR Code"></canvas>
               </div>
-              <span class="remote-qr-caption" id="remoteQrCaption">Scan QR dengan Kamera HP</span>
+              <span class="remote-qr-caption" id="remoteQrCaption">Scan QR</span>
             </div>
 
             <div class="remote-pairing-right">
               <div class="remote-pin-card">
                 <div class="remote-pin-info">
-                  <span class="remote-pin-label">PIN Keamanan 4-Digit (Otomatis masuk via QR)</span>
+                  <span class="remote-pin-label">PIN</span>
                   <strong class="remote-pin-code" id="remotePinDisplay">----</strong>
                 </div>
-                <button type="button" id="btnRegenRemotePin" class="btn-nudge" title="Buat PIN 4-Digit baru dan perbarui QR Code">
-                  Acak PIN Baru
+                <button type="button" id="btnRegenRemotePin" class="btn-nudge" title="Generate new 4-digit PIN">
+                  New PIN
                 </button>
               </div>
 
               <div class="remote-url-section">
                 <div class="remote-url-header">
-                  <span class="remote-url-title">Daftar IP Terdeteksi (Klik untuk tampilkan di QR):</span>
-                  <button type="button" id="btnRefreshRemoteIps" class="btn-nudge">Refresh IP</button>
+                  <span class="remote-url-title">Network IP</span>
+                  <button type="button" id="btnRefreshRemoteIps" class="btn-nudge">Refresh</button>
                 </div>
                 <div class="remote-url-list" id="remoteUrlList"></div>
 
@@ -619,29 +614,35 @@
                     type="text"
                     id="remoteManualIpInput"
                     class="toolbar-input remote-manual-ip-input"
-                    placeholder="Ketik IP Wi-Fi Laptop manual (mis. 192.168.1.20)..."
-                    aria-label="IP Wi-Fi Laptop Manual"
+                    placeholder="Custom IP (e.g. 192.168.1.20)"
+                    aria-label="Custom IP"
                   >
-                  <button type="button" id="btnApplyManualIp" class="btn-nudge">Gunakan IP Ini</button>
+                  <button type="button" id="btnApplyManualIp" class="btn-nudge">Connect</button>
                 </div>
               </div>
             </div>
           </div>
 
-          <div class="remote-steps-box">
-            <h4>Cara Menghubungkan HP ke Master Deck:</h4>
-            <ol class="remote-steps-list">
-              <li>Pastikan <strong>HP dan Laptop/PC ini terhubung ke Wi-Fi yang sama</strong> (atau nyalakan <em>Hotspot Pribadi / Tethering</em> di HP lalu sambungkan Laptop ke Hotspot HP tersebut — <strong>100% offline tanpa kuota internet</strong>).</li>
-              <li><strong>Scan QR Code</strong> di atas menggunakan aplikasi Kamera HP / Google Lens (atau ketik URL di Chrome / Safari HP). Link QR sudah otomatis menyertakan PIN 4-Digit.</li>
-              <li>Audio tetap keluar secara murni dari <strong>Soundcard / Mixer di Laptop/PC</strong>, sementara layar HP berubah menjadi <strong>Wireless Remote Controller</strong> lengkap dengan Live RTA &amp; Timecode!</li>
-            </ol>
+          <!-- Connected Devices List & Individual Disconnect/Role Control -->
+          <div class="remote-clients-box" id="remoteClientsBox">
+            <div class="remote-clients-header">
+              <span class="remote-url-title">Devices</span>
+              <button type="button" id="btnKickAllRemotes" class="btn-nudge hidden" title="Disconnect all devices">
+                Disconnect All
+              </button>
+            </div>
+            <div class="remote-clients-list" id="remoteClientsList"></div>
+            <div class="remote-blocked-section hidden" id="remoteBlockedSection">
+              <span class="remote-blocked-title">Blocked</span>
+              <div class="remote-blocked-list" id="remoteBlockedList"></div>
+            </div>
           </div>
         </div>
 
         <!-- Client PIN Entry Panel (Shown when opened on Smartphone or Sim Tab) -->
         <div id="remoteClientPinPanel" class="hidden">
           <div class="remote-pin-entry-box">
-            <label for="remotePinInput" class="remote-pin-label">Masukkan 4-Digit PIN yang tampil di layar Laptop (Master Deck):</label>
+            <label for="remotePinInput" class="remote-pin-label">Enter 4-Digit PIN</label>
             <div class="remote-pin-input-row">
               <input
                 type="text"
@@ -653,17 +654,17 @@
                 placeholder="0000"
                 autocomplete="off"
               >
-              <button type="button" id="btnSaveRemotePin" class="btn-primary">Hubungkan ke Master Deck</button>
+              <button type="button" id="btnSaveRemotePin" class="btn-primary">Connect</button>
             </div>
-            <p class="remote-pin-feedback" id="remotePinFeedback">Lihat PIN 4-digit melalui tombol "HP Remote" di pojok kanan atas panel FOH Master Transport pada Laptop Anda.</p>
+            <p class="remote-pin-feedback" id="remotePinFeedback">4-digit PIN from Master Deck.</p>
           </div>
         </div>
       </div>
       <div class="modal-footer remote-modal-footer">
-        <button type="button" id="btnOpenRemoteSimTab" class="btn-chip accent" title="Buka tab baru untuk mencoba tampilan HP Remote di browser ini">
-          Buka Tab Simulasi Remote
+        <button type="button" id="btnOpenRemoteSimTab" class="btn-chip accent" title="Open remote simulator in new tab">
+          Open Simulator
         </button>
-        <button type="button" id="btnCancelRemoteModal" class="btn-secondary">Tutup</button>
+        <button type="button" id="btnCancelRemoteModal" class="btn-secondary">Close</button>
       </div>
     </div>
   </div>

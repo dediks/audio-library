@@ -21,10 +21,23 @@ class AudioMetadataCache:
         self.lock = threading.Lock()
         self.qc_results: dict[str, dict] = {}
         self.meta_results: dict[str, dict] = {}
+        self._dir_cache: dict[str, tuple[float, tuple[list[dict], list[dict]]]] = {}
+
+    def invalidate_dir_cache(self, prefix: Path | str | None = None) -> None:
+        """Clears directory listing cache for a specific path or globally."""
+        with self.lock:
+            if prefix is None:
+                self._dir_cache.clear()
+            else:
+                p_str = str(prefix).rstrip("/")
+                keys_to_del = [k for k in self._dir_cache if k == p_str or k.startswith(p_str + "/")]
+                for k in keys_to_del:
+                    self._dir_cache.pop(k, None)
 
     def put_qc(self, file_path: Path | str, qc_data: dict) -> None:
         with self.lock:
             self.qc_results[str(file_path)] = qc_data
+        self.invalidate_dir_cache(Path(file_path).parent)
 
     def rename_entry(self, old_path: Path | str, new_path: Path | str) -> None:
         """Renames a cached file entry in both QC and metadata stores."""
@@ -35,6 +48,7 @@ class AudioMetadataCache:
                 self.qc_results[new_str] = self.qc_results.pop(old_str)
             if old_str in self.meta_results:
                 self.meta_results[new_str] = self.meta_results.pop(old_str)
+        self.invalidate_dir_cache()
 
     def rename_folder(self, old_folder: Path | str, new_folder: Path | str) -> None:
         """Renames all cached entries matching a playlist/folder prefix."""
@@ -49,6 +63,7 @@ class AudioMetadataCache:
                     else:
                         new_k = new_prefix + k[len(old_prefix):]
                     store[new_k] = store.pop(k)
+        self.invalidate_dir_cache()
 
     def remove_entry(self, file_path: Path | str) -> None:
         """Removes a deleted file entry from both QC and metadata stores."""
@@ -56,6 +71,7 @@ class AudioMetadataCache:
         with self.lock:
             self.qc_results.pop(key, None)
             self.meta_results.pop(key, None)
+        self.invalidate_dir_cache(Path(file_path).parent)
 
     def remove_folder(self, folder_path: Path | str) -> None:
         """Removes all cached entries belonging to a deleted folder prefix."""
@@ -66,6 +82,7 @@ class AudioMetadataCache:
                 keys_to_drop = [k for k in store if k == folder_str or k.startswith(prefix)]
                 for k in keys_to_drop:
                     store.pop(k, None)
+        self.invalidate_dir_cache()
 
     def update_after_resample(
         self,
@@ -91,6 +108,7 @@ class AudioMetadataCache:
                     self.qc_results[str(out_p)].update(meta)
         except Exception:
             pass
+        self.invalidate_dir_cache(out_p.parent)
 
     def probe_files_fast(self, files: list[Path], include_spectral: bool = False) -> None:
         """Fast parallel ffprobe metadata check for sample rate, codec, bitrate, and optional spectral cutoff."""
@@ -141,9 +159,10 @@ class AudioMetadataCache:
         workers = 4 if include_spectral else 8
         with ThreadPoolExecutor(max_workers=workers) as pool:
             list(pool.map(_one, to_probe))
+        self.invalidate_dir_cache()
 
     def scan_library(self, inbox_dir: Path) -> list[dict]:
-        """Runs full EBU R128 audit on all audio files in inbox_dir recursively."""
+        """Runs fast multi-threaded EBU R128 audit on all audio files in inbox_dir recursively."""
         if not inbox_dir.exists():
             return []
         if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
@@ -153,18 +172,57 @@ class AudioMetadataCache:
             p for p in inbox_dir.rglob("*")
             if p.is_file() and p.suffix.lower() in audio_manager.EXTENSIONS
         )
-        audited = []
-        for f in files:
-            row = audio_manager.audit_one(f)
-            self.put_qc(f, row)
-            audited.append(row)
-        return audited
+        if not files:
+            return []
 
-    def get_library_files(self, base_dir: Path) -> tuple[list[dict], list[dict]]:
-        """Returns (files, playlists) in base_dir with merged metadata and cached QC."""
+        to_audit: list[tuple[Path, int]] = []
+        audited_map: dict[str, dict] = {}
+
+        for f in files:
+            try:
+                mtime = int(f.stat().st_mtime)
+            except OSError:
+                continue
+            with self.lock:
+                cached_qc = self.qc_results.get(str(f))
+            if (
+                cached_qc
+                and cached_qc.get("_mtime") == mtime
+                and cached_qc.get("integrated_lufs") not in (None, "")
+            ):
+                audited_map[str(f)] = cached_qc
+            else:
+                to_audit.append((f, mtime))
+
+        if to_audit:
+            def _audit_file(item: tuple[Path, int]) -> tuple[str, dict]:
+                p, mtime = item
+                row = audio_manager.audit_one(p)
+                row["_mtime"] = mtime
+                return str(p), row
+
+            workers = min(4, os.cpu_count() or 4)
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                for path_str, row in pool.map(_audit_file, to_audit):
+                    self.put_qc(path_str, row)
+                    audited_map[path_str] = row
+
+        self.invalidate_dir_cache(inbox_dir)
+        return [audited_map[str(f)] for f in files if str(f) in audited_map]
+
+    def get_library_files(self, base_dir: Path, force_refresh: bool = False) -> tuple[list[dict], list[dict]]:
+        """Returns (files, playlists) in base_dir with merged metadata and cached QC with short-lived TTL."""
         target_dir = base_dir.resolve()
         if not target_dir.exists() or not target_dir.is_dir():
             return [], []
+
+        cache_key = str(target_dir)
+        now = time.time()
+        if not force_refresh:
+            with self.lock:
+                cached = self._dir_cache.get(cache_key)
+                if cached and (now - cached[0]) < 2.0:
+                    return cached[1]
 
         playlist_counts: dict[str, dict] = {}
         try:
@@ -235,6 +293,8 @@ class AudioMetadataCache:
                 "mp3_count": root_mp3,
                 "other_count": root_total - root_mp3,
             })
+        with self.lock:
+            self._dir_cache[cache_key] = (time.time(), (items, playlists))
         return items, playlists
 
 
