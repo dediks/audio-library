@@ -863,6 +863,7 @@ def _parse_music_responsive_item(renderer: dict) -> dict | None:
     artists: list[str] = []
     album = ""
     duration = ""
+    track_count = ""
 
     # Column 0: Title
     if flex_columns:
@@ -880,6 +881,7 @@ def _parse_music_responsive_item(renderer: dict) -> dict | None:
                 if not playlist_id:
                     playlist_id = t_nav.get("watchEndpoint", {}).get("playlistId") or t_nav.get("browseEndpoint", {}).get("browseId")
 
+    media_kind = ""
     # Column 1: Subtitle / Meta
     if len(flex_columns) > 1:
         col1_runs = (
@@ -888,6 +890,17 @@ def _parse_music_responsive_item(renderer: dict) -> dict | None:
             .get("text", {})
             .get("runs", [])
         )
+        if col1_runs:
+            first_raw = (col1_runs[0].get("text") or "").strip().lower()
+            if "video" in first_raw:
+                media_kind = "video"
+            elif first_raw in ("lagu", "song", "singel", "single"):
+                media_kind = "song"
+            elif first_raw == "album":
+                media_kind = "album"
+            elif first_raw in ("daftar putar", "playlist"):
+                media_kind = "playlist"
+
         for r in col1_runs:
             txt = (r.get("text") or "").strip()
             if not txt or txt == "•":
@@ -905,6 +918,8 @@ def _parse_music_responsive_item(renderer: dict) -> dict | None:
                 album = txt
             elif ":" in txt and any(ch.isdigit() for ch in txt):
                 duration = txt
+            elif any(tag in txt.lower() for tag in ("lagu", "track", "song")) and any(ch.isdigit() for ch in txt):
+                track_count = txt
             elif not artists and not any(tag in txt.lower() for tag in ("song", "lagu", "video", "track", "singel")):
                 artists.append(txt)
 
@@ -932,26 +947,32 @@ def _parse_music_responsive_item(renderer: dict) -> dict | None:
             thumb_url = "https:" + thumb_url
 
     if video_id:
+        v_type = media_kind if media_kind in ("song", "video") else "song"
         return {
             "id": video_id,
             "title": title or "Unknown Title",
             "artist": ", ".join(artists) if artists else "",
             "album": album,
             "duration": duration,
+            "track_count": track_count,
             "thumbnail": thumb_url,
             "url": f"https://music.youtube.com/watch?v={video_id}",
-            "type": "song",
+            "type": v_type,
+            "audio_tier": "hq" if (v_type == "song" or album) else "video",
         }
     elif playlist_id:
+        p_type = media_kind if media_kind in ("playlist", "album") else "playlist"
         return {
             "id": playlist_id,
             "title": title or "Unknown Playlist",
             "artist": ", ".join(artists) if artists else "",
             "album": album,
             "duration": duration,
+            "track_count": track_count,
             "thumbnail": thumb_url,
             "url": f"https://music.youtube.com/playlist?list={playlist_id}",
-            "type": "playlist",
+            "type": p_type,
+            "audio_tier": "hq",
         }
     return None
 
@@ -975,9 +996,15 @@ def _parse_music_card_shelf(renderer: dict) -> dict | None:
 
     artists = []
     duration = ""
+    track_count = ""
+    card_kind = "song"
     for part in meta_parts:
         if ":" in part and any(ch.isdigit() for ch in part):
             duration = part
+        elif any(tag in part.lower() for tag in ("song", "track", "lagu")) and any(ch.isdigit() for ch in part):
+            track_count = part
+        elif "video" in part.lower():
+            card_kind = "video"
         elif not any(tag in part.lower() for tag in ("song", "lagu", "artis", "artist", "video", "album")):
             artists.append(part)
 
@@ -995,9 +1022,11 @@ def _parse_music_card_shelf(renderer: dict) -> dict | None:
             "artist": ", ".join(artists) if artists else "",
             "album": "",
             "duration": duration,
+            "track_count": track_count,
             "thumbnail": thumb_url,
             "url": f"https://music.youtube.com/watch?v={video_id}",
-            "type": "song",
+            "type": card_kind,
+            "audio_tier": "hq" if card_kind == "song" else "video",
         }
     elif playlist_id:
         return {
@@ -1006,9 +1035,11 @@ def _parse_music_card_shelf(renderer: dict) -> dict | None:
             "artist": ", ".join(artists) if artists else "",
             "album": "",
             "duration": duration,
+            "track_count": track_count,
             "thumbnail": thumb_url,
             "url": f"https://music.youtube.com/playlist?list={playlist_id}",
             "type": "playlist",
+            "audio_tier": "hq",
         }
     return None
 
@@ -1105,7 +1136,7 @@ def _search_youtube_ytdlp(
         "--no-warnings",
         "--ignore-errors",
         "--socket-timeout", "10",
-        "--playlist-end", str(max(1, min(limit, 30))),
+        "--playlist-end", str(max(1, min(limit, 50))),
     ])
     if cookies_file and Path(cookies_file).is_file():
         cmd.extend(["--cookies", str(cookies_file)])
@@ -1151,12 +1182,24 @@ def _search_youtube_ytdlp(
             thumb = entry["thumbnails"][-1].get("url", "")
 
         is_pl = entry.get("_type") == "playlist" or search_type in ("playlists", "playlist")
+        is_video = "video" in title.lower() or search_type in ("videos", "video")
         if is_pl:
             url = f"https://music.youtube.com/playlist?list={v_id}"
             item_type = "playlist"
+            audio_tier = "hq"
+        elif is_video:
+            url = f"https://music.youtube.com/watch?v={v_id}"
+            item_type = "video"
+            audio_tier = "video"
         else:
             url = f"https://music.youtube.com/watch?v={v_id}"
             item_type = "song"
+            audio_tier = "hq"
+
+        track_count = ""
+        n_tracks = entry.get("playlist_count") or entry.get("n_entries")
+        if isinstance(n_tracks, (int, float)) and n_tracks > 0:
+            track_count = f"{int(n_tracks)} lagu"
 
         results.append({
             "id": v_id,
@@ -1164,9 +1207,11 @@ def _search_youtube_ytdlp(
             "artist": artist,
             "album": "",
             "duration": dur_str,
+            "track_count": track_count,
             "thumbnail": thumb,
             "url": url,
             "type": item_type,
+            "audio_tier": audio_tier,
         })
         if len(results) >= limit:
             break
@@ -1191,7 +1236,7 @@ def search_youtube_music(
     if norm_type not in ("songs", "playlists", "albums", "all", "videos"):
         norm_type = "songs"
 
-    clean_limit = max(1, min(int(limit), 30))
+    clean_limit = max(1, min(int(limit), 50))
 
     # 1. Primary: Direct Innertube API
     try:

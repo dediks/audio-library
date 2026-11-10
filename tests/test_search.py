@@ -127,6 +127,47 @@ def test_parse_music_responsive_item_playlist():
     assert item["type"] == "playlist"
 
 
+def test_parse_music_responsive_item_playlist_track_count():
+    renderer = {
+        "navigationEndpoint": {
+            "watchEndpoint": {
+                "playlistId": "PLtestCount"
+            }
+        },
+        "flexColumns": [
+            {
+                "musicResponsiveListItemFlexColumnRenderer": {
+                    "text": {"runs": [{"text": "Hadrah Campursari"}]}
+                }
+            },
+            {
+                "musicResponsiveListItemFlexColumnRenderer": {
+                    "text": {
+                        "runs": [
+                            {"text": "Daftar Putar"},
+                            {"text": " • "},
+                            {"text": "Official Artist"},
+                            {"text": " • "},
+                            {"text": "24 lagu"}
+                        ]
+                    }
+                }
+            }
+        ],
+        "thumbnail": {
+            "musicThumbnailRenderer": {
+                "thumbnail": {
+                    "thumbnails": [{"url": "https://example.com/cover.jpg"}]
+                }
+            }
+        }
+    }
+    item = audio_manager._parse_music_responsive_item(renderer)
+    assert item is not None
+    assert item["track_count"] == "24 lagu"
+    assert item["type"] == "playlist"
+
+
 @patch("audio_manager.urllib.request.urlopen")
 def test_search_youtube_music_innertube_mock(mock_urlopen):
     sample_response = {

@@ -132,6 +132,8 @@ function sanitizeItem(raw) {
     artist: clampStr(raw.artist, 200),
     album: clampStr(raw.album, 200),
     duration: clampStr(raw.duration, 16),
+    track_count: clampStr(raw.track_count, 40),
+    audio_tier: clampStr(raw.audio_tier, 20),
     thumbnail: safeImageUrl(clampStr(raw.thumbnail, 800)),
     kind,
   };
@@ -168,6 +170,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const ytmResultsPanel = $('ytmResultsPanel');
   const ytmResultsList = $('ytmResultsList');
   const resultsTitle = $('resultsTitle');
+  const resultsSortSelect = $('resultsSortSelect');
+  const resultsFoot = $('resultsFoot');
+  const btnLoadMoreResults = $('btnLoadMoreResults');
+  const loadMoreSpinner = $('loadMoreSpinner');
+  const loadMoreText = $('loadMoreText');
   const btnAddAllResults = $('btnAddAllResults');
   const btnCloseResults = $('btnCloseResults');
 
@@ -364,7 +371,15 @@ document.addEventListener('DOMContentLoaded', () => {
       const info = el('div', 'ing-stage-info');
       info.appendChild(el('div', 'ing-stage-title', item.title || desc.label));
       const meta = el('div', 'ing-stage-meta');
-      meta.appendChild(el('span', `ing-kind ${item.kind}`, KIND_LABEL[item.kind] || 'Video'));
+      if (item.kind === 'song') {
+        const badge = el('span', 'ing-kind hq-master', '✨ HQ Audio');
+        badge.title = 'Katalog Master Studio Resmi (Native Opus 48kHz / AAC)';
+        meta.appendChild(badge);
+      } else if (item.kind === 'video') {
+        meta.appendChild(el('span', 'ing-kind video', '🎬 Video Audio'));
+      } else {
+        meta.appendChild(el('span', `ing-kind ${item.kind}`, KIND_LABEL[item.kind] || 'Video'));
+      }
       const subText = item.title
         ? [item.artist, item.album].filter(Boolean).join(' · ')
         : [desc.source, desc.extra].filter(Boolean).join(' · ');
@@ -594,29 +609,91 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  async function performSearch(query) {
-    setSearching(true);
-    ytmResultsPanel.classList.remove('hidden');
-    resultsTitle.textContent = `Mencari "${query}"…`;
-    btnAddAllResults.classList.add('hidden');
-    showResultsSkeleton();
+  let currentSearchQuery = '';
+  let currentSearchLimit = 15;
+  let isLoadingMore = false;
+
+  function parseDurationSec(durStr) {
+    if (!durStr || typeof durStr !== 'string') return 0;
+    const parts = durStr.trim().split(':').map(Number);
+    if (parts.some(isNaN)) return 0;
+    if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    if (parts.length === 2) return parts[0] * 60 + parts[1];
+    if (parts.length === 1) return parts[0];
+    return 0;
+  }
+
+  function getSortedResults() {
+    const mode = resultsSortSelect ? resultsSortSelect.value : 'relevance';
+    const sorted = currentResults.slice();
+    if (mode === 'duration_desc') {
+      sorted.sort((a, b) => parseDurationSec(b.duration) - parseDurationSec(a.duration));
+    } else if (mode === 'duration_asc') {
+      sorted.sort((a, b) => parseDurationSec(a.duration) - parseDurationSec(b.duration));
+    } else if (mode === 'title_asc') {
+      sorted.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+    } else {
+      sorted.sort((a, b) => (a._originalIdx ?? 0) - (b._originalIdx ?? 0));
+    }
+    return sorted;
+  }
+
+  async function performSearch(query, limit = 15, isLoadMore = false) {
+    if (!isLoadMore) {
+      currentSearchQuery = query;
+      currentSearchLimit = limit;
+      setSearching(true);
+      ytmResultsPanel.classList.remove('hidden');
+      resultsTitle.textContent = `Mencari "${query}"…`;
+      btnAddAllResults.classList.add('hidden');
+      if (resultsFoot) resultsFoot.classList.add('hidden');
+      showResultsSkeleton();
+    } else {
+      isLoadingMore = true;
+      if (btnLoadMoreResults) btnLoadMoreResults.disabled = true;
+      if (loadMoreSpinner) loadMoreSpinner.classList.remove('hidden');
+      if (loadMoreText) loadMoreText.textContent = 'Memuat…';
+    }
 
     const { ok, data, error } = await apiPost('/api/search', {
       query,
       type: currentSearchType,
-      limit: 15,
+      limit: currentSearchLimit,
       use_cookies: optUseCookies.checked,
     });
-    setSearching(false);
+
+    if (!isLoadMore) {
+      setSearching(false);
+    } else {
+      isLoadingMore = false;
+      if (btnLoadMoreResults) btnLoadMoreResults.disabled = false;
+      if (loadMoreSpinner) loadMoreSpinner.classList.add('hidden');
+      if (loadMoreText) loadMoreText.textContent = 'Muat 15 Lagi...';
+    }
 
     if (ok && data) {
-      currentResults = (data.results || []).map(sanitizeItem).filter(Boolean);
+      const rawList = data.results || [];
+      currentResults = rawList.map((item, idx) => {
+        const clean = sanitizeItem(item);
+        if (clean) clean._originalIdx = idx;
+        return clean;
+      }).filter(Boolean);
+
       renderResults(query);
+
+      if (resultsFoot) {
+        const canLoadMore = currentResults.length >= currentSearchLimit && currentSearchLimit < 45;
+        resultsFoot.classList.toggle('hidden', !canLoadMore);
+      }
     } else {
-      const errMsg = error || 'Gagal memuat hasil pencarian.';
-      resultsTitle.textContent = 'Pencarian gagal';
-      showResultsMessage(errMsg, true);
-      notify({ type: 'error', title: 'Pencarian Gagal', message: errMsg });
+      if (!isLoadMore) {
+        const errMsg = error || 'Gagal memuat hasil pencarian.';
+        resultsTitle.textContent = 'Pencarian gagal';
+        showResultsMessage(errMsg, true);
+        notify({ type: 'error', title: 'Pencarian Gagal', message: errMsg });
+      } else {
+        notify({ type: 'warning', title: 'Gagal Memuat Tambahan', message: error || 'Tidak dapat memuat hasil lebih banyak.' });
+      }
     }
   }
 
@@ -626,11 +703,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (currentResults.length === 0) {
       showResultsMessage(`Tidak ditemukan hasil untuk "${query}". Coba kata kunci lain atau pilih "Semua".`);
+      if (resultsFoot) resultsFoot.classList.add('hidden');
       return;
     }
 
+    const displayItems = getSortedResults();
     ytmResultsList.replaceChildren();
-    currentResults.forEach(item => {
+
+    displayItems.forEach(item => {
       const row = el('div', 'ing-result');
       row.setAttribute('role', 'listitem');
       row.dataset.url = item.url;
@@ -640,12 +720,47 @@ document.addEventListener('DOMContentLoaded', () => {
       const info = el('div', 'ing-result-info');
       const titleRow = el('div', 'ing-result-title-row');
       titleRow.appendChild(el('span', 'ing-result-title', item.title || item.url));
-      if (item.kind !== 'song') titleRow.appendChild(el('span', `ing-kind ${item.kind}`, KIND_LABEL[item.kind] || item.kind));
+
+      // Quality & Source Tier Badges
+      if (item.kind === 'song') {
+        const isHq = item.audio_tier === 'hq' || Boolean(item.album) || !item.kind.includes('video');
+        if (isHq) {
+          const badge = el('span', 'ing-kind hq-master', '✨ HQ Audio');
+          badge.title = 'Katalog Master Studio Resmi (Native Opus 48kHz / AAC)';
+          titleRow.appendChild(badge);
+        } else {
+          const badge = el('span', 'ing-kind song', 'Lagu');
+          badge.title = 'Trek Audio YouTube Music';
+          titleRow.appendChild(badge);
+        }
+      } else if (item.kind === 'video') {
+        const badge = el('span', 'ing-kind video', '🎬 Video Audio');
+        badge.title = 'Audio dari Video Klip / Live Performance';
+        titleRow.appendChild(badge);
+      } else if (item.kind === 'playlist') {
+        const extra = item.track_count ? ` • ${item.track_count}` : '';
+        const badge = el('span', 'ing-kind playlist', `≡ Playlist${extra}`);
+        badge.title = 'Daftar Putar';
+        titleRow.appendChild(badge);
+      } else if (item.kind === 'album') {
+        const extra = item.track_count ? ` • ${item.track_count}` : '';
+        const badge = el('span', 'ing-kind album', `💿 Album${extra}`);
+        badge.title = 'Album Rilisan Resmi';
+        titleRow.appendChild(badge);
+      }
       info.appendChild(titleRow);
+
       const sub = [item.artist, item.album].filter(Boolean).join(' · ');
       const metaRow = el('div', 'ing-result-meta');
       if (sub) metaRow.appendChild(el('span', 'ing-result-sub', sub));
       if (item.duration) metaRow.appendChild(el('span', 'ing-result-dur mono-stat', item.duration));
+
+      // Stream spec pill in meta row
+      if (item.kind === 'song') {
+        metaRow.appendChild(el('span', 'ing-result-spec mono-stat', 'Opus 48kHz • 160k'));
+      } else if (item.kind === 'video') {
+        metaRow.appendChild(el('span', 'ing-result-spec video mono-stat', 'Video Audio'));
+      }
       info.appendChild(metaRow);
       row.appendChild(info);
 
@@ -691,6 +806,20 @@ document.addEventListener('DOMContentLoaded', () => {
         btn.textContent = staged ? '✓ Di daftar' : '+ Tambah';
         btn.setAttribute('aria-pressed', staged ? 'true' : 'false');
       }
+    });
+  }
+
+  if (resultsSortSelect) {
+    resultsSortSelect.addEventListener('change', () => {
+      renderResults(currentSearchQuery || omniInput.value.trim());
+    });
+  }
+
+  if (btnLoadMoreResults) {
+    btnLoadMoreResults.addEventListener('click', () => {
+      if (isLoadingMore) return;
+      currentSearchLimit = Math.min(currentSearchLimit + 15, 45);
+      performSearch(currentSearchQuery, currentSearchLimit, true);
     });
   }
 

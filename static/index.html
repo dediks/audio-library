@@ -117,11 +117,26 @@
               <div class="ing-results-head">
                 <span class="ing-results-title" id="resultsTitle">Hasil pencarian</span>
                 <div class="ing-results-actions">
+                  <div class="ing-results-sort-wrap">
+                    <label for="resultsSortSelect" class="ing-sort-label">Urutkan:</label>
+                    <select id="resultsSortSelect" class="ing-sort-select" aria-label="Urutkan hasil pencarian">
+                      <option value="relevance">Relevansi (Default)</option>
+                      <option value="duration_desc">Durasi: Terpanjang</option>
+                      <option value="duration_asc">Durasi: Terpendek</option>
+                      <option value="title_asc">Judul: A &rarr; Z</option>
+                    </select>
+                  </div>
                   <button type="button" id="btnAddAllResults" class="ing-link-btn">Tambah semua</button>
                   <button type="button" id="btnCloseResults" class="ing-icon-btn" title="Tutup hasil (Esc)" aria-label="Tutup hasil">&times;</button>
                 </div>
               </div>
               <div id="ytmResultsList" class="ing-results-list" role="list"></div>
+              <div class="ing-results-foot hidden" id="resultsFoot">
+                <button type="button" id="btnLoadMoreResults" class="ing-load-more-btn">
+                  <span id="loadMoreSpinner" class="spinner-small hidden"></span>
+                  <span id="loadMoreText">Muat 15 Lagi...</span>
+                </button>
+              </div>
             </div>
           </div>
 

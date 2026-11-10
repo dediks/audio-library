@@ -1508,7 +1508,7 @@ class AudioServerHandler(BaseHTTPRequestHandler):
             self.send_json(400, {"ok": False, "error": "Kata kunci pencarian tidak boleh kosong."})
             return
         search_type = str((payload or {}).get("type") or "songs").strip().lower()
-        limit = min(max(int((payload or {}).get("limit") or 15), 1), 30)
+        limit = min(max(int((payload or {}).get("limit") or 15), 1), 50)
         use_cookies = bool((payload or {}).get("use_cookies", True))
         cookies = COOKIES_FILE if use_cookies and COOKIES_FILE.is_file() else None
 
