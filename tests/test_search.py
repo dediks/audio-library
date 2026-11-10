@@ -353,6 +353,7 @@ def test_web_ui_csp_allows_youtube_images():
     csp = headers.get("Content-Security-Policy", "")
     assert "googleusercontent.com" in csp
     assert "ytimg.com" in csp
+    assert "youtube-nocookie.com" in csp
 
 
 def test_youtube_music_playlist_vl_prefix_stripped():
@@ -425,6 +426,50 @@ def test_format_item_subtitle_deduplication():
     """
     res = subprocess.run([node_bin, "--input-type=module", "-e", script], capture_output=True, text=True)
     assert res.returncode == 0, f"Node assertion failed: {res.stderr}"
+
+
+def test_get_preview_stream_info_empty():
+    assert audio_manager.get_preview_stream_info("") is None
+    assert audio_manager.get_preview_stream_info("   ") is None
+    assert audio_manager.get_preview_stream_info(None) is None
+
+
+def test_get_preview_stream_info_formats_extraction():
+    fake_info = {
+        "id": "testTrack123",
+        "title": "Cinta Dan Airmata",
+        "formats": [
+            {"format_id": "18", "url": "https://video.url", "vcodec": "h264", "acodec": "aac", "tbr": 400},
+            {"format_id": "140", "url": "https://audio.m4a.url", "vcodec": "none", "acodec": "aac", "abr": 128},
+            {"format_id": "251", "url": "https://audio.opus.url", "vcodec": "none", "acodec": "opus", "abr": 160, "http_headers": {"User-Agent": "TestUA"}},
+        ]
+    }
+    with patch("yt_dlp.YoutubeDL") as mock_ydl_cls:
+        instance = mock_ydl_cls.return_value.__enter__.return_value
+        instance.extract_info.return_value = fake_info
+
+        res = audio_manager.get_preview_stream_info("https://music.youtube.com/watch?v=testTrack123")
+        assert res is not None
+        stream_url, headers = res
+        assert stream_url == "https://audio.opus.url"
+        assert headers.get("User-Agent") == "TestUA"
+
+
+def test_web_ui_stream_preview_handler():
+    import web_ui
+
+    handler = web_ui.AudioServerHandler.__new__(web_ui.AudioServerHandler)
+    handler.client_address = ("127.0.0.1", 12345)
+    handler.headers = {}
+    handler.path = "/api/stream-preview"
+    handler.send_json = MagicMock()
+    handler.send_response = MagicMock()
+    handler.send_header = MagicMock()
+    handler.end_headers = MagicMock()
+
+    # Missing url param returns 400
+    handler.do_GET()
+    handler.send_json.assert_called_with(400, {"error": "Parameter url diperlukan."})
 
 
 if __name__ == "__main__":

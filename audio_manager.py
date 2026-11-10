@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -1261,6 +1262,105 @@ def search_youtube_music(
         )
     except Exception:
         return []
+
+
+_STREAM_INFO_CACHE: dict[str, tuple[str, dict, float]] = {}
+
+
+def get_preview_stream_info(url: str, cookies_file: Path | None = None) -> tuple[str, dict] | None:
+    """Extracts direct audio stream URL and HTTP headers using yt-dlp with caching."""
+    clean_url = (url or "").strip()
+    if not clean_url:
+        return None
+
+    now = time.time()
+    if clean_url in _STREAM_INFO_CACHE:
+        s_url, s_headers, expire = _STREAM_INFO_CACHE[clean_url]
+        if now < expire:
+            return s_url, s_headers
+
+    # Try in-process yt_dlp first
+    try:
+        import yt_dlp
+        ydl_opts = {
+            "format": "ba[format_id!*=-drc]/ba",
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            "socket_timeout": 10,
+            "noplaylist": True,
+        }
+        if cookies_file and Path(cookies_file).is_file():
+            ydl_opts["cookiefile"] = str(cookies_file)
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(clean_url, download=False)
+            if info:
+                if "entries" in info and info["entries"]:
+                    info = info["entries"][0]
+                stream_url = info.get("url")
+                http_headers = info.get("http_headers") or {}
+
+                # If no direct url, pick the best audio format from formats list
+                if not stream_url and "formats" in info:
+                    formats = info["formats"]
+                    audio_fmts = [
+                        f for f in formats
+                        if f.get("url") and f.get("acodec") != "none" and f.get("vcodec") == "none"
+                    ]
+                    if not audio_fmts:
+                        audio_fmts = [f for f in formats if f.get("url") and f.get("acodec") != "none"]
+
+                    def _rank_audio(f):
+                        fid = str(f.get("format_id") or "")
+                        score = 0
+                        if fid in ("251", "774"):
+                            score += 1000
+                        elif fid in ("140", "141"):
+                            score += 500
+                        elif f.get("vcodec") == "none":
+                            score += 200
+                        score += int(f.get("abr") or f.get("tbr") or 0)
+                        return score
+
+                    audio_fmts.sort(key=_rank_audio, reverse=True)
+                    if audio_fmts:
+                        best = audio_fmts[0]
+                        stream_url = best.get("url")
+                        http_headers = best.get("http_headers") or http_headers
+
+                if stream_url:
+                    _STREAM_INFO_CACHE[clean_url] = (stream_url, http_headers, now + 3600)
+                    return stream_url, http_headers
+    except Exception:
+        pass
+
+    # Fallback to get_ytdlp_base_cmd() -g
+    try:
+        cmd = list(get_ytdlp_base_cmd())
+        cmd.extend([
+            "-g",
+            "-f", "ba[format_id!*=-drc]/ba",
+            "--no-warnings",
+            "--socket-timeout", "20",
+            "--no-playlist",
+        ])
+        js_spec, _ = find_js_runtime()
+        if js_spec:
+            cmd.extend(["--js-runtimes", js_spec])
+        if cookies_file and Path(cookies_file).is_file():
+            cmd.extend(["--cookies", str(cookies_file)])
+        cmd.append(clean_url)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
+        if proc.returncode == 0:
+            lines = [line.strip() for line in proc.stdout.splitlines() if line.strip().startswith("http")]
+            if lines:
+                _STREAM_INFO_CACHE[clean_url] = (lines[0], {}, now + 3600)
+                return lines[0], {}
+    except Exception:
+        pass
+
+    return None
 
 
 def search_cli(args) -> int:

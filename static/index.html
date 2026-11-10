@@ -138,6 +138,35 @@
                 </button>
               </div>
             </div>
+
+            <!-- Floating Mini Preview Player Dock (Native Audio) -->
+            <div id="ingPreviewDock" class="ing-preview-dock hidden" role="region" aria-label="Pemutar Pratinjau Lagu">
+              <div class="ing-preview-bar">
+                <div class="ing-preview-main">
+                  <div class="ing-preview-thumb-wrap">
+                    <img id="ingPreviewThumb" class="ing-preview-thumb" src="" alt="Album Art">
+                    <div id="ingPreviewSpinner" class="spinner-small ing-preview-spinner hidden"></div>
+                  </div>
+                  <div class="ing-preview-info">
+                    <div class="ing-preview-badge">
+                      <span class="ing-preview-dot"></span>
+                      <span id="ingPreviewBadgeText">Pratinjau Audio (Native HQ)</span>
+                    </div>
+                    <div id="ingPreviewTitle" class="ing-preview-title" title="Judul"></div>
+                    <div id="ingPreviewArtist" class="ing-preview-artist"></div>
+                  </div>
+                  <button type="button" id="btnClosePreview" class="ing-icon-btn ing-preview-close-btn" title="Tutup pratinjau (Esc)" aria-label="Tutup pratinjau">&times;</button>
+                </div>
+                <div class="ing-preview-player-row">
+                  <audio id="ingPreviewAudio" controls class="ing-preview-audio-el" preload="auto"></audio>
+                </div>
+                <div class="ing-preview-actions">
+                  <button type="button" id="btnPreviewStage" class="ing-preview-action-btn ing-preview-stage-btn" title="Tambah ke antrean unduhan">+ Antrean</button>
+                  <button type="button" id="btnPreviewDownloadNow" class="ing-preview-action-btn ing-preview-now-btn" title="Unduh sekarang">⚡ Unduh</button>
+                  <a id="btnPreviewExternal" href="#" target="_blank" rel="noopener noreferrer" class="ing-icon-btn ing-preview-ext-btn" title="Buka di YouTube Music">↗</a>
+                </div>
+              </div>
+            </div>
           </div>
 
           <!-- Mode 2: Dedicated Manual Batch URL Textarea -->

@@ -211,6 +211,19 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnAddAllResults = $('btnAddAllResults');
   const btnCloseResults = $('btnCloseResults');
 
+  // Preview Player Dock
+  const ingPreviewDock = $('ingPreviewDock');
+  const ingPreviewThumb = $('ingPreviewThumb');
+  const ingPreviewSpinner = $('ingPreviewSpinner');
+  const ingPreviewBadgeText = $('ingPreviewBadgeText');
+  const ingPreviewTitle = $('ingPreviewTitle');
+  const ingPreviewArtist = $('ingPreviewArtist');
+  const ingPreviewAudio = $('ingPreviewAudio');
+  const btnPreviewStage = $('btnPreviewStage');
+  const btnPreviewDownloadNow = $('btnPreviewDownloadNow');
+  const btnPreviewExternal = $('btnPreviewExternal');
+  const btnClosePreview = $('btnClosePreview');
+
   // Staging
   const stagingList = $('stagingList');
   const stagingEmpty = $('stagingEmpty');
@@ -505,6 +518,7 @@ document.addEventListener('DOMContentLoaded', () => {
       e.preventDefault();
       submitOmni();
     } else if (e.key === 'Escape') {
+      stopPreview();
       if (!ytmResultsPanel.classList.contains('hidden')) {
         ytmResultsPanel.classList.add('hidden');
       } else if (omniInput.value) {
@@ -730,6 +744,102 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  /* ---------------- Native Audio Preview Player ---------------- */
+  let currentPreviewItem = null;
+
+  function togglePreview(item) {
+    if (!item) return;
+    if (currentPreviewItem && currentPreviewItem.url === item.url) {
+      if (ingPreviewAudio && !ingPreviewAudio.paused) {
+        ingPreviewAudio.pause();
+        syncResultButtons();
+        return;
+      } else if (ingPreviewAudio && ingPreviewAudio.paused && ingPreviewAudio.src) {
+        ingPreviewAudio.play().catch(() => {});
+        syncResultButtons();
+        return;
+      }
+    }
+    startPreview(item);
+  }
+
+  function startPreview(item) {
+    if (!item || !ingPreviewDock || !ingPreviewAudio) return;
+    currentPreviewItem = item;
+
+    if (ingPreviewTitle) {
+      ingPreviewTitle.textContent = item.title || 'Pratinjau Lagu';
+      ingPreviewTitle.title = item.title || '';
+    }
+    if (ingPreviewArtist) {
+      ingPreviewArtist.textContent = formatItemSubtitle(item) || item.artist || '';
+    }
+    if (ingPreviewThumb) {
+      ingPreviewThumb.src = item.thumbnail || '';
+      ingPreviewThumb.alt = item.title || '';
+    }
+    if (btnPreviewExternal) {
+      btnPreviewExternal.href = item.url || '#';
+    }
+    if (ingPreviewBadgeText) {
+      ingPreviewBadgeText.textContent = item.kind === 'video' ? 'Pratinjau Video Audio' : 'Pratinjau Audio (Native Opus)';
+    }
+
+    if (ingPreviewSpinner) ingPreviewSpinner.classList.remove('hidden');
+
+    if (ingPreviewAudio.src) {
+      ingPreviewAudio.pause();
+    }
+    const streamApiUrl = `/api/stream-preview?url=${encodeURIComponent(item.url)}`;
+    ingPreviewAudio.src = streamApiUrl;
+    ingPreviewAudio.load();
+    const playPromise = ingPreviewAudio.play();
+    if (playPromise !== undefined) {
+      playPromise.catch(() => {});
+    }
+
+    ingPreviewDock.classList.remove('hidden');
+    syncResultButtons();
+  }
+
+  function stopPreview() {
+    currentPreviewItem = null;
+    if (ingPreviewAudio) {
+      ingPreviewAudio.pause();
+      ingPreviewAudio.removeAttribute('src');
+      ingPreviewAudio.load();
+    }
+    if (ingPreviewDock) ingPreviewDock.classList.add('hidden');
+    syncResultButtons();
+  }
+
+  if (ingPreviewAudio) {
+    ingPreviewAudio.addEventListener('playing', () => {
+      if (ingPreviewSpinner) ingPreviewSpinner.classList.add('hidden');
+      syncResultButtons();
+    });
+    ingPreviewAudio.addEventListener('pause', () => {
+      syncResultButtons();
+    });
+    ingPreviewAudio.addEventListener('waiting', () => {
+      if (ingPreviewSpinner) ingPreviewSpinner.classList.remove('hidden');
+    });
+    ingPreviewAudio.addEventListener('canplay', () => {
+      if (ingPreviewSpinner) ingPreviewSpinner.classList.add('hidden');
+    });
+    ingPreviewAudio.addEventListener('error', () => {
+      if (ingPreviewSpinner) ingPreviewSpinner.classList.add('hidden');
+      if (currentPreviewItem && ingPreviewAudio.getAttribute('src')) {
+        console.warn('[Audio Preview Error]', ingPreviewAudio.error);
+        notify({
+          type: 'error',
+          title: 'Gagal Memuat Audio',
+          message: 'Tidak dapat memutar pratinjau audio untuk lagu ini.',
+        });
+      }
+    });
+  }
+
   function renderResults(query) {
     resultsTitle.textContent = `${currentResults.length} hasil untuk "${query}"`;
     btnAddAllResults.classList.toggle('hidden', currentResults.length === 0);
@@ -748,7 +858,13 @@ document.addEventListener('DOMContentLoaded', () => {
       row.setAttribute('role', 'listitem');
       row.dataset.url = item.url;
 
-      row.appendChild(createThumb(item.thumbnail, 'ing-thumb', item.kind === 'playlist' ? '≡' : '♪'));
+      const thumb = createThumb(item.thumbnail, 'ing-thumb', item.kind === 'playlist' ? '≡' : '♪');
+      thumb.title = `Pratinjau: ${item.title || item.url}`;
+      thumb.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        togglePreview(item);
+      });
+      row.appendChild(thumb);
 
       const info = el('div', 'ing-result-info');
       const titleRow = el('div', 'ing-result-title-row');
@@ -799,6 +915,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const actions = el('div', 'ing-result-actions');
 
+      const btnPreview = el('button', 'ing-icon-btn ing-result-preview', '▶');
+      btnPreview.type = 'button';
+      btnPreview.title = 'Pratinjau lagu ini (Play/Stop)';
+      btnPreview.setAttribute('aria-label', `Pratinjau ${item.title}`);
+      btnPreview.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        togglePreview(item);
+      });
+      actions.appendChild(btnPreview);
+
       const btnNow = el('button', 'ing-icon-btn ing-result-now', '⚡');
       btnNow.type = 'button';
       btnNow.title = 'Unduh sekarang (langsung ke antrean, lewati daftar)';
@@ -832,14 +958,32 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function syncResultButtons() {
     ytmResultsList.querySelectorAll('.ing-result[data-url]').forEach(row => {
-      const staged = isStaged(row.dataset.url);
+      const url = row.dataset.url;
+      const staged = isStaged(url);
+      const isPreviewing = currentPreviewItem && currentPreviewItem.url === url;
+      const isPlaying = isPreviewing && ingPreviewAudio && !ingPreviewAudio.paused;
+
       row.classList.toggle('is-staged', staged);
+      row.classList.toggle('is-previewing', Boolean(isPreviewing));
+
       const btn = row.querySelector('.ing-result-add');
       if (btn) {
         btn.textContent = staged ? '✓ Di daftar' : '+ Tambah';
         btn.setAttribute('aria-pressed', staged ? 'true' : 'false');
       }
+
+      const btnPrev = row.querySelector('.ing-result-preview');
+      if (btnPrev) {
+        btnPrev.textContent = isPlaying ? '⏸' : '▶';
+        btnPrev.title = isPlaying ? 'Jeda pratinjau' : 'Pratinjau lagu ini';
+      }
     });
+
+    if (btnPreviewStage && currentPreviewItem) {
+      const isCurStaged = isStaged(currentPreviewItem.url);
+      btnPreviewStage.textContent = isCurStaged ? '✓ Di antrean' : '+ Antrean';
+      btnPreviewStage.classList.toggle('is-staged', isCurStaged);
+    }
   }
 
   if (resultsSortSelect) {
@@ -856,6 +1000,26 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  if (btnClosePreview) {
+    btnClosePreview.addEventListener('click', stopPreview);
+  }
+
+  if (btnPreviewStage) {
+    btnPreviewStage.addEventListener('click', () => {
+      if (!currentPreviewItem) return;
+      toggleResult(currentPreviewItem);
+      syncResultButtons();
+    });
+  }
+
+  if (btnPreviewDownloadNow) {
+    btnPreviewDownloadNow.addEventListener('click', () => {
+      if (!currentPreviewItem) return;
+      rememberMeta(currentPreviewItem);
+      dispatchDownload([currentPreviewItem.url], { fromStaging: false });
+    });
+  }
+
   btnAddAllResults.addEventListener('click', () => {
     const res = addToStaging(currentResults);
     reportAddResult(res, 'item');
@@ -863,6 +1027,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   btnCloseResults.addEventListener('click', () => {
     ytmResultsPanel.classList.add('hidden');
+    stopPreview();
     omniInput.focus();
   });
 
@@ -1031,9 +1196,15 @@ document.addEventListener('DOMContentLoaded', () => {
     dispatchDownload(staging.map(s => s.url), { fromStaging: true });
   });
 
-  // Ctrl/Cmd + Enter anywhere on the page starts the batch.
+  // Keyboard shortcuts
   document.addEventListener('keydown', (e) => {
     if (document.body.dataset.page !== 'ingest') return;
+    if (e.key === 'Escape') {
+      if (ingPreviewDock && !ingPreviewDock.classList.contains('hidden')) {
+        stopPreview();
+        return;
+      }
+    }
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && staging.length > 0) {
       e.preventDefault();
       btnStartIngest.click();

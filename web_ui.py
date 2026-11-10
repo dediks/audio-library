@@ -25,6 +25,9 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
+import urllib.error
+import urllib.parse
+import urllib.request
 
 import audio_manager
 import fs_browser
@@ -1178,6 +1181,7 @@ class AudioServerHandler(BaseHTTPRequestHandler):
             "font-src 'self' https://fonts.gstatic.com; "
             "img-src 'self' data: https://*.googleusercontent.com https://*.ytimg.com https://*.ggpht.com; "
             "media-src 'self' blob:; "
+            "frame-src 'self' https://www.youtube-nocookie.com https://www.youtube.com; "
             "connect-src 'self'; "
             "frame-ancestors 'none';",
         )
@@ -1331,6 +1335,19 @@ class AudioServerHandler(BaseHTTPRequestHandler):
                 self.send_json(404, {"error": str(exc)})
             except Exception as exc:
                 self.send_json(400, {"error": str(exc)})
+        elif path == "/api/stream-preview":
+            qs = parse_qs(parsed.query)
+            target_url = qs.get("url", [None])[0]
+            if not target_url:
+                self.send_json(400, {"error": "Parameter url diperlukan."})
+                return
+            cookies = COOKIES_FILE if COOKIES_FILE.is_file() else None
+            stream_info = audio_manager.get_preview_stream_info(target_url, cookies_file=cookies)
+            if not stream_info:
+                self.send_json(404, {"error": "Stream audio pratinjau tidak ditemukan atau gagal diekstrak."})
+                return
+            direct_url, headers = stream_info
+            self.serve_proxied_audio_stream(direct_url, headers)
         else:
             self.send_error(404, "Endpoint not found")
 
@@ -1953,6 +1970,64 @@ class AudioServerHandler(BaseHTTPRequestHandler):
             return
         except Exception as exc:
             sys.stderr.write(f"[Stream Error] {exc}\n")
+
+    def serve_proxied_audio_stream(self, direct_url: str, custom_headers: dict | None = None):
+        """Proxies an upstream audio stream with HTTP Range forwarding for live web preview."""
+        req_headers = dict(custom_headers or {})
+        if not req_headers.get("User-Agent"):
+            req_headers["User-Agent"] = (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            )
+        req_headers["Accept"] = "*/*"
+
+        client_range = self.headers.get("Range")
+        if client_range:
+            req_headers["Range"] = client_range
+
+        req = urllib.request.Request(direct_url, headers=req_headers)
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                status_code = resp.status
+                self.send_response(status_code)
+                raw_ct = resp.headers.get("Content-Type") or "audio/webm"
+                # Coerce video/* to audio/* so browser <audio> tag with nosniff won't reject audio-only webm
+                if raw_ct.startswith("video/webm"):
+                    content_type = "audio/webm"
+                elif raw_ct.startswith("video/mp4"):
+                    content_type = "audio/mp4"
+                elif raw_ct.startswith("video/"):
+                    content_type = "audio/" + raw_ct.split("video/", 1)[-1]
+                else:
+                    content_type = raw_ct
+
+                self.send_security_headers(content_type)
+                self.send_header("Accept-Ranges", "bytes")
+
+                content_length = resp.headers.get("Content-Length")
+                if content_length:
+                    self.send_header("Content-Length", content_length)
+
+                content_range = resp.headers.get("Content-Range")
+                if content_range:
+                    self.send_header("Content-Range", content_range)
+
+                self.end_headers()
+
+                chunk_size = 65536
+                while True:
+                    chunk = resp.read(chunk_size)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
+            return
+        except urllib.error.HTTPError as exc:
+            sys.stderr.write(f"[Proxy Stream HTTP Error] {exc.code}: {exc.reason}\n")
+            self.send_error(exc.code, f"Upstream error: {exc.reason}")
+        except Exception as exc:
+            sys.stderr.write(f"[Proxy Stream Error] {exc}\n")
+            self.send_error(500, str(exc))
 
     def send_json(self, status: int, data: dict):
         body = json.dumps(data).encode("utf-8")
