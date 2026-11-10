@@ -402,6 +402,31 @@ def test_javascript_syntax_clean():
         assert "SyntaxError:" not in res.stderr, f"SyntaxError in {js_path}: {res.stderr}"
 
 
+def test_format_item_subtitle_deduplication():
+    import shutil
+    import subprocess
+    node_bin = shutil.which("node")
+    if not node_bin:
+        return
+    script = """
+    import fs from 'fs';
+    const code = fs.readFileSync('static/app.js', 'utf8');
+    const fnMatch = code.match(/function formatItemSubtitle[\\s\\S]*?\\n}/);
+    if (!fnMatch) throw new Error('formatItemSubtitle not found');
+    const fn = new Function(`${fnMatch[0]}; return formatItemSubtitle;`)();
+    
+    // Single release where album == title (exact or with feats/modifiers)
+    if (fn({ title: 'Nyanyian Rindu', artist: 'Mahesa', album: 'Nyanyian Rindu' }) !== 'Mahesa') throw new Error('Exact match failed');
+    if (fn({ title: 'Berpisah Di Ujung Jalan (feat. Mahesa Music)', artist: 'Ayu Cantika', album: 'Berpisah Di Ujung Jalan' }) !== 'Ayu Cantika') throw new Error('Feat modifier failed');
+    if (fn({ title: 'Check Sound (Instrumental)', artist: 'Fariz Kendang', album: 'Check Sound (Instrumental)' }) !== 'Fariz Kendang') throw new Error('Instrumental failed');
+    
+    // Distinct full album
+    if (fn({ title: 'Dan', artist: 'Sheila on 7', album: 'Kisah Klasik Untuk Masa Depan' }) !== 'Sheila on 7 · Kisah Klasik Untuk Masa Depan') throw new Error('Distinct album failed');
+    """
+    res = subprocess.run([node_bin, "--input-type=module", "-e", script], capture_output=True, text=True)
+    assert res.returncode == 0, f"Node assertion failed: {res.stderr}"
+
+
 if __name__ == "__main__":
     test_search_empty_or_whitespace_returns_empty()
     test_parse_music_responsive_item_song()

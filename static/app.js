@@ -139,6 +139,39 @@ function sanitizeItem(raw) {
   };
 }
 
+/**
+ * Formats artist and album subtitle, suppressing the album if redundant with the title (e.g. single releases).
+ */
+function formatItemSubtitle(item) {
+  if (!item) return '';
+  const artist = (item.artist || '').trim();
+  const album = (item.album || '').trim();
+  const title = (item.title || '').trim();
+
+  if (!album) return artist;
+  if (!artist) return album;
+  if (!title) return `${artist} · ${album}`;
+
+  const clean = (s) =>
+    s
+      .toLowerCase()
+      .replace(/\s*-\s*(?:single|ep)\b/gi, '')
+      .replace(/\s*\((?:feat\.|ft\.|featuring|with|instrumental|remix|version|live|official|audio|single|ep)[^)]*\)/gi, '')
+      .replace(/\s*\[(?:feat\.|ft\.|featuring|with|instrumental|remix|version|live|official|audio|single|ep)[^\]]*\]/gi, '')
+      .replace(/[^\w\s]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const cTitle = clean(title);
+  const cAlbum = clean(album);
+
+  if (cTitle && cAlbum && (cTitle === cAlbum || cTitle.startsWith(cAlbum) || cAlbum.startsWith(cTitle))) {
+    return artist;
+  }
+
+  return `${artist} · ${album}`;
+}
+
 /* ------------------------------------------------------------------ */
 /* Page logic                                                          */
 /* ------------------------------------------------------------------ */
@@ -381,7 +414,7 @@ document.addEventListener('DOMContentLoaded', () => {
         meta.appendChild(el('span', `ing-kind ${item.kind}`, KIND_LABEL[item.kind] || 'Video'));
       }
       const subText = item.title
-        ? [item.artist, item.album].filter(Boolean).join(' · ')
+        ? formatItemSubtitle(item)
         : [desc.source, desc.extra].filter(Boolean).join(' · ');
       if (subText) meta.appendChild(el('span', 'ing-stage-sub', subText));
       if (item.duration) meta.appendChild(el('span', 'ing-stage-dur mono-stat', item.duration));
@@ -750,7 +783,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       info.appendChild(titleRow);
 
-      const sub = [item.artist, item.album].filter(Boolean).join(' · ');
+      const sub = formatItemSubtitle(item);
       const metaRow = el('div', 'ing-result-meta');
       if (sub) metaRow.appendChild(el('span', 'ing-result-sub', sub));
       if (item.duration) metaRow.appendChild(el('span', 'ing-result-dur mono-stat', item.duration));
