@@ -73,14 +73,14 @@ document.addEventListener('DOMContentLoaded', () => {
   let allPlaylists = [];
   let visibleFiles = [];
   let lastClickedIndex = null;
-  const collapsedGroups = new Set();
+  const expandedGroups = new Set();
   const rowElementsByPath = new Map();
   const groupDomMap = new Map();
   let previewDebounceTimer = null;
   let lastPreviewPlan = null; // {rel_path: new_rel_path} from the latest preview, sent back on apply
 
   const groupCollapseCtrl = createGroupCollapseController({
-    collapsedGroups,
+    expandedGroups,
     groupDomMap,
     btnCollapseAll: btnCollapseAllGroups,
     btnExpandAll: btnExpandAllGroups,
@@ -213,13 +213,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const fragment = document.createDocumentFragment();
 
     fragment.appendChild(
-      createPlaylistCard('ALL', 'All Collections (Show All)', `${totalSongs} songs total`, `${totalMp3} MP3`)
+      createPlaylistCard('ALL', 'All Collections (Show All)', `${totalSongs} songs total`, totalMp3 > 0 ? `${totalMp3} MP3` : '')
     );
 
     allPlaylists.forEach(pl => {
       const displayLabel = pl.label || ('📁 ' + pl.name);
       const subText = `${pl.total} songs`;
-      const badgeText = pl.mp3_count > 0 ? `${pl.mp3_count} MP3` : `${pl.other_count} Native`;
+      const badgeText = pl.mp3_count > 0 ? `${pl.mp3_count} MP3` : '';
       fragment.appendChild(createPlaylistCard(pl.name, displayLabel, subText, badgeText));
     });
 
@@ -240,10 +240,12 @@ document.addEventListener('DOMContentLoaded', () => {
     nameSpan.title = title;
     topRow.appendChild(nameSpan);
 
-    const badgeSpan = document.createElement('span');
-    badgeSpan.className = 'playlist-card-badge';
-    badgeSpan.textContent = badgeText;
-    topRow.appendChild(badgeSpan);
+    if (badgeText) {
+      const badgeSpan = document.createElement('span');
+      badgeSpan.className = 'playlist-card-badge';
+      badgeSpan.textContent = badgeText;
+      topRow.appendChild(badgeSpan);
+    }
 
     const bottomRow = document.createElement('div');
     bottomRow.className = 'playlist-card-sub';
@@ -314,7 +316,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let flatIdx = 0;
 
     groups.forEach(group => {
-      const isCollapsed = collapsedGroups.has(group.key);
+      const isCollapsed = groupCollapseCtrl.isCollapsed(group.key);
       const groupFilePaths = group.files.map(f => f.rel_path);
 
       const headerTr = document.createElement('tr');
@@ -894,7 +896,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (searchInput) searchInput.addEventListener('input', applyFiltersAndRenderTable);
   if (groupByMode) {
     groupByMode.addEventListener('change', () => {
-      collapsedGroups.clear();
+      expandedGroups.clear();
       applyFiltersAndRenderTable();
     });
   }

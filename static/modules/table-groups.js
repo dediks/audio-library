@@ -323,15 +323,28 @@ export function createFileNameCell(fileObj, opts = {}) {
 
 /**
  * Creates a reusable controller for collapsing/expanding grouped table rows across pages.
+ * Supports default-collapsed behavior when using `expandedGroups` (default closed/tertutup),
+ * or legacy `collapsedGroups`.
  */
 export function createGroupCollapseController(opts) {
-  const { collapsedGroups, groupDomMap, btnCollapseAll, btnExpandAll } = opts;
+  const {
+    collapsedGroups,
+    expandedGroups,
+    groupDomMap,
+    btnCollapseAll,
+    btnExpandAll,
+  } = opts;
 
-  function setGroupCollapsed(groupKey, collapse) {
-    if (collapse) collapsedGroups.add(groupKey);
-    else collapsedGroups.delete(groupKey);
+  const useExpanded = Boolean(expandedGroups);
 
-    const domEntry = groupDomMap.get(groupKey);
+  function isCollapsed(groupKey) {
+    if (useExpanded) {
+      return !expandedGroups.has(groupKey);
+    }
+    return collapsedGroups ? collapsedGroups.has(groupKey) : false;
+  }
+
+  function applyDomState(domEntry, collapse) {
     if (!domEntry) return;
     domEntry.chevron.classList.toggle('collapsed', collapse);
     domEntry.toggleHint.textContent = collapse ? 'Buka' : 'Lipat';
@@ -340,16 +353,40 @@ export function createGroupCollapseController(opts) {
     });
   }
 
+  function setGroupCollapsed(groupKey, collapse) {
+    if (useExpanded) {
+      if (collapse) expandedGroups.delete(groupKey);
+      else expandedGroups.add(groupKey);
+    } else if (collapsedGroups) {
+      if (collapse) collapsedGroups.add(groupKey);
+      else collapsedGroups.delete(groupKey);
+    }
+
+    const domEntry = groupDomMap.get(groupKey);
+    applyDomState(domEntry, collapse);
+  }
+
   function toggleGroup(groupKey) {
-    setGroupCollapsed(groupKey, !collapsedGroups.has(groupKey));
+    const currentlyCollapsed = isCollapsed(groupKey);
+    setGroupCollapsed(groupKey, !currentlyCollapsed);
   }
 
   function collapseAll() {
-    groupDomMap.forEach((_, key) => setGroupCollapsed(key, true));
+    if (useExpanded) {
+      expandedGroups.clear();
+    } else if (collapsedGroups) {
+      groupDomMap.forEach((_, key) => collapsedGroups.add(key));
+    }
+    groupDomMap.forEach(entry => applyDomState(entry, true));
   }
 
   function expandAll() {
-    groupDomMap.forEach((_, key) => setGroupCollapsed(key, false));
+    if (useExpanded) {
+      groupDomMap.forEach((_, key) => expandedGroups.add(key));
+    } else if (collapsedGroups) {
+      collapsedGroups.clear();
+    }
+    groupDomMap.forEach(entry => applyDomState(entry, false));
   }
 
   if (btnCollapseAll) {
@@ -359,5 +396,5 @@ export function createGroupCollapseController(opts) {
     btnExpandAll.addEventListener('click', expandAll);
   }
 
-  return { setGroupCollapsed, toggleGroup, collapseAll, expandAll };
+  return { setGroupCollapsed, toggleGroup, collapseAll, expandAll, isCollapsed };
 }
