@@ -748,7 +748,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let currentPreviewItem = null;
 
   function togglePreview(item) {
-    if (!item) return;
+    if (!item || item.kind === 'playlist' || item.kind === 'album') return;
     if (currentPreviewItem && currentPreviewItem.url === item.url) {
       if (ingPreviewAudio && !ingPreviewAudio.paused) {
         ingPreviewAudio.pause();
@@ -765,6 +765,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function startPreview(item) {
     if (!item || !ingPreviewDock || !ingPreviewAudio) return;
+    if (item.kind === 'playlist' || item.kind === 'album') return;
     currentPreviewItem = item;
 
     if (ingPreviewTitle) {
@@ -854,16 +855,23 @@ document.addEventListener('DOMContentLoaded', () => {
     ytmResultsList.replaceChildren();
 
     displayItems.forEach(item => {
+      const isCollection = item.kind === 'playlist' || item.kind === 'album';
       const row = el('div', 'ing-result');
       row.setAttribute('role', 'listitem');
       row.dataset.url = item.url;
+      if (isCollection) row.classList.add('is-collection');
 
-      const thumb = createThumb(item.thumbnail, 'ing-thumb', item.kind === 'playlist' ? '≡' : '♪');
-      thumb.title = `Pratinjau: ${item.title || item.url}`;
-      thumb.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        togglePreview(item);
-      });
+      const thumbClass = 'ing-thumb' + (!isCollection ? ' can-preview' : '');
+      const thumb = createThumb(item.thumbnail, thumbClass, isCollection ? '≡' : '♪');
+      if (!isCollection) {
+        thumb.title = `Pratinjau: ${item.title || item.url}`;
+        thumb.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          togglePreview(item);
+        });
+      } else {
+        thumb.title = item.title || item.url;
+      }
       row.appendChild(thumb);
 
       const info = el('div', 'ing-result-info');
@@ -915,15 +923,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const actions = el('div', 'ing-result-actions');
 
-      const btnPreview = el('button', 'ing-icon-btn ing-result-preview', '▶');
-      btnPreview.type = 'button';
-      btnPreview.title = 'Pratinjau lagu ini (Play/Stop)';
-      btnPreview.setAttribute('aria-label', `Pratinjau ${item.title}`);
-      btnPreview.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        togglePreview(item);
-      });
-      actions.appendChild(btnPreview);
+      if (!isCollection) {
+        const btnPreview = el('button', 'ing-icon-btn ing-result-preview', '▶');
+        btnPreview.type = 'button';
+        btnPreview.title = 'Pratinjau lagu ini (Play/Stop)';
+        btnPreview.setAttribute('aria-label', `Pratinjau ${item.title}`);
+        btnPreview.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          togglePreview(item);
+        });
+        actions.appendChild(btnPreview);
+      }
 
       const btnNow = el('button', 'ing-icon-btn ing-result-now', '⚡');
       btnNow.type = 'button';

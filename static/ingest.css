@@ -1366,10 +1366,13 @@ details[open] > summary .ing-adv-caret {
 
 .ing-thumb {
   position: relative;
+}
+
+.ing-thumb.can-preview {
   cursor: pointer;
 }
 
-.ing-thumb::after {
+.ing-thumb.can-preview::after {
   content: '▶';
   position: absolute;
   inset: 0;
@@ -1384,7 +1387,7 @@ details[open] > summary .ing-adv-caret {
   border-radius: inherit;
 }
 
-.ing-result:hover .ing-thumb::after {
+.ing-result:hover .ing-thumb.can-preview::after {
   opacity: 1;
 }
 
@@ -1393,7 +1396,7 @@ details[open] > summary .ing-adv-caret {
   box-shadow: inset 3px 0 0 var(--accent-cyan);
 }
 
-.ing-result.is-previewing .ing-thumb::after {
+.ing-result.is-previewing .ing-thumb.can-preview::after {
   content: '⏸';
   opacity: 1;
   background: rgba(0, 229, 255, 0.65);

@@ -224,7 +224,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let playMode = 'cue'; // 'cue' | 'continuous' | 'loop'
   let routingMode = 'stereo'; // 'stereo' | 'mono' | 'left' | 'right' | 'invert'
   let activeDspTab = 'eq'; // 'eq' | 'routing' | 'output' | ''
-  let cuePadsCollapsed = false;
+  let cuePadsCollapsed = true;
   let isMuted = false;
   let isSeeking = false;
   let isFadingOut = false;
@@ -336,8 +336,10 @@ document.addEventListener('DOMContentLoaded', () => {
       if (typeof prefs.autoTrim === 'boolean' && chkAutoTrim) {
         chkAutoTrim.checked = prefs.autoTrim;
       }
-      if (typeof prefs.cuePadsCollapsed === 'boolean') {
-        cuePadsCollapsed = prefs.cuePadsCollapsed;
+      if (typeof prefs.cuePadsCollapsed_v2 === 'boolean') {
+        cuePadsCollapsed = prefs.cuePadsCollapsed_v2;
+      } else {
+        cuePadsCollapsed = true;
       }
     } catch (_e) {
       // Ignore parse errors
@@ -353,6 +355,7 @@ document.addEventListener('DOMContentLoaded', () => {
           volume: volumeSlider ? Number(volumeSlider.value) : 100,
           autoTrim: chkAutoTrim ? Boolean(chkAutoTrim.checked) : true,
           cuePadsCollapsed,
+          cuePadsCollapsed_v2: cuePadsCollapsed,
         })
       );
     } catch (_e) {
