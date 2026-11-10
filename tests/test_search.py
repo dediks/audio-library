@@ -472,10 +472,177 @@ def test_web_ui_stream_preview_handler():
     handler.send_json.assert_called_with(400, {"error": "Parameter url diperlukan."})
 
 
+def test_extract_playlist_canonical_and_browse_ids():
+    # 1. Standard YouTube Music playlist URL
+    c1, b1, u1 = audio_manager.extract_playlist_canonical_and_browse_ids(
+        "https://music.youtube.com/playlist?list=PLB-KL4AmmhmhYvJPj2w2ZIVw5VyNivBtd"
+    )
+    assert c1 == "PLB-KL4AmmhmhYvJPj2w2ZIVw5VyNivBtd"
+    assert b1 == "VLPLB-KL4AmmhmhYvJPj2w2ZIVw5VyNivBtd"
+    assert u1 == "https://music.youtube.com/playlist?list=PLB-KL4AmmhmhYvJPj2w2ZIVw5VyNivBtd"
+
+    # 2. VL-prefixed playlist URL
+    c2, b2, u2 = audio_manager.extract_playlist_canonical_and_browse_ids(
+        "https://music.youtube.com/playlist?list=VLPLB-KL4AmmhmhYvJPj2w2ZIVw5VyNivBtd"
+    )
+    assert c2 == "PLB-KL4AmmhmhYvJPj2w2ZIVw5VyNivBtd"
+    assert b2 == "VLPLB-KL4AmmhmhYvJPj2w2ZIVw5VyNivBtd"
+    assert u2 == "https://music.youtube.com/playlist?list=PLB-KL4AmmhmhYvJPj2w2ZIVw5VyNivBtd"
+
+    # 3. Album ID
+    c3, b3, u3 = audio_manager.extract_playlist_canonical_and_browse_ids("MPREb_987654321")
+    assert c3 == "MPREb_987654321"
+    assert b3 == "MPREb_987654321"
+    assert u3 == "https://music.youtube.com/browse/MPREb_987654321"
+
+
+def test_inspect_playlist_innertube_mock():
+    mock_payload = {
+        "header": {
+            "musicDetailHeaderRenderer": {
+                "title": {"runs": [{"text": "Koleksi Dangdut Koplo Terlaris"}]},
+                "subtitle": {"runs": [{"text": "Swararia Lab"}]},
+                "secondSubtitle": {"runs": [{"text": "2 lagu • 8 menit"}]},
+                "thumbnail": {
+                    "croppedSquareThumbnailRenderer": {
+                        "thumbnail": {"thumbnails": [{"url": "https://lh3.googleusercontent.com/pl_thumb.jpg"}]}
+                    }
+                }
+            }
+        },
+        "contents": {
+            "singleColumnBrowseResultsRenderer": {
+                "tabs": [{
+                    "tabRenderer": {
+                        "content": {
+                            "sectionListRenderer": {
+                                "contents": [{
+                                    "musicPlaylistShelfRenderer": {
+                                        "contents": [
+                                            {
+                                                "musicResponsiveListItemRenderer": {
+                                                    "playlistItemData": {"videoId": "trackAAA"},
+                                                    "flexColumns": [
+                                                        {"musicResponsiveListItemFlexColumnRenderer": {"text": {"runs": [{"text": "Nyanyian Rindu"}]}}},
+                                                        {"musicResponsiveListItemFlexColumnRenderer": {"text": {"runs": [{"text": "Mahesa"}, {"text": " • "}, {"text": "3:45"}]}}}
+                                                    ],
+                                                    "thumbnail": {"musicThumbnailRenderer": {"thumbnail": {"thumbnails": [{"url": "https://lh3.googleusercontent.com/tA.jpg"}]}}}
+                                                }
+                                            },
+                                            {
+                                                "musicResponsiveListItemRenderer": {
+                                                    "playlistItemData": {"videoId": "trackBBB"},
+                                                    "flexColumns": [
+                                                        {"musicResponsiveListItemFlexColumnRenderer": {"text": {"runs": [{"text": "Cinta Dan Airmata"}]}}},
+                                                        {"musicResponsiveListItemFlexColumnRenderer": {"text": {"runs": [{"text": "Fariz Kendang"}, {"text": " • "}, {"text": "4:15"}]}}}
+                                                    ],
+                                                    "thumbnail": {"musicThumbnailRenderer": {"thumbnail": {"thumbnails": [{"url": "https://lh3.googleusercontent.com/tB.jpg"}]}}}
+                                                }
+                                            }
+                                        ]
+                                    }
+                                }]
+                            }
+                        }
+                    }
+                }]
+            }
+        }
+    }
+
+    mock_resp = MagicMock()
+    mock_resp.status = 200
+    mock_resp.read.return_value = json.dumps(mock_payload).encode("utf-8")
+    mock_resp.__enter__.return_value = mock_resp
+
+    with patch("urllib.request.urlopen", return_value=mock_resp):
+        res = audio_manager.inspect_playlist("https://music.youtube.com/playlist?list=PLmockInspect123")
+        assert res is not None
+        assert res["title"] == "Koleksi Dangdut Koplo Terlaris"
+        assert res["artist"] == "Swararia Lab"
+        assert res["track_count"] == 2
+        assert len(res["tracks"]) == 2
+        assert res["tracks"][0]["title"] == "Nyanyian Rindu"
+        assert res["tracks"][0]["id"] == "trackAAA"
+        assert res["tracks"][1]["title"] == "Cinta Dan Airmata"
+        assert res["tracks"][1]["id"] == "trackBBB"
+
+
+def test_inspect_playlist_ytdlp_fallback():
+    fake_info = {
+        "_type": "playlist",
+        "title": "Album Campursari",
+        "uploader": "Manthous",
+        "thumbnails": [{"url": "https://yt.com/thumb.jpg"}],
+        "entries": [
+            {
+                "id": "trk001",
+                "title": "Nyidamsari",
+                "uploader": "Manthous",
+                "duration": 250,
+                "thumbnails": [{"url": "https://yt.com/trk1.jpg"}],
+            }
+        ]
+    }
+
+    with patch("audio_manager._inspect_playlist_innertube", return_value=None):
+        with patch("yt_dlp.YoutubeDL") as mock_ydl_cls:
+            instance = mock_ydl_cls.return_value.__enter__.return_value
+            instance.extract_info.return_value = fake_info
+
+            res = audio_manager.inspect_playlist("https://music.youtube.com/playlist?list=PLcampursari99")
+            assert res is not None
+            assert res["title"] == "Album Campursari"
+            assert res["artist"] == "Manthous"
+            assert len(res["tracks"]) == 1
+            assert res["tracks"][0]["title"] == "Nyidamsari"
+            assert res["tracks"][0]["duration"] == "04:10"
+
+
+def test_web_ui_playlist_inspect_handler():
+    import web_ui
+
+    handler = web_ui.AudioServerHandler.__new__(web_ui.AudioServerHandler)
+    handler.client_address = ("127.0.0.1", 12345)
+    handler.headers = {}
+    handler.send_json = MagicMock()
+
+    # GET without url -> 400
+    handler.path = "/api/playlist/inspect"
+    handler.do_GET()
+    handler.send_json.assert_called_with(400, {"ok": False, "error": "Parameter url diperlukan."})
+
+    # GET with valid mock url -> 200
+    mock_data = {
+        "id": "PLtest",
+        "title": "Test Playlist",
+        "artist": "Artist",
+        "track_count": 1,
+        "tracks": [{"id": "s1", "title": "Song 1", "url": "https://music.youtube.com/watch?v=s1"}],
+    }
+    with patch("audio_manager.inspect_playlist", return_value=mock_data):
+        handler.path = "/api/playlist/inspect?url=https://music.youtube.com/playlist?list=PLtest"
+        handler.do_GET()
+        handler.send_json.assert_called_with(200, {"ok": True, **mock_data})
+
+    # POST without url -> 400
+    handler._handle_post_playlist_inspect({})
+    handler.send_json.assert_called_with(400, {"ok": False, "error": "Parameter url diperlukan."})
+
+    # POST with url -> 200
+    with patch("audio_manager.inspect_playlist", return_value=mock_data):
+        handler._handle_post_playlist_inspect({"url": "https://music.youtube.com/playlist?list=PLtest"})
+        handler.send_json.assert_called_with(200, {"ok": True, **mock_data})
+
+
 if __name__ == "__main__":
     test_search_empty_or_whitespace_returns_empty()
     test_parse_music_responsive_item_song()
     test_parse_music_responsive_item_playlist()
+    test_extract_playlist_canonical_and_browse_ids()
+    test_inspect_playlist_innertube_mock()
+    test_inspect_playlist_ytdlp_fallback()
+    test_web_ui_playlist_inspect_handler()
     test_search_youtube_music_innertube_mock()
     test_search_youtube_music_fallback_to_ytdlp()
     test_web_ui_search_handler_success()

@@ -1348,6 +1348,26 @@ class AudioServerHandler(BaseHTTPRequestHandler):
                 return
             direct_url, headers = stream_info
             self.serve_proxied_audio_stream(direct_url, headers)
+        elif path == "/api/playlist/inspect":
+            qs = parse_qs(parsed.query)
+            target_url = qs.get("url", [None])[0]
+            if not target_url:
+                self.send_json(400, {"ok": False, "error": "Parameter url diperlukan."})
+                return
+            try:
+                limit = min(max(int(qs.get("limit", [100])[0]), 1), 300)
+            except Exception:
+                limit = 100
+            use_cookies = qs.get("use_cookies", ["1"])[0] != "0"
+            cookies = COOKIES_FILE if use_cookies and COOKIES_FILE.is_file() else None
+            try:
+                data = audio_manager.inspect_playlist(target_url, limit=limit, cookies_file=cookies)
+                if not data:
+                    self.send_json(404, {"ok": False, "error": "Tidak dapat memuat daftar lagu dari playlist/album ini."})
+                    return
+                self.send_json(200, {"ok": True, **data})
+            except Exception as exc:
+                self.send_json(500, {"ok": False, "error": f"Gagal membaca playlist: {str(exc)}"})
         else:
             self.send_error(404, "Endpoint not found")
 
@@ -1472,6 +1492,8 @@ class AudioServerHandler(BaseHTTPRequestHandler):
             self.send_json(status, resp)
         elif path == "/api/search":
             self._handle_post_search(payload)
+        elif path == "/api/playlist/inspect":
+            self._handle_post_playlist_inspect(payload)
         elif path == "/api/scan":
             self._handle_post_scan(payload)
         elif path == "/api/browse-dirs":
@@ -1545,6 +1567,26 @@ class AudioServerHandler(BaseHTTPRequestHandler):
             })
         except Exception as exc:
             self.send_json(500, {"ok": False, "error": f"Pencarian gagal: {str(exc)}"})
+
+    def _handle_post_playlist_inspect(self, payload: dict) -> None:
+        target_url = (payload or {}).get("url") or (payload or {}).get("playlist_url")
+        if not target_url:
+            self.send_json(400, {"ok": False, "error": "Parameter url diperlukan."})
+            return
+        try:
+            limit = min(max(int((payload or {}).get("limit") or 100), 1), 300)
+        except Exception:
+            limit = 100
+        use_cookies = bool((payload or {}).get("use_cookies", True))
+        cookies = COOKIES_FILE if use_cookies and COOKIES_FILE.is_file() else None
+        try:
+            data = audio_manager.inspect_playlist(str(target_url).strip(), limit=limit, cookies_file=cookies)
+            if not data:
+                self.send_json(404, {"ok": False, "error": "Tidak dapat memuat daftar lagu dari playlist/album ini."})
+                return
+            self.send_json(200, {"ok": True, **data})
+        except Exception as exc:
+            self.send_json(500, {"ok": False, "error": f"Gagal membaca playlist: {str(exc)}"})
 
     def _handle_post_scan(self, payload: dict | None = None) -> None:
         raw_src = (payload or {}).get("source_dir")

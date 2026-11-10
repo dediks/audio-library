@@ -224,6 +224,18 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnPreviewExternal = $('btnPreviewExternal');
   const btnClosePreview = $('btnClosePreview');
 
+  // Playlist / Album Inspect Modal
+  const playlistInspectModal = $('playlistInspectModal');
+  const playlistInspectTitle = $('playlistInspectTitle');
+  const playlistInspectSub = $('playlistInspectSub');
+  const playlistInspectBadge = $('playlistInspectBadge');
+  const playlistInspectCount = $('playlistInspectCount');
+  const playlistInspectBody = $('playlistInspectBody');
+  const playlistInspectSelectedCount = $('playlistInspectSelectedCount');
+  const btnInspectAddAll = $('btnInspectAddAll');
+  const btnClosePlaylistInspect = $('btnClosePlaylistInspect');
+  const btnClosePlaylistInspectBtn = $('btnClosePlaylistInspectBtn');
+
   // Staging
   const stagingList = $('stagingList');
   const stagingEmpty = $('stagingEmpty');
@@ -748,7 +760,9 @@ document.addEventListener('DOMContentLoaded', () => {
   let currentPreviewItem = null;
 
   function togglePreview(item) {
-    if (!item || item.kind === 'playlist' || item.kind === 'album') return;
+    if (!item) return;
+    const kind = item.kind || item.type;
+    if (kind === 'playlist' || kind === 'album') return;
     if (currentPreviewItem && currentPreviewItem.url === item.url) {
       if (ingPreviewAudio && !ingPreviewAudio.paused) {
         ingPreviewAudio.pause();
@@ -765,7 +779,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function startPreview(item) {
     if (!item || !ingPreviewDock || !ingPreviewAudio) return;
-    if (item.kind === 'playlist' || item.kind === 'album') return;
+    const kind = item.kind || item.type;
+    if (kind === 'playlist' || kind === 'album') return;
     currentPreviewItem = item;
 
     if (ingPreviewTitle) {
@@ -783,7 +798,7 @@ document.addEventListener('DOMContentLoaded', () => {
       btnPreviewExternal.href = item.url || '#';
     }
     if (ingPreviewBadgeText) {
-      ingPreviewBadgeText.textContent = item.kind === 'video' ? 'Pratinjau Video Audio' : 'Pratinjau Audio (Native Opus)';
+      ingPreviewBadgeText.textContent = (item.kind === 'video' || item.type === 'video') ? 'Pratinjau Video Audio' : 'Pratinjau Audio (Native Opus)';
     }
 
     if (ingPreviewSpinner) ingPreviewSpinner.classList.remove('hidden');
@@ -841,6 +856,220 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  /* ---------------- Playlist & Album Inspect Modal ---------------- */
+  let currentInspectedItem = null;
+  let currentInspectedTracks = [];
+
+  function closePlaylistInspectModal() {
+    currentInspectedItem = null;
+    currentInspectedTracks = [];
+    if (playlistInspectModal) {
+      playlistInspectModal.classList.add('hidden');
+    }
+  }
+
+  async function openPlaylistInspectModal(item) {
+    if (!item || !playlistInspectModal || !playlistInspectBody) return;
+    currentInspectedItem = item;
+    currentInspectedTracks = [];
+
+    if (playlistInspectTitle) {
+      playlistInspectTitle.textContent = item.title || 'Daftar Lagu';
+      playlistInspectTitle.title = item.title || '';
+    }
+    if (playlistInspectSub) {
+      playlistInspectSub.textContent = formatItemSubtitle(item) || item.artist || '';
+    }
+    if (playlistInspectBadge) {
+      const isAlbum = item.kind === 'album' || item.type === 'album';
+      playlistInspectBadge.textContent = isAlbum ? '💿 Album' : '≡ Playlist';
+      playlistInspectBadge.className = 'ing-kind ' + (isAlbum ? 'album' : 'playlist');
+    }
+    if (playlistInspectCount) {
+      playlistInspectCount.textContent = item.track_count || 'Memuat...';
+    }
+    if (playlistInspectSelectedCount) {
+      playlistInspectSelectedCount.textContent = 'Memeriksa antrean...';
+    }
+
+    // Loading indicator
+    playlistInspectBody.replaceChildren();
+    const loadWrap = el('div', 'playlist-inspect-loading');
+    const spinner = el('span', 'spinner-small');
+    const loadText = el('p', 'playlist-inspect-load-text', 'Mengambil daftar lagu dari YouTube Music...');
+    loadWrap.appendChild(spinner);
+    loadWrap.appendChild(loadText);
+    playlistInspectBody.appendChild(loadWrap);
+
+    playlistInspectModal.classList.remove('hidden');
+
+    try {
+      const res = await apiPost('/api/playlist/inspect', {
+        url: item.url,
+        limit: 150,
+        use_cookies: optUseCookies ? Boolean(optUseCookies.checked) : true,
+      });
+
+      if (!currentInspectedItem || currentInspectedItem.url !== item.url) return;
+
+      if (!res || !res.ok || !Array.isArray(res.tracks)) {
+        throw new Error(res?.error || 'Gagal membaca isi playlist atau album.');
+      }
+
+      if (res.title && playlistInspectTitle) {
+        playlistInspectTitle.textContent = res.title;
+        playlistInspectTitle.title = res.title;
+      }
+      if (res.artist && playlistInspectSub) {
+        playlistInspectSub.textContent = res.artist + (res.subtitle ? ` • ${res.subtitle}` : '');
+      }
+      if (playlistInspectCount) {
+        playlistInspectCount.textContent = `${res.tracks.length} lagu`;
+      }
+
+      currentInspectedTracks = res.tracks.map(t => {
+        t.kind = t.kind || t.type || 'song';
+        return t;
+      });
+
+      renderPlaylistInspectTracks(currentInspectedTracks);
+    } catch (err) {
+      if (!currentInspectedItem || currentInspectedItem.url !== item.url) return;
+      playlistInspectBody.replaceChildren();
+      const errWrap = el('div', 'playlist-inspect-error');
+      errWrap.appendChild(el('p', 'playlist-inspect-err-text', String(err.message || err)));
+      const btnRetry = el('button', 'btn-secondary', 'Coba Lagi');
+      btnRetry.type = 'button';
+      btnRetry.addEventListener('click', () => openPlaylistInspectModal(item));
+      errWrap.appendChild(btnRetry);
+      playlistInspectBody.appendChild(errWrap);
+    }
+  }
+
+  function renderPlaylistInspectTracks(tracks) {
+    if (!playlistInspectBody) return;
+    playlistInspectBody.replaceChildren();
+
+    if (!tracks || !tracks.length) {
+      const emptyWrap = el('div', 'playlist-inspect-empty');
+      emptyWrap.appendChild(el('p', '', 'Tidak ada trek audio yang ditemukan di dalam playlist ini.'));
+      playlistInspectBody.appendChild(emptyWrap);
+      return;
+    }
+
+    const list = el('div', 'playlist-tracks-list');
+    list.setAttribute('role', 'list');
+
+    tracks.forEach((track, idx) => {
+      const row = el('div', 'playlist-track-row');
+      row.setAttribute('role', 'listitem');
+      row.dataset.url = track.url;
+
+      const idxSpan = el('span', 'playlist-track-idx mono-stat', String(idx + 1).padStart(2, '0'));
+      row.appendChild(idxSpan);
+
+      const thumb = createThumb(track.thumbnail, 'playlist-track-thumb can-preview', '♪');
+      thumb.title = `Pratinjau: ${track.title || track.url}`;
+      thumb.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        togglePreview(track);
+      });
+      row.appendChild(thumb);
+
+      const info = el('div', 'playlist-track-info');
+      const titleRow = el('div', 'playlist-track-title-row');
+      titleRow.appendChild(el('span', 'playlist-track-title', track.title || track.url));
+
+      if (track.audio_tier === 'hq' || track.album) {
+        const hqBadge = el('span', 'ing-kind hq-master', '✨ HQ Audio');
+        hqBadge.title = 'Katalog Master Studio Resmi (Native Opus 48kHz / AAC)';
+        titleRow.appendChild(hqBadge);
+      }
+      info.appendChild(titleRow);
+
+      const metaRow = el('div', 'playlist-track-meta');
+      const sub = formatItemSubtitle(track);
+      if (sub) metaRow.appendChild(el('span', 'playlist-track-artist', sub));
+      if (track.duration) metaRow.appendChild(el('span', 'playlist-track-dur mono-stat', track.duration));
+      info.appendChild(metaRow);
+      row.appendChild(info);
+
+      const actions = el('div', 'playlist-track-actions');
+
+      const btnPreview = el('button', 'ing-icon-btn playlist-track-preview', '▶');
+      btnPreview.type = 'button';
+      btnPreview.title = 'Pratinjau lagu ini (Play/Stop)';
+      btnPreview.setAttribute('aria-label', `Pratinjau ${track.title}`);
+      btnPreview.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        togglePreview(track);
+      });
+      actions.appendChild(btnPreview);
+
+      const btnNow = el('button', 'ing-icon-btn playlist-track-now', '⚡');
+      btnNow.type = 'button';
+      btnNow.title = 'Unduh sekarang (langsung ke antrean)';
+      btnNow.setAttribute('aria-label', `Unduh ${track.title}`);
+      btnNow.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        rememberMeta(track);
+        dispatchDownload([track.url], { fromStaging: false });
+      });
+      actions.appendChild(btnNow);
+
+      const btnAdd = el('button', 'btn-subtle playlist-track-add', '+ Antrean');
+      btnAdd.type = 'button';
+      btnAdd.setAttribute('aria-label', `Tambah ${track.title} ke antrean`);
+      btnAdd.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        toggleResult(track);
+      });
+      actions.appendChild(btnAdd);
+
+      row.appendChild(actions);
+      row.addEventListener('click', () => toggleResult(track));
+      list.appendChild(row);
+    });
+
+    playlistInspectBody.appendChild(list);
+    syncPlaylistInspectButtons();
+  }
+
+  function syncPlaylistInspectButtons() {
+    if (!playlistInspectModal || playlistInspectModal.classList.contains('hidden')) return;
+    if (!playlistInspectBody) return;
+
+    let stagedCount = 0;
+    playlistInspectBody.querySelectorAll('.playlist-track-row[data-url]').forEach(row => {
+      const url = row.dataset.url;
+      const staged = isStaged(url);
+      if (staged) stagedCount++;
+      const isPreviewing = currentPreviewItem && currentPreviewItem.url === url;
+      const isPlaying = isPreviewing && ingPreviewAudio && !ingPreviewAudio.paused;
+
+      row.classList.toggle('is-staged', staged);
+      row.classList.toggle('is-previewing', Boolean(isPreviewing));
+
+      const btn = row.querySelector('.playlist-track-add');
+      if (btn) {
+        btn.textContent = staged ? '✓ Di antrean' : '+ Antrean';
+        btn.classList.toggle('btn-primary', staged);
+        btn.classList.toggle('btn-subtle', !staged);
+        btn.setAttribute('aria-pressed', staged ? 'true' : 'false');
+      }
+
+      const btnPrev = row.querySelector('.playlist-track-preview');
+      if (btnPrev) {
+        btnPrev.textContent = isPlaying ? '⏸' : '▶';
+        btnPrev.title = isPlaying ? 'Jeda pratinjau' : 'Pratinjau lagu ini';
+      }
+    });
+
+    if (playlistInspectSelectedCount) {
+      playlistInspectSelectedCount.textContent = `${stagedCount} dari ${currentInspectedTracks.length} di antrean`;
+    }
+  }
+
   function renderResults(query) {
     resultsTitle.textContent = `${currentResults.length} hasil untuk "${query}"`;
     btnAddAllResults.classList.toggle('hidden', currentResults.length === 0);
@@ -855,22 +1084,26 @@ document.addEventListener('DOMContentLoaded', () => {
     ytmResultsList.replaceChildren();
 
     displayItems.forEach(item => {
-      const isCollection = item.kind === 'playlist' || item.kind === 'album';
+      const isCollection = item.kind === 'playlist' || item.kind === 'album' || item.type === 'playlist' || item.type === 'album';
       const row = el('div', 'ing-result');
       row.setAttribute('role', 'listitem');
       row.dataset.url = item.url;
       if (isCollection) row.classList.add('is-collection');
 
-      const thumbClass = 'ing-thumb' + (!isCollection ? ' can-preview' : '');
+      const thumbClass = 'ing-thumb' + (isCollection ? ' can-inspect' : ' can-preview');
       const thumb = createThumb(item.thumbnail, thumbClass, isCollection ? '≡' : '♪');
-      if (!isCollection) {
+      if (isCollection) {
+        thumb.title = `Lihat isi lagu: ${item.title || item.url}`;
+        thumb.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          openPlaylistInspectModal(item);
+        });
+      } else {
         thumb.title = `Pratinjau: ${item.title || item.url}`;
         thumb.addEventListener('click', (ev) => {
           ev.stopPropagation();
           togglePreview(item);
         });
-      } else {
-        thumb.title = item.title || item.url;
       }
       row.appendChild(thumb);
 
@@ -879,8 +1112,8 @@ document.addEventListener('DOMContentLoaded', () => {
       titleRow.appendChild(el('span', 'ing-result-title', item.title || item.url));
 
       // Quality & Source Tier Badges
-      if (item.kind === 'song') {
-        const isHq = item.audio_tier === 'hq' || Boolean(item.album) || !item.kind.includes('video');
+      if (item.kind === 'song' || item.type === 'song') {
+        const isHq = item.audio_tier === 'hq' || Boolean(item.album) || !(item.kind || '').includes('video');
         if (isHq) {
           const badge = el('span', 'ing-kind hq-master', '✨ HQ Audio');
           badge.title = 'Katalog Master Studio Resmi (Native Opus 48kHz / AAC)';
@@ -890,16 +1123,16 @@ document.addEventListener('DOMContentLoaded', () => {
           badge.title = 'Trek Audio YouTube Music';
           titleRow.appendChild(badge);
         }
-      } else if (item.kind === 'video') {
+      } else if (item.kind === 'video' || item.type === 'video') {
         const badge = el('span', 'ing-kind video', '🎬 Video Audio');
         badge.title = 'Audio dari Video Klip / Live Performance';
         titleRow.appendChild(badge);
-      } else if (item.kind === 'playlist') {
+      } else if (item.kind === 'playlist' || item.type === 'playlist') {
         const extra = item.track_count ? ` • ${item.track_count}` : '';
         const badge = el('span', 'ing-kind playlist', `≡ Playlist${extra}`);
         badge.title = 'Daftar Putar';
         titleRow.appendChild(badge);
-      } else if (item.kind === 'album') {
+      } else if (item.kind === 'album' || item.type === 'album') {
         const extra = item.track_count ? ` • ${item.track_count}` : '';
         const badge = el('span', 'ing-kind album', `💿 Album${extra}`);
         badge.title = 'Album Rilisan Resmi';
@@ -913,17 +1146,36 @@ document.addEventListener('DOMContentLoaded', () => {
       if (item.duration) metaRow.appendChild(el('span', 'ing-result-dur mono-stat', item.duration));
 
       // Stream spec pill in meta row
-      if (item.kind === 'song') {
+      if (item.kind === 'song' || item.type === 'song') {
         metaRow.appendChild(el('span', 'ing-result-spec mono-stat', 'Opus 48kHz • 160k'));
-      } else if (item.kind === 'video') {
+      } else if (item.kind === 'video' || item.type === 'video') {
         metaRow.appendChild(el('span', 'ing-result-spec video mono-stat', 'Video Audio'));
+      } else if (isCollection) {
+        const btnInspectPill = el('button', 'ing-result-inspect-pill', '📋 Lihat Lagu');
+        btnInspectPill.type = 'button';
+        btnInspectPill.title = 'Buka daftar isi lagu di dalam playlist/album ini';
+        btnInspectPill.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          openPlaylistInspectModal(item);
+        });
+        metaRow.appendChild(btnInspectPill);
       }
       info.appendChild(metaRow);
       row.appendChild(info);
 
       const actions = el('div', 'ing-result-actions');
 
-      if (!isCollection) {
+      if (isCollection) {
+        const btnInspect = el('button', 'ing-icon-btn ing-result-inspect', '📋');
+        btnInspect.type = 'button';
+        btnInspect.title = 'Lihat daftar isi lagu di dalam playlist/album ini';
+        btnInspect.setAttribute('aria-label', `Lihat daftar lagu: ${item.title}`);
+        btnInspect.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          openPlaylistInspectModal(item);
+        });
+        actions.appendChild(btnInspect);
+      } else {
         const btnPreview = el('button', 'ing-icon-btn ing-result-preview', '▶');
         btnPreview.type = 'button';
         btnPreview.title = 'Pratinjau lagu ini (Play/Stop)';
@@ -937,7 +1189,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const btnNow = el('button', 'ing-icon-btn ing-result-now', '⚡');
       btnNow.type = 'button';
-      btnNow.title = 'Unduh sekarang (langsung ke antrean, lewati daftar)';
+      btnNow.title = isCollection ? 'Unduh seluruh playlist sekarang' : 'Unduh sekarang (langsung ke antrean, lewati daftar)';
       btnNow.setAttribute('aria-label', `Unduh sekarang: ${item.title}`);
       btnNow.addEventListener('click', (ev) => {
         ev.stopPropagation();
@@ -955,7 +1207,13 @@ document.addEventListener('DOMContentLoaded', () => {
       actions.appendChild(btnToggle);
       row.appendChild(actions);
 
-      row.addEventListener('click', () => toggleResult(item));
+      row.addEventListener('click', () => {
+        if (isCollection) {
+          openPlaylistInspectModal(item);
+        } else {
+          toggleResult(item);
+        }
+      });
       ytmResultsList.appendChild(row);
     });
     syncResultButtons();
@@ -994,6 +1252,8 @@ document.addEventListener('DOMContentLoaded', () => {
       btnPreviewStage.textContent = isCurStaged ? '✓ Di antrean' : '+ Antrean';
       btnPreviewStage.classList.toggle('is-staged', isCurStaged);
     }
+
+    syncPlaylistInspectButtons();
   }
 
   if (resultsSortSelect) {
@@ -1040,6 +1300,40 @@ document.addEventListener('DOMContentLoaded', () => {
     stopPreview();
     omniInput.focus();
   });
+
+  if (btnClosePlaylistInspect) {
+    btnClosePlaylistInspect.addEventListener('click', closePlaylistInspectModal);
+  }
+  if (btnClosePlaylistInspectBtn) {
+    btnClosePlaylistInspectBtn.addEventListener('click', closePlaylistInspectModal);
+  }
+  if (playlistInspectModal) {
+    playlistInspectModal.addEventListener('click', (ev) => {
+      if (ev.target === playlistInspectModal) {
+        closePlaylistInspectModal();
+      }
+    });
+  }
+  if (btnInspectAddAll) {
+    btnInspectAddAll.addEventListener('click', () => {
+      if (!currentInspectedTracks || !currentInspectedTracks.length) return;
+      const res = addToStaging(currentInspectedTracks);
+      if (res.added > 0) {
+        notify({
+          type: 'success',
+          title: 'Ditambahkan ke Antrean',
+          message: `${res.added} lagu dari playlist berhasil ditambahkan ke antrean unduhan.`,
+        });
+      } else if (res.duplicate > 0 && res.added === 0) {
+        notify({
+          type: 'info',
+          title: 'Semua Lagu Sudah Ada',
+          message: 'Semua lagu dari playlist ini sudah ada di antrean.',
+        });
+      }
+      syncPlaylistInspectButtons();
+    });
+  }
 
   /* ---------------- Settings (persisted) ---------------- */
   function selectedFormat() {
@@ -1210,6 +1504,10 @@ document.addEventListener('DOMContentLoaded', () => {
   document.addEventListener('keydown', (e) => {
     if (document.body.dataset.page !== 'ingest') return;
     if (e.key === 'Escape') {
+      if (playlistInspectModal && !playlistInspectModal.classList.contains('hidden')) {
+        closePlaylistInspectModal();
+        return;
+      }
       if (ingPreviewDock && !ingPreviewDock.classList.contains('hidden')) {
         stopPreview();
         return;

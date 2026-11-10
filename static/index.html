@@ -450,6 +450,41 @@
         </a>
       </div>
     </section>
+
+    <!-- Modal Inspect Playlist / Album (Lihat Isi Lagu) -->
+    <div class="modal-backdrop hidden" id="playlistInspectModal" role="dialog" aria-modal="true" aria-labelledby="playlistInspectTitle">
+      <div class="modal-card playlist-inspect-card">
+        <div class="modal-header">
+          <div class="playlist-inspect-header-info">
+            <div class="playlist-inspect-tag-row">
+              <span class="ing-kind playlist" id="playlistInspectBadge">≡ Playlist</span>
+              <span class="playlist-inspect-track-count mono-stat" id="playlistInspectCount">0 lagu</span>
+            </div>
+            <h3 id="playlistInspectTitle">Daftar Lagu</h3>
+            <span class="playlist-inspect-sub" id="playlistInspectSub"></span>
+          </div>
+          <button type="button" class="btn-icon" id="btnClosePlaylistInspect" aria-label="Tutup">&times;</button>
+        </div>
+
+        <div class="modal-body playlist-inspect-body" id="playlistInspectBody">
+          <!-- Dynamic tracklist content -->
+        </div>
+
+        <div class="modal-footer playlist-inspect-footer">
+          <div class="playlist-inspect-footer-stats">
+            <span id="playlistInspectSelectedCount">0 dari 0 di antrean</span>
+          </div>
+          <div class="playlist-inspect-footer-actions">
+            <button type="button" id="btnInspectAddAll" class="btn-primary">
+              <span>+ Tambah Semua ke Antrean</span>
+            </button>
+            <button type="button" id="btnClosePlaylistInspectBtn" class="btn-secondary">
+              <span>Tutup</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   </main>
 
   <footer class="app-footer">
