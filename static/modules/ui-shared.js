@@ -294,51 +294,34 @@ export function initAppHeader(opts = {}) {
   nav.appendChild(tabVideoSplit);
   nav.appendChild(tabPlayer);
 
-  // 3. Unified System Diagnostics Bar
+  // 3. Compact Header Actions (Version + Notification Center)
   const statusGroup = document.createElement('div');
-  statusGroup.className = 'system-status-group';
+  statusGroup.className = 'header-actions-group';
   statusGroup.id = 'systemStatusGroup';
 
-  function createPill(pillId, dotId, labelText, valId, defaultVal, isDotActive = false) {
-    const pill = document.createElement('div');
-    pill.className = 'status-pill';
-    if (pillId) pill.id = pillId;
+  const updateBtn = document.createElement('button');
+  updateBtn.type = 'button';
+  updateBtn.className = 'header-version-btn';
+  updateBtn.id = 'statusUpdate';
+  updateBtn.title = 'Swararia Audio Lab — Klik untuk periksa pembaruan';
 
-    const dot = document.createElement('span');
-    dot.className = 'status-indicator' + (isDotActive ? ' active' : '');
-    if (dotId) dot.id = dotId;
+  const updateDot = document.createElement('span');
+  updateDot.className = 'status-indicator active';
+  updateDot.id = 'updateDot';
 
-    const label = document.createElement('span');
-    label.className = 'status-label';
-    label.textContent = labelText;
+  const updateVal = document.createElement('span');
+  updateVal.id = 'updateVal';
+  updateVal.textContent = 'v1.0.0';
 
-    const val = document.createElement('span');
-    val.className = 'status-val';
-    if (valId) val.id = valId;
-    val.textContent = defaultVal;
+  updateBtn.appendChild(updateDot);
+  updateBtn.appendChild(updateVal);
 
-    pill.appendChild(dot);
-    pill.appendChild(label);
-    pill.appendChild(val);
-    return { pill, dot, val };
-  }
-
-  const pyPill = createPill('statusPython', null, 'Python:', 'pythonVal', '3.12', true);
-  const ytdlpPill = createPill('statusYtdlp', 'ytdlpDot', 'yt-dlp:', 'ytdlpVal', 'checking...');
-  const ffmpegPill = createPill('statusFfmpeg', 'ffmpegDot', 'FFmpeg:', 'ffmpegVal', 'checking...');
-  const cookiesPill = createPill('statusCookies', 'cookiesDot', 'Premium:', 'cookiesVal', 'checking...');
-  const updatePill = createPill('statusUpdate', 'updateDot', 'Ver:', 'updateVal', '1.0.0', true);
-  updatePill.pill.classList.add('clickable-pill');
-  updatePill.pill.title = 'Swararia Audio Lab — Klik untuk memeriksa rilis pembaruan GitHub';
-  updatePill.pill.addEventListener('click', () => {
+  updateBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
     openUpdateModal(true);
   });
 
-  statusGroup.appendChild(pyPill.pill);
-  statusGroup.appendChild(ytdlpPill.pill);
-  statusGroup.appendChild(ffmpegPill.pill);
-  statusGroup.appendChild(cookiesPill.pill);
-  statusGroup.appendChild(updatePill.pill);
+  statusGroup.appendChild(updateBtn);
 
   // 4. Notification Bell & History Popover in Header
   const notifWrapper = createHeaderNotificationCenter();
@@ -350,16 +333,15 @@ export function initAppHeader(opts = {}) {
 
   function refreshStatus() {
     return checkSystemStatus({
-      pythonVal: pyPill.val,
-      ytdlpDot: ytdlpPill.dot,
-      ytdlpVal: ytdlpPill.val,
-      ffmpegDot: ffmpegPill.dot,
-      ffmpegVal: ffmpegPill.val,
-      requireFfprobe: true,
-      cookiesDot: cookiesPill.dot,
-      cookiesVal: cookiesPill.val,
-      updateVal: updatePill.val,
-      onData: opts.onSystemData,
+      updateVal: updateVal,
+      onData: (data) => {
+        if (data.app_version) {
+          updateVal.textContent = 'v' + data.app_version;
+        }
+        if (typeof opts.onSystemData === 'function') {
+          opts.onSystemData(data);
+        }
+      },
       onError: opts.onSystemError,
     });
   }
@@ -369,7 +351,7 @@ export function initAppHeader(opts = {}) {
 
   // Background check for GitHub updates shortly after startup
   setTimeout(() => {
-    checkForUpdatesUI(updatePill, false);
+    checkForUpdatesUI({ val: updateVal, dot: updateDot, pill: updateBtn }, false);
   }, 2500);
 
   return { refreshStatus };

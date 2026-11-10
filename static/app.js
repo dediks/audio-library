@@ -1,6 +1,11 @@
 /**
  * SWARARIA AUDIO LAB - Stage 1: Batch Audio Ingestion Client Logic
  * Strict DOM Manipulation (No innerHTML, strictly textContent & createElement)
+ *
+ * UX flow:  1) Omnibox (search OR paste URLs)  ->  2) Staging list (visual cards)
+ *           ->  3) Format + collapsible advanced options  ->  Sticky "Start" action bar.
+ * Right column renders the queue per-item (active / waiting / recent) from /api/queue,
+ * with the raw extraction log tucked into a collapsible panel.
  */
 
 import {
@@ -15,42 +20,226 @@ import {
   openFolderInExplorer,
 } from './modules/ui-shared.js';
 
+const STAGING_KEY = 'ingest_staging_v1';
+const SETTINGS_KEY = 'ingest_settings_v1';
+const META_KEY = 'ingest_url_meta_v1';
+const MAX_STAGING = 300;
+const MAX_META = 200;
+const ALLOWED_HOSTS = ['youtube.com', 'youtu.be'];
+
+/* ------------------------------------------------------------------ */
+/* Pure helpers                                                        */
+/* ------------------------------------------------------------------ */
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined && text !== null) node.textContent = String(text);
+  return node;
+}
+
+function clampStr(val, max = 300) {
+  return typeof val === 'string' ? val.slice(0, max) : '';
+}
+
+/** Mirrors backend normalization: strip internal 'VL' prefix from YT Music playlist IDs. */
+function normalizeYtUrl(url) {
+  if (!url) return '';
+  return url.trim().replace(/([?&]list=)VL([a-zA-Z0-9_-]+)/g, '$1$2');
+}
+
+/** Client-side allow-list check (backend re-validates authoritatively). */
+function isAllowedUrl(url) {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+    const host = u.hostname.toLowerCase();
+    return ALLOWED_HOSTS.some(d => host === d || host.endsWith('.' + d));
+  } catch (_) {
+    return false;
+  }
+}
+
+/** Only allow https image sources for thumbnails. */
+function safeImageUrl(url) {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'https:' ? u.href : '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function extractUrls(text) {
+  if (!text) return [];
+  const matches = text.match(/https?:\/\/[^\s<>"'`]+/gi) || [];
+  return matches.map(m => m.replace(/[),.;]+$/, ''));
+}
+
+function describeUrl(url) {
+  try {
+    const u = new URL(url);
+    const list = u.searchParams.get('list');
+    const v = u.searchParams.get('v') || (u.hostname.endsWith('youtu.be') ? u.pathname.slice(1) : '');
+    const isMusic = u.hostname.startsWith('music.');
+    if (list && !v) return { kind: 'playlist', label: `Playlist ${list.slice(0, 18)}`, source: isMusic ? 'YouTube Music' : 'YouTube' };
+    if (v) return { kind: 'video', label: `Video ${v.slice(0, 15)}`, source: isMusic ? 'YouTube Music' : 'YouTube', extra: list ? 'dalam playlist' : '' };
+    return { kind: 'video', label: u.hostname + u.pathname, source: 'YouTube' };
+  } catch (_) {
+    return { kind: 'video', label: url, source: '' };
+  }
+}
+
+function formatAgo(ts) {
+  if (!ts) return '';
+  const diff = Math.max(0, Date.now() / 1000 - Number(ts));
+  if (diff < 45) return 'baru saja';
+  if (diff < 3600) return `${Math.round(diff / 60)} mnt lalu`;
+  if (diff < 86400) return `${Math.round(diff / 3600)} jam lalu`;
+  return `${Math.round(diff / 86400)} hari lalu`;
+}
+
+function readJson(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw);
+    return parsed ?? fallback;
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function writeJson(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (_) {
+    // Storage full / disabled: non-critical
+  }
+}
+
+/** Sanitizes an item coming from search results, paste, or localStorage. */
+function sanitizeItem(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const url = normalizeYtUrl(clampStr(raw.url, 600));
+  if (!isAllowedUrl(url)) return null;
+  const desc = describeUrl(url);
+  const kindRaw = clampStr(raw.kind || raw.type, 20).toLowerCase();
+  const kind = ['song', 'video', 'playlist', 'album'].includes(kindRaw) ? kindRaw : desc.kind;
+  return {
+    url,
+    title: clampStr(raw.title, 200),
+    artist: clampStr(raw.artist, 200),
+    album: clampStr(raw.album, 200),
+    duration: clampStr(raw.duration, 16),
+    thumbnail: safeImageUrl(clampStr(raw.thumbnail, 800)),
+    kind,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Page logic                                                          */
+/* ------------------------------------------------------------------ */
+
 document.addEventListener('DOMContentLoaded', () => {
-  const form = document.getElementById('ingestForm');
-  const urlInput = document.getElementById('urlInput');
-  const optAutoScan = document.getElementById('optAutoScan');
-  const optPlaylist = document.getElementById('optPlaylist');
-  const optUseCookies = document.getElementById('optUseCookies');
-  const optKeepOpus = document.getElementById('optKeepOpus');
-  const optRawWebm = document.getElementById('optRawWebm');
-  const rawWebmToggleWrap = document.getElementById('rawWebmToggleWrap');
-  const keepOpusToggleWrap = document.getElementById('keepOpusToggleWrap');
-  const btnStartIngest = document.getElementById('btnStartIngest');
+  const $ = (id) => document.getElementById(id);
 
-  const systemNoticeCard = document.getElementById('systemNoticeCard');
-  const noticeTitle = document.getElementById('noticeTitle');
-  const noticeDesc = document.getElementById('noticeDesc');
-  const noticeCode = document.getElementById('noticeCode');
+  // Omnibox
+  const omniInput = $('omniInput');
+  const omniIcon = $('omniIcon');
+  const btnOmniClear = $('btnOmniClear');
+  const btnOmniSubmit = $('btnOmniSubmit');
+  const omniSpinner = $('omniSpinner');
+  const omniSubmitText = $('omniSubmitText');
+  const omniHint = $('omniHint');
+  const searchTypeChips = $('searchTypeChips');
 
-  const queueCounter = document.getElementById('queueCounter');
-  const jobStatusTag = document.getElementById('jobStatusTag');
-  const jobUrlLabel = document.getElementById('jobUrlLabel');
-  const progressFill = document.getElementById('progressFill');
-  const progressText = document.getElementById('progressText');
-  const terminalLogs = document.getElementById('terminalLogs');
-  const btnClearLogs = document.getElementById('btnClearLogs');
+  // Input Mode Tabs (Search vs Manual URL)
+  const tabModeSearch = $('tabModeSearch');
+  const tabModeManual = $('tabModeManual');
+  const searchModeContainer = $('searchModeContainer');
+  const manualModeContainer = $('manualModeContainer');
+  const manualUrlInput = $('manualUrlInput');
+  const btnClearManualUrls = $('btnClearManualUrls');
+  const btnAddManualUrls = $('btnAddManualUrls');
+  const manualCountHint = $('manualCountHint');
 
-  const inboxTotalSongsPill = document.getElementById('inboxTotalSongsPill');
-  const inboxTotalPlaylistsPill = document.getElementById('inboxTotalPlaylistsPill');
-  const btnOpenInboxExplorer = document.getElementById('btnOpenInboxExplorer');
+  // Results
+  const ytmResultsPanel = $('ytmResultsPanel');
+  const ytmResultsList = $('ytmResultsList');
+  const resultsTitle = $('resultsTitle');
+  const btnAddAllResults = $('btnAddAllResults');
+  const btnCloseResults = $('btnCloseResults');
+
+  // Staging
+  const stagingList = $('stagingList');
+  const stagingEmpty = $('stagingEmpty');
+  const stagingCount = $('stagingCount');
+  const btnClearStaging = $('btnClearStaging');
+
+  // Settings
+  const formatRadios = document.querySelectorAll('input[name="audioFormat"]');
+  const optRawWebm = $('optRawWebm');
+  const optKeepOpus = $('optKeepOpus');
+  const optPlaylist = $('optPlaylist');
+  const optAutoScan = $('optAutoScan');
+  const optUseCookies = $('optUseCookies');
+  const rawWebmToggleWrap = $('rawWebmToggleWrap');
+  const keepOpusToggleWrap = $('keepOpusToggleWrap');
+  const advancedPanel = $('advancedPanel');
+  const advancedSummary = $('advancedSummary');
+  const specText = $('specText');
+  const specDot = $('specDot');
+
+  // Action bar
+  const btnStartIngest = $('btnStartIngest');
+  const btnStartText = $('btnStartText');
+  const actionSummaryMain = $('actionSummaryMain');
+  const actionSummarySub = $('actionSummarySub');
+
+  // Monitor
+  const systemNoticeCard = $('systemNoticeCard');
+  const noticeTitle = $('noticeTitle');
+  const noticeDesc = $('noticeDesc');
+  const noticeCode = $('noticeCode');
+  const queueCounter = $('queueCounter');
+  const statActive = $('statActive');
+  const activeJobBox = $('activeJobBox');
+  const activeJobArt = $('activeJobArt');
+  const activeJobTitle = $('activeJobTitle');
+  const jobStatusTag = $('jobStatusTag');
+  const jobUrlLabel = $('jobUrlLabel');
+  const progressFill = $('progressFill');
+  const progressText = $('progressText');
+  const progressBar = $('progressBar');
+  const waitingList = $('waitingList');
+  const waitingEmpty = $('waitingEmpty');
+  const historyList = $('historyList');
+  const historyEmpty = $('historyEmpty');
+  const terminalLogs = $('terminalLogs');
+  const btnClearLogs = $('btnClearLogs');
+
+  // Inbox hub
+  const inboxTotalSongsPill = $('inboxTotalSongsPill');
+  const inboxTotalPlaylistsPill = $('inboxTotalPlaylistsPill');
+  const btnOpenInboxExplorer = $('btnOpenInboxExplorer');
 
   let currentInboxDir = '';
+  let currentSearchType = 'songs';
+  let currentResults = [];
+  let isSubmitting = false;
+  let lastMonitorSignature = '';
+
+  /** @type {ReturnType<typeof sanitizeItem>[]} */
+  let staging = (readJson(STAGING_KEY, []) || []).map(sanitizeItem).filter(Boolean).slice(0, MAX_STAGING);
+  let urlMeta = readJson(META_KEY, {});
+  if (!urlMeta || typeof urlMeta !== 'object' || Array.isArray(urlMeta)) urlMeta = {};
 
   function log(level, message) {
     appendLog(terminalLogs, level, message);
   }
 
-  // 1. Mount Shared Top Header & Check System Dependencies
+  /* ---------------- System header ---------------- */
   initAppHeader({
     activePage: 'ingest',
     onSystemData: (data) => {
@@ -74,132 +263,594 @@ document.addEventListener('DOMContentLoaded', () => {
     },
   });
 
-  // 2. Refresh Inbox Summary Counters
-  async function refreshInboxSummary() {
-    const { ok, data } = await apiGet('/api/library');
-    if (!ok || !data) return;
-    currentInboxDir = data.source_dir || '';
-    const files = data.files || [];
-    const playlists = (data.playlists || []).filter(p => p.name !== '__ROOT__');
-    if (inboxTotalSongsPill) {
-      inboxTotalSongsPill.textContent = `${files.length} Lagu di Inbox`;
+  /* ---------------- URL metadata cache (for queue display) ---------------- */
+  function rememberMeta(item) {
+    if (!item || !item.title) return;
+    urlMeta[item.url] = { title: item.title, artist: item.artist, thumbnail: item.thumbnail, t: Date.now() };
+    const keys = Object.keys(urlMeta);
+    if (keys.length > MAX_META) {
+      keys.sort((a, b) => (urlMeta[a].t || 0) - (urlMeta[b].t || 0))
+        .slice(0, keys.length - MAX_META)
+        .forEach(k => delete urlMeta[k]);
     }
-    if (inboxTotalPlaylistsPill) {
-      inboxTotalPlaylistsPill.textContent = `${playlists.length} Folder Playlist`;
+    writeJson(META_KEY, urlMeta);
+  }
+
+  function metaFor(url) {
+    const m = urlMeta[url];
+    if (!m || typeof m !== 'object') return null;
+    return {
+      title: clampStr(m.title, 200),
+      artist: clampStr(m.artist, 200),
+      thumbnail: safeImageUrl(clampStr(m.thumbnail, 800)),
+    };
+  }
+
+  /* ---------------- Thumbnails ---------------- */
+  function createThumb(src, className, fallbackGlyph = '♪') {
+    const wrap = el('div', className);
+    const safe = safeImageUrl(src);
+    if (safe) {
+      const img = document.createElement('img');
+      img.src = safe;
+      img.alt = '';
+      img.loading = 'lazy';
+      img.referrerPolicy = 'no-referrer';
+      img.addEventListener('error', () => {
+        img.remove();
+        wrap.textContent = fallbackGlyph;
+      });
+      wrap.appendChild(img);
+    } else {
+      wrap.textContent = fallbackGlyph;
+    }
+    return wrap;
+  }
+
+  const KIND_LABEL = { song: 'Lagu', video: 'Video', playlist: 'Playlist', album: 'Album' };
+
+  /* ---------------- Staging list ---------------- */
+  function isStaged(url) {
+    return staging.some(s => s.url === url);
+  }
+
+  function saveStaging() {
+    writeJson(STAGING_KEY, staging);
+  }
+
+  /** Adds items; returns { added, duplicate, invalid }. */
+  function addToStaging(rawItems) {
+    const res = { added: 0, duplicate: 0, invalid: 0 };
+    rawItems.forEach(raw => {
+      const item = sanitizeItem(raw);
+      if (!item) { res.invalid++; return; }
+      if (isStaged(item.url)) { res.duplicate++; return; }
+      if (staging.length >= MAX_STAGING) { res.invalid++; return; }
+      staging.push(item);
+      rememberMeta(item);
+      res.added++;
+    });
+    if (res.added) {
+      saveStaging();
+      renderStaging();
+      syncResultButtons();
+    }
+    return res;
+  }
+
+  function removeFromStaging(url) {
+    staging = staging.filter(s => s.url !== url);
+    saveStaging();
+    renderStaging();
+    syncResultButtons();
+  }
+
+  function renderStaging() {
+    stagingList.replaceChildren();
+    const count = staging.length;
+    stagingCount.textContent = String(count);
+    stagingEmpty.classList.toggle('hidden', count > 0);
+    stagingList.classList.toggle('hidden', count === 0);
+    btnClearStaging.classList.toggle('hidden', count === 0);
+
+    staging.forEach((item, idx) => {
+      const desc = describeUrl(item.url);
+      const row = el('div', 'ing-stage-item');
+      row.setAttribute('role', 'listitem');
+
+      row.appendChild(el('span', 'ing-stage-idx', String(idx + 1).padStart(2, '0')));
+      row.appendChild(createThumb(item.thumbnail, 'ing-thumb', item.kind === 'playlist' || item.kind === 'album' ? '≡' : '♪'));
+
+      const info = el('div', 'ing-stage-info');
+      info.appendChild(el('div', 'ing-stage-title', item.title || desc.label));
+      const meta = el('div', 'ing-stage-meta');
+      meta.appendChild(el('span', `ing-kind ${item.kind}`, KIND_LABEL[item.kind] || 'Video'));
+      const subText = item.title
+        ? [item.artist, item.album].filter(Boolean).join(' · ')
+        : [desc.source, desc.extra].filter(Boolean).join(' · ');
+      if (subText) meta.appendChild(el('span', 'ing-stage-sub', subText));
+      if (item.duration) meta.appendChild(el('span', 'ing-stage-dur mono-stat', item.duration));
+      info.appendChild(meta);
+      info.title = item.url;
+      row.appendChild(info);
+
+      const btnRemove = el('button', 'ing-icon-btn ing-stage-remove', '×');
+      btnRemove.type = 'button';
+      btnRemove.title = 'Hapus dari daftar';
+      btnRemove.setAttribute('aria-label', `Hapus ${item.title || desc.label} dari daftar`);
+      btnRemove.addEventListener('click', () => removeFromStaging(item.url));
+      row.appendChild(btnRemove);
+
+      stagingList.appendChild(row);
+    });
+
+    updateActionBar();
+  }
+
+  btnClearStaging.addEventListener('click', () => {
+    const prev = staging.slice();
+    staging = [];
+    saveStaging();
+    renderStaging();
+    syncResultButtons();
+    notify({
+      type: 'info',
+      title: 'Daftar dikosongkan',
+      message: `${prev.length} item dihapus dari daftar unduhan.`,
+    });
+  });
+
+  /* ---------------- Omnibox ---------------- */
+  function omniMode() {
+    return extractUrls(omniInput.value).length > 0 ? 'url' : 'search';
+  }
+
+  function updateOmniMode() {
+    const mode = omniMode();
+    const hasText = omniInput.value.length > 0;
+    btnOmniClear.classList.toggle('hidden', !hasText);
+    omniSubmitText.textContent = mode === 'url' ? 'Tambah' : 'Cari';
+    omniIcon.dataset.mode = mode;
+    searchTypeChips.classList.toggle('is-muted', mode === 'url');
+    omniHint.textContent = mode === 'url'
+      ? 'Enter untuk menambahkan URL ke daftar'
+      : 'Enter untuk cari · tempel URL langsung masuk daftar';
+  }
+
+  function reportAddResult(res, sourceLabel) {
+    if (res.added === 0 && res.duplicate === 0 && res.invalid === 0) return;
+    const notes = [];
+    if (res.duplicate) notes.push(`${res.duplicate} sudah ada di daftar`);
+    if (res.invalid) notes.push(`${res.invalid} bukan URL YouTube valid`);
+    notify({
+      type: res.added ? (notes.length ? 'warning' : 'info') : 'warning',
+      title: res.added ? `${res.added} ${sourceLabel} ditambahkan` : 'Tidak ada yang ditambahkan',
+      message: notes.length ? notes.join(' · ') : 'Siap diunduh dari daftar.',
+    });
+  }
+
+  function addUrlsFromText(text) {
+    const urls = extractUrls(text);
+    const res = addToStaging(urls.map(url => ({ url })));
+    reportAddResult(res, 'URL');
+    return res;
+  }
+
+  function submitOmni() {
+    const value = omniInput.value.trim();
+    if (!value) {
+      omniInput.focus();
+      return;
+    }
+    if (omniMode() === 'url') {
+      addUrlsFromText(value);
+      omniInput.value = '';
+      updateOmniMode();
+    } else {
+      performSearch(value);
     }
   }
 
-  // 3. Queue and Live Logs Monitor
-  const queueMonitor = createQueueMonitor({
-    queueCounter,
-    jobStatusTag,
-    jobUrlLabel,
-    progressFill,
-    progressText,
-    terminalLogs,
-    onActive: () => {
-      btnStartIngest.disabled = true;
-      btnStartIngest.classList.add('running');
-    },
-    onTaskFinished: (task) => {
-      if (Array.isArray(task.logs) && task.logs.length > 0) {
-        renderLogs(terminalLogs, task.logs);
+  omniInput.addEventListener('input', updateOmniMode);
+  omniInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      submitOmni();
+    } else if (e.key === 'Escape') {
+      if (!ytmResultsPanel.classList.contains('hidden')) {
+        ytmResultsPanel.classList.add('hidden');
+      } else if (omniInput.value) {
+        omniInput.value = '';
+        updateOmniMode();
       }
-      refreshInboxSummary();
-    },
-    onIdle: (justFinished) => {
-      btnStartIngest.disabled = false;
-      btnStartIngest.classList.remove('running');
-      if (justFinished) {
-        progressFill.style.width = '100%';
-        progressText.textContent = '100% Complete';
-        refreshInboxSummary();
-      }
-    },
+    }
   });
 
-  // 4. Format Spec Banner
-  const specText = document.getElementById('specText');
-  const specDot = document.getElementById('specDot');
-  const formatRadios = document.querySelectorAll('input[name="audioFormat"]');
-  if (specDot) specDot.style.backgroundColor = '#10b981';
-
-  function updateFormatSpecBanner() {
-    const val = document.querySelector('input[name="audioFormat"]:checked')?.value || 'opus';
-    const keepOpus = optKeepOpus ? optKeepOpus.checked : false;
-    const isRawWebm = optRawWebm ? optRawWebm.checked : false;
-
-    if (rawWebmToggleWrap) {
-      rawWebmToggleWrap.style.display = val === 'opus' ? 'flex' : 'none';
-    }
-    if (keepOpusToggleWrap) {
-      keepOpusToggleWrap.style.display = val.startsWith('mp3') ? 'flex' : 'none';
-    }
-
-    if (val === 'opus') {
-      if (isRawWebm) {
-        if (specText) specText.textContent = 'Target: Native Raw Stream — Format mentah asli YouTube (.webm / .m4a) tanpa remux (Anti-DRC, 4x Multi-thread)';
-        if (specDot) specDot.style.backgroundColor = 'var(--accent-cyan)';
-      } else {
-        if (specText) specText.textContent = 'Target: Opus Best Quality (.opus) — Lossless Remux 48 kHz + Cover Art HD (Anti-DRC, 4x Multi-thread)';
-        if (specDot) specDot.style.backgroundColor = '#10b981';
-      }
-    } else if (val === 'mp3_320k') {
-      const opusSuffix = keepOpus ? ' + Simpan File Asli Opus (.webm)' : '';
-      if (specText) specText.textContent = 'Target: MP3 320 kbps CBR' + opusSuffix + ' (KONVERSI lossy, 4x Multi-thread)';
-      if (specDot) specDot.style.backgroundColor = 'var(--accent-amber)';
-    } else if (val === 'mp3_vbr0') {
-      const opusSuffix = keepOpus ? ' + Simpan File Asli Opus (.webm)' : '';
-      if (specText) specText.textContent = 'Target: MP3 VBR 0' + opusSuffix + ' (KONVERSI lossy, 4x Multi-thread)';
-      if (specDot) specDot.style.backgroundColor = '#c084fc';
-    }
-  }
-
-  formatRadios.forEach(radio => {
-    radio.addEventListener('change', updateFormatSpecBanner);
-  });
-  if (optKeepOpus) optKeepOpus.addEventListener('change', updateFormatSpecBanner);
-  if (optRawWebm) optRawWebm.addEventListener('change', updateFormatSpecBanner);
-  updateFormatSpecBanner();
-
-  // 5. Submit Batch Ingestion Form
-  form.addEventListener('submit', async (e) => {
+  // Pasting text containing URLs (single or multi-line) goes straight to the staging list.
+  omniInput.addEventListener('paste', (e) => {
+    const text = e.clipboardData ? e.clipboardData.getData('text') : '';
+    if (extractUrls(text).length === 0) return;
     e.preventDefault();
-    const rawVal = urlInput.value.trim();
-    if (!rawVal) return;
+    addUrlsFromText(text);
+    updateOmniMode();
+  });
 
-    const urls = rawVal.split('\n').map(l => l.trim()).filter(Boolean);
-    const autoScan = optAutoScan ? optAutoScan.checked : true;
-    const isPlaylist = optPlaylist ? optPlaylist.checked : false;
-    const useCookies = optUseCookies ? optUseCookies.checked : true;
-    const keepOpus = optKeepOpus ? optKeepOpus.checked : false;
-    const selectedFormat = document.querySelector('input[name="audioFormat"]:checked')?.value || 'opus';
-    const isRawWebm = optRawWebm ? optRawWebm.checked : false;
-    const effectiveFormat = (selectedFormat === 'opus' && isRawWebm) ? 'native' : selectedFormat;
+  btnOmniClear.addEventListener('click', () => {
+    omniInput.value = '';
+    updateOmniMode();
+    ytmResultsPanel.classList.add('hidden');
+    omniInput.focus();
+  });
 
-    btnStartIngest.disabled = true;
-    const opusLog = (effectiveFormat.startsWith('mp3') && keepOpus) ? ' + Opus (.webm)' : '';
-    log('info', `[DISPATCH] Mengirim ${urls.length} item ke antrian unduhan (${effectiveFormat}${opusLog})...`);
+  btnOmniSubmit.addEventListener('click', submitOmni);
+
+  searchTypeChips.querySelectorAll('.ing-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      searchTypeChips.querySelectorAll('.ing-chip').forEach(c => {
+        c.classList.toggle('active', c === chip);
+        c.setAttribute('aria-checked', c === chip ? 'true' : 'false');
+      });
+      currentSearchType = chip.dataset.type || 'songs';
+      const q = omniInput.value.trim();
+      if (q && omniMode() === 'search' && !ytmResultsPanel.classList.contains('hidden')) {
+        performSearch(q);
+      }
+    });
+  });
+
+  /* ---------------- Input Mode Switcher (Search vs Manual URL) ---------------- */
+  function switchInputMode(mode) {
+    const isSearch = mode === 'search';
+    if (tabModeSearch) {
+      tabModeSearch.classList.toggle('active', isSearch);
+      tabModeSearch.setAttribute('aria-selected', isSearch ? 'true' : 'false');
+    }
+    if (tabModeManual) {
+      tabModeManual.classList.toggle('active', !isSearch);
+      tabModeManual.setAttribute('aria-selected', !isSearch ? 'true' : 'false');
+    }
+    if (searchModeContainer) searchModeContainer.classList.toggle('hidden', !isSearch);
+    if (manualModeContainer) manualModeContainer.classList.toggle('hidden', isSearch);
+
+    if (isSearch) {
+      if (omniInput) omniInput.focus();
+    } else {
+      if (manualUrlInput) manualUrlInput.focus();
+    }
+  }
+
+  if (tabModeSearch) tabModeSearch.addEventListener('click', () => switchInputMode('search'));
+  if (tabModeManual) tabModeManual.addEventListener('click', () => switchInputMode('manual'));
+
+  function submitManualUrls() {
+    if (!manualUrlInput) return;
+    const text = manualUrlInput.value.trim();
+    if (!text) {
+      manualUrlInput.focus();
+      return;
+    }
+    const res = addUrlsFromText(text);
+    if (res.added > 0) {
+      manualUrlInput.value = '';
+      if (manualCountHint) manualCountHint.textContent = 'Video tunggal atau playlist utuh didukung';
+    }
+  }
+
+  if (manualUrlInput) {
+    manualUrlInput.addEventListener('input', () => {
+      const urls = extractUrls(manualUrlInput.value);
+      if (manualCountHint) {
+        manualCountHint.textContent = urls.length > 0
+          ? `${urls.length} link URL terdeteksi`
+          : 'Video tunggal atau playlist utuh didukung';
+      }
+    });
+
+    manualUrlInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        submitManualUrls();
+      }
+    });
+  }
+
+  if (btnClearManualUrls && manualUrlInput) {
+    btnClearManualUrls.addEventListener('click', () => {
+      manualUrlInput.value = '';
+      if (manualCountHint) manualCountHint.textContent = 'Video tunggal atau playlist utuh didukung';
+      manualUrlInput.focus();
+    });
+  }
+
+  if (btnAddManualUrls) {
+    btnAddManualUrls.addEventListener('click', submitManualUrls);
+  }
+
+  /* ---------------- Search ---------------- */
+  function setSearching(on) {
+    omniSpinner.classList.toggle('hidden', !on);
+    btnOmniSubmit.disabled = on;
+    if (on) omniSubmitText.textContent = 'Mencari…';
+    else updateOmniMode();
+  }
+
+  function showResultsMessage(text, isError = false) {
+    ytmResultsList.replaceChildren();
+    const box = el('div', 'ing-results-empty' + (isError ? ' is-error' : ''));
+    box.appendChild(el('span', '', text));
+    ytmResultsList.appendChild(box);
+  }
+
+  function showResultsSkeleton() {
+    ytmResultsList.replaceChildren();
+    for (let i = 0; i < 4; i++) {
+      const row = el('div', 'ing-result is-skeleton');
+      row.appendChild(el('div', 'ing-thumb'));
+      const info = el('div', 'ing-result-info');
+      info.appendChild(el('div', 'ing-skel-line'));
+      info.appendChild(el('div', 'ing-skel-line short'));
+      row.appendChild(info);
+      ytmResultsList.appendChild(row);
+    }
+  }
+
+  async function performSearch(query) {
+    setSearching(true);
+    ytmResultsPanel.classList.remove('hidden');
+    resultsTitle.textContent = `Mencari "${query}"…`;
+    btnAddAllResults.classList.add('hidden');
+    showResultsSkeleton();
+
+    const { ok, data, error } = await apiPost('/api/search', {
+      query,
+      type: currentSearchType,
+      limit: 15,
+      use_cookies: optUseCookies.checked,
+    });
+    setSearching(false);
+
+    if (ok && data) {
+      currentResults = (data.results || []).map(sanitizeItem).filter(Boolean);
+      renderResults(query);
+    } else {
+      const errMsg = error || 'Gagal memuat hasil pencarian.';
+      resultsTitle.textContent = 'Pencarian gagal';
+      showResultsMessage(errMsg, true);
+      notify({ type: 'error', title: 'Pencarian Gagal', message: errMsg });
+    }
+  }
+
+  function renderResults(query) {
+    resultsTitle.textContent = `${currentResults.length} hasil untuk "${query}"`;
+    btnAddAllResults.classList.toggle('hidden', currentResults.length === 0);
+
+    if (currentResults.length === 0) {
+      showResultsMessage(`Tidak ditemukan hasil untuk "${query}". Coba kata kunci lain atau pilih "Semua".`);
+      return;
+    }
+
+    ytmResultsList.replaceChildren();
+    currentResults.forEach(item => {
+      const row = el('div', 'ing-result');
+      row.setAttribute('role', 'listitem');
+      row.dataset.url = item.url;
+
+      row.appendChild(createThumb(item.thumbnail, 'ing-thumb', item.kind === 'playlist' ? '≡' : '♪'));
+
+      const info = el('div', 'ing-result-info');
+      const titleRow = el('div', 'ing-result-title-row');
+      titleRow.appendChild(el('span', 'ing-result-title', item.title || item.url));
+      if (item.kind !== 'song') titleRow.appendChild(el('span', `ing-kind ${item.kind}`, KIND_LABEL[item.kind] || item.kind));
+      info.appendChild(titleRow);
+      const sub = [item.artist, item.album].filter(Boolean).join(' · ');
+      const metaRow = el('div', 'ing-result-meta');
+      if (sub) metaRow.appendChild(el('span', 'ing-result-sub', sub));
+      if (item.duration) metaRow.appendChild(el('span', 'ing-result-dur mono-stat', item.duration));
+      info.appendChild(metaRow);
+      row.appendChild(info);
+
+      const actions = el('div', 'ing-result-actions');
+
+      const btnNow = el('button', 'ing-icon-btn ing-result-now', '⚡');
+      btnNow.type = 'button';
+      btnNow.title = 'Unduh sekarang (langsung ke antrean, lewati daftar)';
+      btnNow.setAttribute('aria-label', `Unduh sekarang: ${item.title}`);
+      btnNow.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        rememberMeta(item);
+        dispatchDownload([item.url], { fromStaging: false });
+      });
+      actions.appendChild(btnNow);
+
+      const btnToggle = el('button', 'ing-result-add');
+      btnToggle.type = 'button';
+      btnToggle.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        toggleResult(item);
+      });
+      actions.appendChild(btnToggle);
+      row.appendChild(actions);
+
+      row.addEventListener('click', () => toggleResult(item));
+      ytmResultsList.appendChild(row);
+    });
+    syncResultButtons();
+  }
+
+  function toggleResult(item) {
+    if (isStaged(item.url)) removeFromStaging(item.url);
+    else addToStaging([item]);
+  }
+
+  function syncResultButtons() {
+    ytmResultsList.querySelectorAll('.ing-result[data-url]').forEach(row => {
+      const staged = isStaged(row.dataset.url);
+      row.classList.toggle('is-staged', staged);
+      const btn = row.querySelector('.ing-result-add');
+      if (btn) {
+        btn.textContent = staged ? '✓ Di daftar' : '+ Tambah';
+        btn.setAttribute('aria-pressed', staged ? 'true' : 'false');
+      }
+    });
+  }
+
+  btnAddAllResults.addEventListener('click', () => {
+    const res = addToStaging(currentResults);
+    reportAddResult(res, 'item');
+  });
+
+  btnCloseResults.addEventListener('click', () => {
+    ytmResultsPanel.classList.add('hidden');
+    omniInput.focus();
+  });
+
+  /* ---------------- Settings (persisted) ---------------- */
+  function selectedFormat() {
+    return document.querySelector('input[name="audioFormat"]:checked')?.value || 'opus';
+  }
+
+  function setSwitchEnabled(wrap, input, enabled, disabledHint) {
+    input.disabled = !enabled;
+    wrap.classList.toggle('is-disabled', !enabled);
+    const hint = wrap.querySelector('.ing-switch-hint');
+    if (hint) hint.textContent = enabled ? hint.dataset.defaultHint : disabledHint;
+  }
+
+  function effectiveFormat() {
+    const fmt = selectedFormat();
+    return fmt === 'opus' && optRawWebm.checked ? 'native' : fmt;
+  }
+
+  function formatShortLabel() {
+    const fmt = effectiveFormat();
+    if (fmt === 'native') return 'Stream asli';
+    if (fmt === 'mp3_320k') return 'MP3 320';
+    if (fmt === 'mp3_vbr0') return 'MP3 V0';
+    return 'Opus 48 kHz';
+  }
+
+  function updateSettingsUI() {
+    const fmt = selectedFormat();
+    const isOpus = fmt === 'opus';
+    setSwitchEnabled(rawWebmToggleWrap, optRawWebm, isOpus, 'Hanya untuk format Opus');
+    setSwitchEnabled(keepOpusToggleWrap, optKeepOpus, !isOpus, 'Hanya untuk format MP3');
+
+    const keep = !isOpus && optKeepOpus.checked;
+    let text;
+    let color;
+    if (isOpus && optRawWebm.checked) {
+      text = 'Stream asli YouTube (.webm / .m4a) · tanpa remux';
+      color = 'var(--accent-cyan)';
+    } else if (isOpus) {
+      text = 'Opus 48 kHz (.opus) · lossless remux · cover art HD · tag asli';
+      color = 'var(--accent-emerald)';
+    } else if (fmt === 'mp3_320k') {
+      text = 'MP3 320 kbps CBR · konversi lossy' + (keep ? ' · + master Opus' : '');
+      color = 'var(--accent-amber)';
+    } else {
+      text = 'MP3 VBR V0 · konversi lossy' + (keep ? ' · + master Opus' : '');
+      color = 'var(--accent-purple)';
+    }
+    specText.textContent = text;
+    specDot.style.backgroundColor = color;
+
+    const active = [];
+    if (isOpus && optRawWebm.checked) active.push('Stream mentah');
+    if (keep) active.push('Master Opus');
+    if (optPlaylist.checked) active.push('Subfolder');
+    if (optAutoScan.checked) active.push('Auto QC');
+    if (optUseCookies.checked) active.push('Cookies');
+    advancedSummary.textContent = active.length ? active.join(' · ') : 'Semua nonaktif';
+
+    persistSettings();
+    updateActionBar();
+  }
+
+  function persistSettings() {
+    writeJson(SETTINGS_KEY, {
+      format: selectedFormat(),
+      rawWebm: optRawWebm.checked,
+      keepOpus: optKeepOpus.checked,
+      playlist: optPlaylist.checked,
+      autoScan: optAutoScan.checked,
+      cookies: optUseCookies.checked,
+      advOpen: advancedPanel.open,
+    });
+  }
+
+  function restoreSettings() {
+    const s = readJson(SETTINGS_KEY, null);
+    if (!s || typeof s !== 'object') return;
+    if (['opus', 'mp3_320k', 'mp3_vbr0'].includes(s.format)) {
+      formatRadios.forEach(r => { r.checked = r.value === s.format; });
+    }
+    if (typeof s.rawWebm === 'boolean') optRawWebm.checked = s.rawWebm;
+    if (typeof s.keepOpus === 'boolean') optKeepOpus.checked = s.keepOpus;
+    if (typeof s.playlist === 'boolean') optPlaylist.checked = s.playlist;
+    if (typeof s.autoScan === 'boolean') optAutoScan.checked = s.autoScan;
+    if (typeof s.cookies === 'boolean') optUseCookies.checked = s.cookies;
+    if (typeof s.advOpen === 'boolean') advancedPanel.open = s.advOpen;
+  }
+
+  formatRadios.forEach(r => r.addEventListener('change', updateSettingsUI));
+  [optRawWebm, optKeepOpus, optPlaylist, optAutoScan, optUseCookies].forEach(cb => {
+    cb.addEventListener('change', updateSettingsUI);
+  });
+  advancedPanel.addEventListener('toggle', persistSettings);
+
+  /* ---------------- Action bar & dispatch ---------------- */
+  function updateActionBar() {
+    const n = staging.length;
+    btnStartIngest.disabled = n === 0 || isSubmitting;
+    btnStartIngest.classList.toggle('running', isSubmitting);
+    if (isSubmitting) {
+      btnStartText.textContent = 'Mengirim…';
+    } else {
+      btnStartText.textContent = n > 0 ? `Unduh ${n} item` : 'Mulai Unduh';
+    }
+    actionSummaryMain.textContent = n > 0 ? `${n} item siap diunduh` : 'Daftar masih kosong';
+    const extras = [formatShortLabel()];
+    if (optAutoScan.checked) extras.push('Auto QC');
+    if (optPlaylist.checked) extras.push('Subfolder playlist');
+    actionSummarySub.textContent = extras.join(' · ');
+  }
+
+  async function dispatchDownload(urls, { fromStaging }) {
+    if (!urls.length || isSubmitting) return;
+    isSubmitting = true;
+    updateActionBar();
+
+    const fmt = effectiveFormat();
+    const keepOpus = fmt.startsWith('mp3') && optKeepOpus.checked;
+    log('info', `[DISPATCH] Mengirim ${urls.length} item ke antrian unduhan (${fmt}${keepOpus ? ' + Opus (.webm)' : ''})...`);
 
     const { ok, data, error } = await apiPost('/api/download', {
       urls,
-      auto_scan: autoScan,
-      is_playlist: isPlaylist,
-      audio_format: effectiveFormat,
+      auto_scan: optAutoScan.checked,
+      is_playlist: optPlaylist.checked,
+      audio_format: fmt,
       keep_opus: keepOpus,
-      use_cookies: useCookies,
+      use_cookies: optUseCookies.checked,
       cookie_browser: 'chrome',
     });
 
+    isSubmitting = false;
+
     if (ok) {
       log('info', '[DISPATCH] ' + data.message);
-      const hasSkippedUrls = (data.duplicate_count || 0) > 0 || (data.invalid_count || 0) > 0;
+      const hasSkipped = (data.duplicate_count || 0) > 0 || (data.invalid_count || 0) > 0;
       notify({
-        type: hasSkippedUrls ? 'warning' : 'info',
-        title: hasSkippedUrls ? 'Antrian Ditambahkan (Dengan Catatan)' : 'Masuk Antrian Unduhan',
+        type: hasSkipped ? 'warning' : 'info',
+        title: hasSkipped ? 'Antrian Ditambahkan (Dengan Catatan)' : 'Masuk Antrian Unduhan',
         message: data.message,
       });
-      urlInput.value = '';
+      if (fromStaging) {
+        const sent = new Set(urls);
+        staging = staging.filter(s => !sent.has(s.url));
+        saveStaging();
+        renderStaging();
+        syncResultButtons();
+      }
       queueMonitor.poll();
     } else {
       const errMsg = error || 'Gagal menambahkan tugas.';
@@ -210,394 +861,199 @@ document.addEventListener('DOMContentLoaded', () => {
         message: errMsg,
         playSound: true,
       });
-      btnStartIngest.disabled = false;
+    }
+    updateActionBar();
+  }
+
+  btnStartIngest.addEventListener('click', () => {
+    dispatchDownload(staging.map(s => s.url), { fromStaging: true });
+  });
+
+  // Ctrl/Cmd + Enter anywhere on the page starts the batch.
+  document.addEventListener('keydown', (e) => {
+    if (document.body.dataset.page !== 'ingest') return;
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && staging.length > 0) {
+      e.preventDefault();
+      btnStartIngest.click();
     }
   });
 
-  // 6. YouTube Music In-App Search
-  const ytmSearchInput = document.getElementById('ytmSearchInput');
-  const btnClearSearchInput = document.getElementById('btnClearSearchInput');
-  const btnYtmSearch = document.getElementById('btnYtmSearch');
-  const searchSpinner = document.getElementById('searchSpinner');
-  const searchText = document.getElementById('searchText');
-  const searchTypeChips = document.getElementById('searchTypeChips');
-  const ytmResultsPanel = document.getElementById('ytmResultsPanel');
-  const resultsCountBadge = document.getElementById('resultsCountBadge');
-  const resultsQueryBadge = document.getElementById('resultsQueryBadge');
-  const btnSelectAllResults = document.getElementById('btnSelectAllResults');
-  const btnAddSelectedResults = document.getElementById('btnAddSelectedResults');
-  const btnCloseResults = document.getElementById('btnCloseResults');
-  const ytmResultsList = document.getElementById('ytmResultsList');
-  const btnClearUrls = document.getElementById('btnClearUrls');
-
-  let currentSearchType = 'songs';
-  let currentSearchResults = [];
-  let isAllSelected = false;
-
-  function normalizeYtUrl(url) {
-    if (!url) return '';
-    return url.replace(/([?&]list=)VL([a-zA-Z0-9_-]+)/g, '$1$2');
-  }
-
-  function appendUrlToInput(url) {
-    if (!url) return;
-    const clean = normalizeYtUrl(url);
-    const current = urlInput.value.trim();
-    if (!current) {
-      urlInput.value = clean;
-    } else {
-      const existing = current.split('\n').map(l => l.trim());
-      if (!existing.includes(clean)) {
-        urlInput.value = current + '\n' + clean;
-      }
-    }
-  }
-
-  if (btnClearUrls) {
-    btnClearUrls.addEventListener('click', () => {
-      urlInput.value = '';
-      urlInput.focus();
-    });
-  }
-
-  if (searchTypeChips) {
-    const chips = searchTypeChips.querySelectorAll('.search-chip');
-    chips.forEach(chip => {
-      chip.addEventListener('click', () => {
-        chips.forEach(c => c.classList.remove('active'));
-        chip.classList.add('active');
-        currentSearchType = chip.dataset.type || 'songs';
-        const q = ytmSearchInput ? ytmSearchInput.value.trim() : '';
-        if (q && ytmResultsPanel && !ytmResultsPanel.classList.contains('hidden')) {
-          performSearch(q);
-        }
-      });
-    });
-  }
-
-  if (ytmSearchInput && btnClearSearchInput) {
-    ytmSearchInput.addEventListener('input', () => {
-      btnClearSearchInput.classList.toggle('hidden', !ytmSearchInput.value);
-    });
-    btnClearSearchInput.addEventListener('click', (e) => {
-      e.preventDefault();
-      ytmSearchInput.value = '';
-      btnClearSearchInput.classList.add('hidden');
-      if (ytmResultsPanel) ytmResultsPanel.classList.add('hidden');
-      ytmSearchInput.focus();
-    });
-    ytmSearchInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        e.stopPropagation();
-        const q = ytmSearchInput.value.trim();
-        if (q) {
-          performSearch(q);
-        } else {
-          ytmSearchInput.focus();
-          notify({
-            type: 'warning',
-            title: 'Kata Kunci Kosong',
-            message: 'Silakan ketik judul lagu, musisi, atau playlist sebelum mencari.',
-          });
-        }
-      }
-    });
-  }
-
-  if (btnYtmSearch) {
-    btnYtmSearch.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const q = ytmSearchInput ? ytmSearchInput.value.trim() : '';
-      if (q) {
-        performSearch(q);
-      } else {
-        if (ytmSearchInput) ytmSearchInput.focus();
-        notify({
-          type: 'warning',
-          title: 'Kata Kunci Kosong',
-          message: 'Silakan ketik judul lagu, musisi, atau playlist sebelum mencari.',
-        });
-      }
-    });
-  }
-
-  if (btnCloseResults) {
-    btnCloseResults.addEventListener('click', (e) => {
-      e.preventDefault();
-      if (ytmResultsPanel) ytmResultsPanel.classList.add('hidden');
-    });
-  }
-
-  if (btnSelectAllResults) {
-    btnSelectAllResults.addEventListener('click', (e) => {
-      e.preventDefault();
-      isAllSelected = !isAllSelected;
-      if (ytmResultsList) {
-        const checkboxes = ytmResultsList.querySelectorAll('.result-checkbox');
-        checkboxes.forEach(cb => { cb.checked = isAllSelected; });
-      }
-      btnSelectAllResults.textContent = isAllSelected ? 'Batal Pilih' : 'Pilih Semua';
-    });
-  }
-
-  if (btnAddSelectedResults) {
-    btnAddSelectedResults.addEventListener('click', (e) => {
-      e.preventDefault();
-      if (!ytmResultsList) return;
-      const checkboxes = ytmResultsList.querySelectorAll('.result-checkbox:checked');
-      if (checkboxes.length === 0) {
-        notify({
-          type: 'warning',
-          title: 'Tidak Ada Lagu Dipilih',
-          message: 'Centang kotak pada lagu yang ingin dimasukkan ke antrean.',
-        });
-        return;
-      }
-      let addedCount = 0;
-      checkboxes.forEach(cb => {
-        const itemUrl = cb.dataset.url;
-        if (itemUrl) {
-          appendUrlToInput(itemUrl);
-          addedCount++;
-        }
-      });
-      notify({
-        type: 'info',
-        title: 'URL Berhasil Ditambahkan',
-        message: `${addedCount} link YouTube Music telah dimasukkan ke daftar antrean.`,
-      });
-      if (ytmResultsPanel) ytmResultsPanel.classList.add('hidden');
-    });
-  }
-
-  async function performSearch(query) {
-    if (!query) return;
-    if (searchSpinner) searchSpinner.classList.remove('hidden');
-    if (searchText) searchText.textContent = 'Mencari...';
-    if (btnYtmSearch) btnYtmSearch.disabled = true;
-
-    // Immediately display interactive loading drawer
-    if (ytmResultsPanel) {
-      ytmResultsPanel.classList.remove('hidden');
-      if (resultsCountBadge) resultsCountBadge.textContent = 'Mencari...';
-      if (resultsQueryBadge) resultsQueryBadge.textContent = `"${query}"`;
-    }
-    if (ytmResultsList) {
-      ytmResultsList.replaceChildren();
-      const loadingDiv = document.createElement('div');
-      loadingDiv.className = 'results-empty-state';
-      const sp = document.createElement('span');
-      sp.className = 'spinner-small';
-      sp.style.marginRight = '8px';
-      const text = document.createElement('span');
-      text.textContent = `Sedang mencari "${query}" di YouTube Music...`;
-      loadingDiv.appendChild(sp);
-      loadingDiv.appendChild(text);
-      ytmResultsList.appendChild(loadingDiv);
-    }
-
-    const useCookies = optUseCookies ? optUseCookies.checked : true;
-    const { ok, data, error } = await apiPost('/api/search', {
-      query,
-      type: currentSearchType,
-      limit: 15,
-      use_cookies: useCookies,
-    });
-
-    if (searchSpinner) searchSpinner.classList.add('hidden');
-    if (searchText) searchText.textContent = 'Cari Musik';
-    if (btnYtmSearch) btnYtmSearch.disabled = false;
-
-    if (ok && data) {
-      currentSearchResults = data.results || [];
-      renderSearchResults(currentSearchResults, query);
-    } else {
-      const errMsg = error || 'Gagal memuat hasil pencarian.';
-      if (ytmResultsList) {
-        ytmResultsList.replaceChildren();
-        const errDiv = document.createElement('div');
-        errDiv.className = 'results-empty-state';
-        errDiv.style.color = 'var(--accent-red)';
-        const errText = document.createElement('span');
-        errText.textContent = `Gagal: ${errMsg}`;
-        errDiv.appendChild(errText);
-        ytmResultsList.appendChild(errDiv);
-      }
-      notify({
-        type: 'error',
-        title: 'Pencarian Gagal',
-        message: errMsg,
-      });
-    }
-  }
-
-  function renderSearchResults(items, query) {
-    if (!ytmResultsList || !ytmResultsPanel) return;
-    ytmResultsList.replaceChildren();
-    isAllSelected = false;
-    if (btnSelectAllResults) btnSelectAllResults.textContent = 'Pilih Semua';
-
-    if (resultsCountBadge) {
-      resultsCountBadge.textContent = `${items.length} hasil`;
-    }
-    if (resultsQueryBadge) {
-      resultsQueryBadge.textContent = `"${query}"`;
-    }
-
-    if (items.length === 0) {
-      const emptyDiv = document.createElement('div');
-      emptyDiv.className = 'results-empty-state';
-      const emptyText = document.createElement('span');
-      emptyText.textContent = `Tidak ditemukan hasil untuk "${query}". Coba kata kunci lain atau pilih tab 'Semua'.`;
-      emptyDiv.appendChild(emptyText);
-      ytmResultsList.appendChild(emptyDiv);
-      ytmResultsPanel.classList.remove('hidden');
-      return;
-    }
-
-    items.forEach(item => {
-      const card = document.createElement('div');
-      card.className = 'search-result-item';
-
-      // Checkbox
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.className = 'result-checkbox';
-      cb.dataset.url = item.url;
-      card.appendChild(cb);
-
-      // Thumbnail
-      if (item.thumbnail) {
-        const img = document.createElement('img');
-        img.className = 'result-thumb';
-        img.src = item.thumbnail;
-        img.alt = item.title || 'Cover';
-        img.loading = 'lazy';
-        img.onerror = () => { img.style.display = 'none'; };
-        card.appendChild(img);
-      } else {
-        const placeholder = document.createElement('div');
-        placeholder.className = 'result-thumb-placeholder';
-        placeholder.textContent = '♪';
-        card.appendChild(placeholder);
-      }
-
-      // Info
-      const info = document.createElement('div');
-      info.className = 'result-info';
-
-      const titleRow = document.createElement('div');
-      titleRow.className = 'result-title-row';
-
-      const titleSpan = document.createElement('span');
-      titleSpan.className = 'result-title';
-      titleSpan.textContent = item.title;
-      titleRow.appendChild(titleSpan);
-
-      const typeBadge = document.createElement('span');
-      typeBadge.className = `result-type-badge ${item.type || 'song'}`;
-      typeBadge.textContent = (item.type || 'song').toUpperCase();
-      titleRow.appendChild(typeBadge);
-
-      info.appendChild(titleRow);
-
-      const metaRow = document.createElement('div');
-      metaRow.className = 'result-meta-row';
-
-      if (item.artist) {
-        const artistSpan = document.createElement('span');
-        artistSpan.className = 'result-artist';
-        artistSpan.textContent = item.artist + (item.album ? ` • ${item.album}` : '');
-        metaRow.appendChild(artistSpan);
-      }
-
-      if (item.duration) {
-        const durSpan = document.createElement('span');
-        durSpan.className = 'result-duration';
-        durSpan.textContent = item.duration;
-        metaRow.appendChild(durSpan);
-      }
-
-      info.appendChild(metaRow);
-      card.appendChild(info);
-
-      // Actions
-      const actions = document.createElement('div');
-      actions.className = 'result-actions';
-
-      const btnEnqueue = document.createElement('button');
-      btnEnqueue.type = 'button';
-      btnEnqueue.className = 'btn-result-enqueue';
-      btnEnqueue.textContent = '+ Ke Antrean';
-      btnEnqueue.title = 'Tambahkan link ini ke daftar URL';
-      btnEnqueue.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        appendUrlToInput(item.url);
-        btnEnqueue.textContent = '✓ Ditambahkan';
-        setTimeout(() => { btnEnqueue.textContent = '+ Ke Antrean'; }, 1500);
-        notify({
-          type: 'info',
-          title: 'Trek Ditambahkan',
-          message: `"${item.title}" ditambahkan ke kotak URL.`,
-        });
-      });
-      actions.appendChild(btnEnqueue);
-
-      const btnDownload = document.createElement('button');
-      btnDownload.type = 'button';
-      btnDownload.className = 'btn-result-download';
-      btnDownload.textContent = '⚡ Unduh';
-      btnDownload.title = 'Langsung unduh trek ini';
-      btnDownload.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        urlInput.value = normalizeYtUrl(item.url);
-        if (item.type === 'playlist' && optPlaylist) {
-          optPlaylist.checked = true;
-        }
-        ytmResultsPanel.classList.add('hidden');
-        form.requestSubmit();
-      });
-      actions.appendChild(btnDownload);
-
-      card.appendChild(actions);
-      ytmResultsList.appendChild(card);
-    });
-
-    ytmResultsPanel.classList.remove('hidden');
+  /* ---------------- Inbox summary ---------------- */
+  async function refreshInboxSummary() {
+    const { ok, data } = await apiGet('/api/library');
+    if (!ok || !data) return;
+    currentInboxDir = data.source_dir || '';
+    const files = data.files || [];
+    const playlists = (data.playlists || []).filter(p => p.name !== '__ROOT__');
+    if (inboxTotalSongsPill) inboxTotalSongsPill.textContent = `${files.length} Lagu di Inbox`;
+    if (inboxTotalPlaylistsPill) inboxTotalPlaylistsPill.textContent = `${playlists.length} Folder Playlist`;
   }
 
   if (btnOpenInboxExplorer) {
-    btnOpenInboxExplorer.addEventListener('click', () => {
-      openFolderInExplorer('', currentInboxDir);
+    btnOpenInboxExplorer.addEventListener('click', () => openFolderInExplorer('', currentInboxDir));
+  }
+
+  /* ---------------- Queue monitor rendering ---------------- */
+  const TYPE_LABEL = { download: 'Unduh', resample: 'Konversi', split: 'Split' };
+
+  function taskDisplay(task) {
+    const meta = task.type === 'download' || !task.type ? metaFor(task.url) : null;
+    const desc = task.type === 'download' || !task.type ? describeUrl(task.url || '') : null;
+    return {
+      title: (meta && meta.title) || task.title || (desc ? desc.label : task.url) || 'Tugas',
+      sub: (meta && meta.artist) || '',
+      thumbnail: meta ? meta.thumbnail : '',
+      typeLabel: TYPE_LABEL[task.type] || 'Tugas',
+    };
+  }
+
+  function outcomeOf(task) {
+    const out = task.outcome || task.status;
+    if (out === 'ALREADY_EXISTS') return { cls: 'exists', icon: '≡', label: 'Sudah ada' };
+    if (out === 'FAILED' || task.status === 'FAILED') return { cls: 'error', icon: '✕', label: 'Gagal' };
+    if (out === 'WARNING' || out === 'PARTIAL') return { cls: 'warning', icon: '!', label: 'Selesai (catatan)' };
+    return { cls: 'success', icon: '✓', label: 'Selesai' };
+  }
+
+  function renderActive(current, lastFinished) {
+    activeJobArt.replaceChildren();
+    if (current) {
+      const d = taskDisplay(current);
+      const p = Math.max(0, Math.min(100, Math.round(current.progress || 0)));
+      activeJobBox.dataset.state = 'active';
+      const art = createThumb(d.thumbnail, 'ing-now-art-inner');
+      activeJobArt.appendChild(art);
+      jobStatusTag.textContent = current.status || 'PROCESSING';
+      jobStatusTag.className = 'ing-status active';
+      activeJobTitle.textContent = d.title;
+      jobUrlLabel.textContent = [d.typeLabel, d.sub, current.url].filter(Boolean).join(' · ');
+      jobUrlLabel.title = current.url || '';
+      progressFill.style.width = p + '%';
+      progressText.textContent = p + '%';
+      progressBar.setAttribute('aria-valuenow', String(p));
+      return;
+    }
+    progressBar.removeAttribute('aria-valuenow');
+    if (lastFinished) {
+      const d = taskDisplay(lastFinished);
+      const o = outcomeOf(lastFinished);
+      activeJobBox.dataset.state = o.cls;
+      activeJobArt.appendChild(createThumb(d.thumbnail, 'ing-now-art-inner', o.icon));
+      jobStatusTag.textContent = o.label.toUpperCase();
+      jobStatusTag.className = 'ing-status ' + o.cls;
+      activeJobTitle.textContent = d.title;
+      jobUrlLabel.textContent = lastFinished.summary || lastFinished.error || 'Tugas selesai diproses.';
+      jobUrlLabel.title = jobUrlLabel.textContent;
+      progressFill.style.width = '100%';
+      progressText.textContent = formatAgo(lastFinished.finished_at);
+    } else {
+      activeJobBox.dataset.state = 'idle';
+      activeJobArt.textContent = '♪';
+      jobStatusTag.textContent = 'IDLE';
+      jobStatusTag.className = 'ing-status';
+      activeJobTitle.textContent = 'Tidak ada unduhan aktif';
+      jobUrlLabel.textContent = 'Tambahkan lagu di panel kiri untuk memulai.';
+      jobUrlLabel.title = '';
+      progressFill.style.width = '0%';
+      progressText.textContent = '';
+    }
+  }
+
+  function renderWaiting(queue) {
+    waitingList.replaceChildren();
+    waitingEmpty.classList.toggle('hidden', queue.length > 0);
+    queue.forEach((task, idx) => {
+      const d = taskDisplay(task);
+      const li = el('li', 'ing-qitem');
+      li.appendChild(el('span', 'ing-qitem-idx mono-stat', String(idx + 1)));
+      li.appendChild(createThumb(d.thumbnail, 'ing-thumb sm'));
+      const info = el('div', 'ing-qitem-info');
+      info.appendChild(el('div', 'ing-qitem-title', d.title));
+      const sub = [d.typeLabel, task.audio_format ? String(task.audio_format).replace('_', ' ').toUpperCase() : '', d.sub]
+        .filter(Boolean).join(' · ');
+      info.appendChild(el('div', 'ing-qitem-sub', sub));
+      info.title = task.url || '';
+      li.appendChild(info);
+      waitingList.appendChild(li);
     });
   }
 
-  if (btnClearLogs) {
-    btnClearLogs.addEventListener('click', () => {
-      terminalLogs.replaceChildren();
+  function renderHistory(history) {
+    historyList.replaceChildren();
+    historyEmpty.classList.toggle('hidden', history.length > 0);
+    history.forEach(task => {
+      const d = taskDisplay(task);
+      const o = outcomeOf(task);
+      const li = el('li', `ing-qitem is-${o.cls}`);
+      li.appendChild(el('span', `ing-outcome ${o.cls}`, o.icon));
+      const info = el('div', 'ing-qitem-info');
+      info.appendChild(el('div', 'ing-qitem-title', d.title));
+      info.appendChild(el('div', 'ing-qitem-sub', task.summary || task.error || o.label));
+      info.title = [task.summary, task.error, task.url].filter(Boolean).join('\n');
+      li.appendChild(info);
+      li.appendChild(el('span', 'ing-qitem-time', formatAgo(task.finished_at)));
+      historyList.appendChild(li);
     });
   }
 
-  const btnLogFilterAll = document.getElementById('btnLogFilterAll');
-  const btnLogFilterErrors = document.getElementById('btnLogFilterErrors');
-  if (btnLogFilterAll && btnLogFilterErrors) {
-    btnLogFilterAll.addEventListener('click', () => {
-      btnLogFilterAll.classList.add('active');
-      btnLogFilterErrors.classList.remove('active');
-      setLogFilter('all');
-    });
-    btnLogFilterErrors.addEventListener('click', () => {
-      btnLogFilterErrors.classList.add('active');
-      btnLogFilterAll.classList.remove('active');
-      setLogFilter('errors');
-    });
+  function renderSnapshot(data) {
+    const queue = Array.isArray(data.queue) ? data.queue : [];
+    const history = Array.isArray(data.history) ? data.history : [];
+    const current = data.current || null;
+
+    queueCounter.textContent = String(queue.length);
+    statActive.textContent = current ? '1' : '0';
+
+    // Skip list re-render when nothing changed (avoids thumbnail flicker every poll).
+    const sig = JSON.stringify([
+      queue.map(t => t.id),
+      history.map(t => [t.id, t.outcome]),
+      Math.floor(Date.now() / 60000), // refresh relative times once per minute
+    ]);
+    if (sig !== lastMonitorSignature) {
+      lastMonitorSignature = sig;
+      renderWaiting(queue);
+      renderHistory(history);
+    }
+    renderActive(current, history[0] || null);
   }
+
+  const queueMonitor = createQueueMonitor({
+    terminalLogs,
+    onSnapshot: renderSnapshot,
+    onTaskFinished: (task) => {
+      if (Array.isArray(task.logs) && task.logs.length > 0) {
+        renderLogs(terminalLogs, task.logs);
+      }
+      refreshInboxSummary();
+    },
+    onIdle: (justFinished) => {
+      if (justFinished) refreshInboxSummary();
+    },
+  });
+
+  /* ---------------- Log panel ---------------- */
+  btnClearLogs.addEventListener('click', () => terminalLogs.replaceChildren());
+  const btnLogFilterAll = $('btnLogFilterAll');
+  const btnLogFilterErrors = $('btnLogFilterErrors');
+  btnLogFilterAll.addEventListener('click', () => {
+    btnLogFilterAll.classList.add('active');
+    btnLogFilterErrors.classList.remove('active');
+    setLogFilter('all');
+  });
+  btnLogFilterErrors.addEventListener('click', () => {
+    btnLogFilterErrors.classList.add('active');
+    btnLogFilterAll.classList.remove('active');
+    setLogFilter('errors');
+  });
+
+  /* ---------------- Init ---------------- */
+  restoreSettings();
+  updateSettingsUI();
+  renderStaging();
+  updateOmniMode();
 
   queueMonitor.poll();
   refreshInboxSummary();
-  setInterval(() => {
-    queueMonitor.poll();
-  }, 2000);
+  setInterval(() => queueMonitor.poll(), 2000);
 });

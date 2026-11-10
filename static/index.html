@@ -11,6 +11,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
   <link rel="stylesheet" href="/static/player.css">
+  <link rel="stylesheet" href="/static/ingest.css">
 </head>
 <body class="dark-theme" data-page="ingest">
   <!-- Top Navigation & System Status Bar (Shared Component mounted via ui-shared.js) -->
@@ -33,11 +34,10 @@
       </div>
     </div>
 
-    <!-- Top Grid: Ingestion Console + Queue Monitor -->
-    <div class="dashboard-grid">
-      <!-- Batch Ingestion Panel -->
-      <section class="console-card ingestion-panel" aria-labelledby="ingestionHeading">
-        <div class="panel-header">
+    <div class="ing-layout">
+      <!-- ================= LEFT: Composer (Find → Stage → Configure → Start) ================= -->
+      <section class="console-card ing-composer" aria-labelledby="ingestionHeading">
+        <div class="ing-composer-head">
           <div class="panel-title-wrap">
             <span class="icon-chip">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -47,194 +47,228 @@
               </svg>
             </span>
             <div>
-              <h2 id="ingestionHeading">1. Batch Audio Ingestion Console</h2>
-              <p class="panel-sub">Akuisisi stream audio kualitas tertinggi dari URL video atau playlist</p>
+              <h2 id="ingestionHeading">Ingest Audio</h2>
+              <p class="panel-sub">Cari lagu atau tempel URL YouTube / YouTube Music, susun daftar, lalu unduh sekaligus.</p>
             </div>
           </div>
-          <span class="panel-badge">Native Audio Stream</span>
         </div>
 
-        <!-- YouTube Music In-App Search Console -->
-        <div class="search-ingest-container">
-          <div class="search-header-row">
-            <label for="ytmSearchInput" class="field-label-prominent">
-              <span class="search-icon-chip">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+        <!-- Step 1: Tambahkan Lagu atau Tempel URL -->
+        <div class="ing-step">
+          <div class="ing-step-label">
+            <span class="ing-step-num">1</span>
+            <span>Tambahkan Lagu / URL</span>
+            <div class="ing-mode-tabs" role="tablist" aria-label="Metode input lagu">
+              <button type="button" class="ing-mode-tab active" id="tabModeSearch" role="tab" aria-selected="true" aria-controls="searchModeContainer">
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                <span>Cari Musik</span>
+              </button>
+              <button type="button" class="ing-mode-tab" id="tabModeManual" role="tab" aria-selected="false" aria-controls="manualModeContainer">
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                  <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                </svg>
+                <span>Tempel URL Manual</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Mode 1: Search Console -->
+          <div id="searchModeContainer" class="ing-mode-content">
+            <div class="ing-omnibox" id="ingOmnibox">
+              <span class="ing-omnibox-icon" id="omniIcon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <circle cx="11" cy="11" r="8"></circle>
                   <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
                 </svg>
               </span>
-              <span>Pencarian YouTube Music</span>
-              <span class="label-hint">Cari lagu atau playlist langsung tanpa copy URL manual</span>
-            </label>
-
-            <div class="search-type-chips" id="searchTypeChips">
-              <button type="button" class="search-chip active" data-type="songs">🎵 Lagu</button>
-              <button type="button" class="search-chip" data-type="playlists">📁 Playlist</button>
-              <button type="button" class="search-chip" data-type="albums">💿 Album</button>
-              <button type="button" class="search-chip" data-type="all">🌐 Semua</button>
-            </div>
-          </div>
-
-          <div class="search-bar-row">
-            <div class="search-input-wrap">
               <input
                 type="text"
-                id="ytmSearchInput"
-                class="field-input search-text-input"
-                placeholder="Ketik judul lagu, musisi, atau playlist lalu tekan Enter..."
+                id="omniInput"
+                class="ing-omnibox-input"
+                placeholder="Ketik judul lagu, musisi, atau playlist..."
                 autocomplete="off"
+                spellcheck="false"
+                aria-label="Cari lagu atau tempel URL"
+                aria-describedby="omniHint"
               >
-              <button type="button" id="btnClearSearchInput" class="btn-clear-search hidden" title="Hapus teks pencarian">&times;</button>
+              <button type="button" id="btnOmniClear" class="ing-omnibox-clear hidden" title="Hapus teks" aria-label="Hapus teks">&times;</button>
+              <button type="button" id="btnOmniSubmit" class="btn-primary ing-omnibox-submit">
+                <span id="omniSpinner" class="spinner-small hidden"></span>
+                <span id="omniSubmitText">Cari</span>
+              </button>
             </div>
-            <button type="button" id="btnYtmSearch" class="btn-primary btn-search-submit">
-              <span id="searchSpinner" class="spinner-small hidden"></span>
-              <span id="searchText">Cari Musik</span>
-            </button>
+
+            <div class="ing-omnibox-meta">
+              <div class="ing-chips" id="searchTypeChips" role="radiogroup" aria-label="Jenis pencarian">
+                <button type="button" class="ing-chip active" data-type="songs" role="radio" aria-checked="true">Lagu</button>
+                <button type="button" class="ing-chip" data-type="playlists" role="radio" aria-checked="false">Playlist</button>
+                <button type="button" class="ing-chip" data-type="albums" role="radio" aria-checked="false">Album</button>
+                <button type="button" class="ing-chip" data-type="all" role="radio" aria-checked="false">Semua</button>
+              </div>
+              <span class="ing-hint" id="omniHint">Tekan Enter untuk mencari &middot; tempel URL juga didukung</span>
+            </div>
+
+            <!-- Search results -->
+            <div id="ytmResultsPanel" class="ing-results hidden" aria-live="polite">
+              <div class="ing-results-head">
+                <span class="ing-results-title" id="resultsTitle">Hasil pencarian</span>
+                <div class="ing-results-actions">
+                  <button type="button" id="btnAddAllResults" class="ing-link-btn">Tambah semua</button>
+                  <button type="button" id="btnCloseResults" class="ing-icon-btn" title="Tutup hasil (Esc)" aria-label="Tutup hasil">&times;</button>
+                </div>
+              </div>
+              <div id="ytmResultsList" class="ing-results-list" role="list"></div>
+            </div>
           </div>
 
-          <!-- Panel Hasil Pencarian Drawer -->
-          <div id="ytmResultsPanel" class="search-results-drawer hidden">
-            <div class="results-drawer-header">
-              <div class="results-drawer-meta">
-                <span id="resultsCountBadge" class="results-count-pill">0 hasil</span>
-                <span id="resultsQueryBadge" class="results-query-pill"></span>
+          <!-- Mode 2: Dedicated Manual Batch URL Textarea -->
+          <div id="manualModeContainer" class="ing-mode-content hidden">
+            <div class="ing-manual-box">
+              <div class="ing-manual-head">
+                <span class="ing-hint">Tempel satu atau banyak URL (satu URL per baris):</span>
+                <button type="button" id="btnClearManualUrls" class="ing-link-btn" title="Bersihkan kotak URL">Bersihkan</button>
               </div>
-              <div class="results-drawer-actions">
-                <button type="button" id="btnSelectAllResults" class="btn-drawer-action">Pilih Semua</button>
-                <button type="button" id="btnAddSelectedResults" class="btn-drawer-action btn-add-selected">+ Masukkan Terpilih</button>
-                <button type="button" id="btnCloseResults" class="btn-drawer-action btn-close-drawer" title="Tutup">✕ Tutup</button>
+              <textarea
+                id="manualUrlInput"
+                class="ing-manual-textarea"
+                rows="3"
+                placeholder="https://www.youtube.com/watch?v=...&#10;https://music.youtube.com/watch?v=...&#10;https://www.youtube.com/playlist?list=..."
+                spellcheck="false"
+                aria-label="Daftar URL Unduhan Manual"
+              ></textarea>
+              <div class="ing-manual-foot">
+                <span class="ing-hint" id="manualCountHint">Video tunggal atau playlist utuh didukung</span>
+                <button type="button" id="btnAddManualUrls" class="btn-primary ing-manual-submit">
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                  </svg>
+                  <span>Masukkan ke Daftar</span>
+                </button>
               </div>
             </div>
-            <div id="ytmResultsList" class="search-results-list"></div>
           </div>
         </div>
 
-        <form id="ingestForm" class="ingest-form compact-settings-stack">
+        <!-- Step 2: Staging list -->
+        <div class="ing-step">
+          <div class="ing-step-label">
+            <span class="ing-step-num">2</span>Daftar unduhan
+            <span class="ing-count-pill" id="stagingCount">0</span>
+            <button type="button" id="btnClearStaging" class="ing-link-btn ing-push-right hidden">Kosongkan</button>
+          </div>
+          <div class="ing-staging" id="stagingList" role="list" aria-label="Daftar unduhan"></div>
+          <div class="ing-staging-empty" id="stagingEmpty">
+            <div class="ing-empty-icon" aria-hidden="true">♪</div>
+            <p class="ing-empty-title">Belum ada lagu di daftar</p>
+            <p class="ing-empty-sub">Cari di atas, atau tempel URL video / playlist. Bisa tempel banyak URL sekaligus.</p>
+          </div>
+        </div>
 
-          <div class="field-group compact-field">
-            <div class="field-label-split">
-              <label for="urlInput" class="field-label">
-                <span>Daftar URL Unduhan (Antrean Batch)</span>
-                <span class="label-hint">Satu URL per baris (video tunggal atau playlist penuh)</span>
+        <!-- Step 3: Output settings -->
+        <div class="ing-step">
+          <div class="ing-step-label"><span class="ing-step-num">3</span>Format output</div>
+          <div class="ing-segmented" role="radiogroup" aria-label="Format output">
+            <label class="ing-seg">
+              <input type="radio" name="audioFormat" value="opus" checked>
+              <span class="ing-seg-body">
+                <span class="ing-seg-title">Opus <span class="ing-seg-tag emerald">BEST</span></span>
+                <span class="ing-seg-desc">48 kHz &middot; lossless remux</span>
+              </span>
+            </label>
+            <label class="ing-seg">
+              <input type="radio" name="audioFormat" value="mp3_320k">
+              <span class="ing-seg-body">
+                <span class="ing-seg-title">MP3 320</span>
+                <span class="ing-seg-desc">CBR &middot; CDJ / USB lama</span>
+              </span>
+            </label>
+            <label class="ing-seg">
+              <input type="radio" name="audioFormat" value="mp3_vbr0">
+              <span class="ing-seg-body">
+                <span class="ing-seg-title">MP3 V0</span>
+                <span class="ing-seg-desc">VBR &middot; ukuran efisien</span>
+              </span>
+            </label>
+          </div>
+          <p class="ing-spec" id="specLine">
+            <span class="ing-spec-dot" id="specDot"></span>
+            <span id="specText">Opus 48 kHz (.opus) · cover art HD · tag asli</span>
+          </p>
+
+          <details class="ing-advanced" id="advancedPanel">
+            <summary>
+              <span class="ing-adv-caret" aria-hidden="true"></span>
+              <span class="ing-adv-title">Opsi lanjutan</span>
+              <span class="ing-adv-summary" id="advancedSummary"></span>
+            </summary>
+            <div class="ing-adv-grid">
+              <label class="ing-switch" id="rawWebmToggleWrap">
+                <input type="checkbox" id="optRawWebm">
+                <span class="ing-switch-track" aria-hidden="true"></span>
+                <span class="ing-switch-text">
+                  <span class="ing-switch-title">Stream mentah (.webm/.m4a)</span>
+                  <span class="ing-switch-hint" data-default-hint="Tanpa remux ke .opus">Tanpa remux ke .opus</span>
+                </span>
               </label>
-              <button type="button" id="btnClearUrls" class="btn-clear-urls" title="Bersihkan daftar URL">Bersihkan</button>
+              <label class="ing-switch" id="keepOpusToggleWrap">
+                <input type="checkbox" id="optKeepOpus">
+                <span class="ing-switch-track" aria-hidden="true"></span>
+                <span class="ing-switch-text">
+                  <span class="ing-switch-title">Simpan master Opus</span>
+                  <span class="ing-switch-hint" data-default-hint="File .webm asli ikut disimpan">File .webm asli ikut disimpan</span>
+                </span>
+              </label>
+              <label class="ing-switch">
+                <input type="checkbox" id="optPlaylist" checked>
+                <span class="ing-switch-track" aria-hidden="true"></span>
+                <span class="ing-switch-text">
+                  <span class="ing-switch-title">Subfolder per playlist</span>
+                  <span class="ing-switch-hint">Rapi di library/inbox</span>
+                </span>
+              </label>
+              <label class="ing-switch">
+                <input type="checkbox" id="optAutoScan" checked>
+                <span class="ing-switch-track" aria-hidden="true"></span>
+                <span class="ing-switch-text">
+                  <span class="ing-switch-title">Auto QC audit</span>
+                  <span class="ing-switch-hint">True Peak, LUFS &amp; spectrum</span>
+                </span>
+              </label>
+              <label class="ing-switch">
+                <input type="checkbox" id="optUseCookies" checked>
+                <span class="ing-switch-track" aria-hidden="true"></span>
+                <span class="ing-switch-text">
+                  <span class="ing-switch-title">Gunakan cookies sesi</span>
+                  <span class="ing-switch-hint">library/cookies.txt</span>
+                </span>
+              </label>
             </div>
-            <textarea
-              id="urlInput"
-              class="field-textarea"
-              rows="3"
-              placeholder="https://www.youtube.com/watch?v=...&#10;https://music.youtube.com/watch?v=...&#10;https://www.youtube.com/playlist?list=..."
-              required
-            ></textarea>
+          </details>
+        </div>
+
+        <!-- Sticky action bar -->
+        <div class="ing-actionbar">
+          <div class="ing-actionbar-info">
+            <span class="ing-actionbar-main" id="actionSummaryMain">Daftar masih kosong</span>
+            <span class="ing-actionbar-sub" id="actionSummarySub">Opus 48 kHz</span>
           </div>
-
-          <div class="field-group compact-field">
-            <label class="field-label">
-              <span>Format &amp; Kualitas Output</span>
-              <span class="label-hint">Default: Opus 48 kHz (.opus) lossless remux</span>
-            </label>
-            <div class="seg-grid three-cols">
-              <label class="seg-option">
-                <input type="radio" name="audioFormat" value="opus" checked>
-                <div class="seg-option-body">
-                  <div class="seg-option-top">
-                    <span class="seg-option-title">Opus 48 kHz</span>
-                    <span class="format-badge emerald">BEST</span>
-                  </div>
-                  <span class="seg-option-desc">Lossless remux .opus + tag asli</span>
-                </div>
-              </label>
-
-              <label class="seg-option">
-                <input type="radio" name="audioFormat" value="mp3_320k">
-                <div class="seg-option-body">
-                  <div class="seg-option-top">
-                    <span class="seg-option-title">MP3 320 kbps</span>
-                    <span class="format-badge gold">CBR</span>
-                  </div>
-                  <span class="seg-option-desc">Kompatibilitas CDJ / USB lama</span>
-                </div>
-              </label>
-
-              <label class="seg-option">
-                <input type="radio" name="audioFormat" value="mp3_vbr0">
-                <div class="seg-option-body">
-                  <div class="seg-option-top">
-                    <span class="seg-option-title">MP3 VBR 0</span>
-                    <span class="format-badge purple">VBR</span>
-                  </div>
-                  <span class="seg-option-desc">Ukuran efisien untuk perangkat lama</span>
-                </div>
-              </label>
-            </div>
-          </div>
-
-          <div class="options-row compact-options-grid">
-            <label class="custom-toggle" id="rawWebmToggleWrap" title="Default (Nonaktif): Menghasilkan file .opus standar. Aktifkan jika ingin file wadah mentah asli YouTube (.webm / .m4a)">
-              <input type="checkbox" id="optRawWebm">
-              <span class="toggle-slider"></span>
-              <div class="toggle-text-wrap">
-                <span class="toggle-text">Stream mentah (.webm/.m4a)</span>
-                <span class="toggle-hint">Tanpa remux ke .opus</span>
-              </div>
-            </label>
-
-            <label class="custom-toggle" id="keepOpusToggleWrap" title="Simpan juga file asli Opus 48 kHz saat mengunduh MP3">
-              <input type="checkbox" id="optKeepOpus">
-              <span class="toggle-slider"></span>
-              <div class="toggle-text-wrap">
-                <span class="toggle-text">Simpan master Opus (.webm)</span>
-                <span class="toggle-hint">Saat download mode MP3</span>
-              </div>
-            </label>
-
-            <label class="custom-toggle" title="Gunakan file sesi YouTube (library/cookies.txt)">
-              <input type="checkbox" id="optUseCookies" checked>
-              <span class="toggle-slider"></span>
-              <div class="toggle-text-wrap">
-                <span class="toggle-text">Gunakan Cookies Sesi</span>
-                <span class="toggle-hint">library/cookies.txt</span>
-              </div>
-            </label>
-
-            <label class="custom-toggle" title="Otomatis buat subfolder dengan nama playlist di dalam library/inbox">
-              <input type="checkbox" id="optPlaylist" checked>
-              <span class="toggle-slider"></span>
-              <div class="toggle-text-wrap">
-                <span class="toggle-text">Subfolder per Playlist</span>
-                <span class="toggle-hint">Rapi di library/inbox</span>
-              </div>
-            </label>
-
-            <label class="custom-toggle" title="Otomatis hitung True Peak (dBTP), LUFS &amp; Frequency Spectrum setelah unduhan selesai">
-              <input type="checkbox" id="optAutoScan" checked>
-              <span class="toggle-slider"></span>
-              <div class="toggle-text-wrap">
-                <span class="toggle-text">Auto QC Audit (dBTP &amp; Spectrum)</span>
-                <span class="toggle-hint">Analisis EBU R128 otomatis</span>
-              </div>
-            </label>
-          </div>
-
-          <div class="action-footer compact-footer">
-            <div class="format-spec-tag">
-              <span class="spec-dot" id="specDot"></span>
-              <span id="specText">Target: Opus Best Quality (.opus) — Lossless Remux 48 kHz + Cover Art HD (Anti-DRC, 4x Multi-thread)</span>
-            </div>
-            <button type="submit" id="btnStartIngest" class="btn-primary">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
-                <polygon points="5 3 19 12 5 21 5 3"></polygon>
-              </svg>
-              <span>Mulai Ekstraksi Batch</span>
-            </button>
-          </div>
-        </form>
+          <button type="button" id="btnStartIngest" class="btn-primary ing-start-btn" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+              <polygon points="5 3 19 12 5 21 5 3"></polygon>
+            </svg>
+            <span id="btnStartText">Mulai Unduh</span>
+          </button>
+        </div>
       </section>
 
-      <!-- Active Queue & Real-time Progress Monitor -->
-      <section class="console-card monitor-panel" aria-labelledby="monitorHeading">
-        <div class="panel-header">
+      <!-- ================= RIGHT: Queue Monitor ================= -->
+      <section class="console-card ing-monitor" aria-labelledby="monitorHeading">
+        <div class="ing-monitor-head">
           <div class="panel-title-wrap">
             <span class="icon-chip accent-amber">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -243,44 +277,58 @@
               </svg>
             </span>
             <div>
-              <h2 id="monitorHeading">Queue &amp; Execution Monitor</h2>
-              <p class="panel-sub">Status antrian unduhan &amp; stream log ekstraksi real-time</p>
+              <h2 id="monitorHeading">Antrean</h2>
+              <p class="panel-sub">Progres unduhan real-time</p>
             </div>
           </div>
-          <span class="queue-counter" id="queueCounter">Antrian: 0</span>
+          <div class="ing-stat-row">
+            <span class="ing-stat" title="Sedang diproses"><span class="ing-stat-dot cyan"></span><span id="statActive">0</span> aktif</span>
+            <span class="ing-stat" title="Menunggu giliran"><span class="ing-stat-dot amber"></span><span id="queueCounter">0</span> menunggu</span>
+          </div>
         </div>
 
-        <!-- Active Progress Container -->
-        <div class="monitor-body">
-          <div class="active-job-box" id="activeJobBox">
-            <div class="job-meta">
-              <span class="job-status-tag" id="jobStatusTag">IDLE</span>
-              <span class="job-url-label" id="jobUrlLabel">Belum ada tugas unduhan aktif</span>
+        <!-- Active job -->
+        <div class="ing-now" id="activeJobBox" data-state="idle">
+          <div class="ing-now-art" id="activeJobArt" aria-hidden="true">♪</div>
+          <div class="ing-now-body">
+            <div class="ing-now-top">
+              <span class="ing-status" id="jobStatusTag">IDLE</span>
+              <span class="ing-now-pct mono-stat" id="progressText"></span>
             </div>
-
-            <div class="progress-track">
-              <div class="progress-fill" id="progressFill" style="width: 0%;"></div>
-            </div>
-            <div class="progress-legend">
-              <span id="progressText">0% Complete</span>
-              <span id="progressETA" class="mono-stat">--:--</span>
+            <div class="ing-now-title" id="activeJobTitle">Tidak ada unduhan aktif</div>
+            <div class="ing-now-sub" id="jobUrlLabel">Tambahkan lagu di panel kiri untuk memulai.</div>
+            <div class="ing-progress" role="progressbar" aria-labelledby="activeJobTitle" aria-valuemin="0" aria-valuemax="100" id="progressBar">
+              <div class="ing-progress-fill" id="progressFill" style="width: 0%;"></div>
             </div>
           </div>
+        </div>
 
-          <!-- Live Terminal Output Console -->
-          <div class="terminal-container">
+        <!-- Waiting list -->
+        <div class="ing-section" id="waitingSection">
+          <div class="ing-section-label">Menunggu</div>
+          <ol class="ing-qlist" id="waitingList"></ol>
+          <p class="ing-section-empty" id="waitingEmpty">Tidak ada item menunggu.</p>
+        </div>
+
+        <!-- Recent history -->
+        <div class="ing-section">
+          <div class="ing-section-label">Baru selesai</div>
+          <ol class="ing-qlist" id="historyList"></ol>
+          <p class="ing-section-empty" id="historyEmpty">Belum ada riwayat di sesi server ini.</p>
+        </div>
+
+        <!-- Collapsible log -->
+        <details class="ing-log" id="logPanel">
+          <summary>
+            <span class="ing-adv-caret" aria-hidden="true"></span>
+            <span class="ing-adv-title">Log ekstraksi</span>
+            <span class="term-error-pill hidden" id="termErrorCount">0</span>
+          </summary>
+          <div class="terminal-container ing-terminal">
             <div class="terminal-bar">
-              <div class="terminal-dots">
-                <span class="tdot red"></span>
-                <span class="tdot yellow"></span>
-                <span class="tdot green"></span>
-              </div>
               <div class="terminal-filters">
-                <span class="terminal-title">LIVE EXTRACTION STREAM</span>
-                <button type="button" class="term-tab active" id="btnLogFilterAll">Semua Log</button>
-                <button type="button" class="term-tab" id="btnLogFilterErrors">
-                  Error Group <span class="term-error-pill hidden" id="termErrorCount">0</span>
-                </button>
+                <button type="button" class="term-tab active" id="btnLogFilterAll">Semua</button>
+                <button type="button" class="term-tab" id="btnLogFilterErrors">Error &amp; peringatan</button>
               </div>
               <button type="button" id="btnClearLogs" class="btn-text">Clear</button>
             </div>
@@ -288,7 +336,7 @@
               <p class="log-line info">[SYSTEM] Engine initialized in background. Ready for batch jobs.</p>
             </div>
           </div>
-        </div>
+        </details>
       </section>
     </div>
 

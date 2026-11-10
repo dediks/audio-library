@@ -132,7 +132,8 @@ function mapTaskOutcomeToNotifType(outcome, status) {
  *   terminalLogs?: HTMLElement | null,
  *   onActive?: (current: any, data: any) => void,
  *   onTaskFinished?: (task: any, data: any) => void,
- *   onIdle?: (wasJobRunning: boolean, data: any) => void
+ *   onIdle?: (wasJobRunning: boolean, data: any) => void,
+ *   onSnapshot?: (data: any) => void
  * }} opts
  */
 export function createQueueMonitor(opts = {}) {
@@ -175,6 +176,10 @@ export function createQueueMonitor(opts = {}) {
         });
         saveSeenTaskIds(seenSet);
       }
+    }
+
+    if (typeof opts.onSnapshot === 'function') {
+      opts.onSnapshot(data);
     }
 
     const queueLen = (data.queue || []).length;

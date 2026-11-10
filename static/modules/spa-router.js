@@ -7,8 +7,8 @@ import { initAppHeader } from './ui-shared.js';
 import { ensureFohAudioElement, initPersistentDock } from './persistent-dock.js';
 
 const ROUTE_CONFIG = {
-  '/': { key: 'ingest', script: 'app.js', title: 'SWARARIA AUDIO LAB // 1. Batch Audio Ingestion' },
-  '/index.html': { key: 'ingest', script: 'app.js', title: 'SWARARIA AUDIO LAB // 1. Batch Audio Ingestion' },
+  '/': { key: 'ingest', script: 'app.js', title: 'SWARARIA AUDIO LAB // 1. Batch Audio Ingestion', css: 'ingest.css' },
+  '/index.html': { key: 'ingest', script: 'app.js', title: 'SWARARIA AUDIO LAB // 1. Batch Audio Ingestion', css: 'ingest.css' },
   '/qc': { key: 'qc', script: 'qc.js', title: 'SWARARIA AUDIO LAB // 2. Soundsystem QC & Spectral Lab' },
   '/qc.html': { key: 'qc', script: 'qc.js', title: 'SWARARIA AUDIO LAB // 2. Soundsystem QC & Spectral Lab' },
   '/converter': { key: 'converter', script: 'converter.js', title: 'SWARARIA AUDIO LAB // 3. Sample Rate & Playlist Converter' },
@@ -21,8 +21,8 @@ const ROUTE_CONFIG = {
   '/splitter.html': { key: 'multitrack', script: 'multitrack.js', title: 'SWARARIA AUDIO LAB // 5. Multitrack & Stem Splitter', css: 'splitter.css' },
   '/video-split': { key: 'video-split', script: 'video-split.js', title: 'SWARARIA AUDIO LAB // 6. Long Video Splitter', css: 'splitter.css' },
   '/video-split.html': { key: 'video-split', script: 'video-split.js', title: 'SWARARIA AUDIO LAB // 6. Long Video Splitter', css: 'splitter.css' },
-  '/player': { key: 'player', script: 'player.js', title: 'SWARARIA AUDIO LAB // 7. FOH Live Player & Cue Deck', css: 'player.css' },
-  '/player.html': { key: 'player', script: 'player.js', title: 'SWARARIA AUDIO LAB // 7. FOH Live Player & Cue Deck', css: 'player.css' },
+  '/player': { key: 'player', script: 'player.js', title: 'SWARARIA AUDIO LAB // 7. FOH Live Player & Cue Deck', css: ['converter.css', 'player.css'] },
+  '/player.html': { key: 'player', script: 'player.js', title: 'SWARARIA AUDIO LAB // 7. FOH Live Player & Cue Deck', css: ['converter.css', 'player.css'] },
 };
 
 const viewCache = new Map();
@@ -38,13 +38,17 @@ function resolveRoute(pathname) {
 
 function ensureHeadStylesheet(cssFile) {
   if (!cssFile) return;
-  const href = '/static/' + cssFile;
-  if (!document.querySelector(`link[rel="stylesheet"][href="${href}"]`)) {
-    const link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.href = href;
-    document.head.appendChild(link);
-  }
+  const list = Array.isArray(cssFile) ? cssFile : [cssFile];
+  list.forEach(file => {
+    if (!file) return;
+    const href = '/static/' + file;
+    if (!document.querySelector(`link[rel="stylesheet"][href="${href}"]`)) {
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = href;
+      document.head.appendChild(link);
+    }
+  });
 }
 
 function updateHeaderNavTabs(activeKey) {

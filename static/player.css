@@ -1163,6 +1163,62 @@
   border-radius: var(--radius-md);
 }
 
+.source-location-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding-bottom: 0.45rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.source-location-info {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.source-location-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.source-location-badge {
+  font-family: var(--font-mono);
+  font-size: 0.73rem;
+  font-weight: 600;
+  color: var(--accent-cyan);
+  background: rgba(0, 229, 255, 0.1);
+  border: 1px solid rgba(0, 229, 255, 0.3);
+  padding: 0.14rem 0.5rem;
+  border-radius: 4px;
+  max-width: 480px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-location-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.playlist-selector-grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  max-height: 112px;
+  overflow-y: auto;
+}
+
 .player-toolbar {
   margin-bottom: 0;
   padding: 0.45rem 0 0;
@@ -1173,6 +1229,7 @@
 }
 
 /* Support both .playlist-card and .playlist-chip cleanly */
+.playlist-card,
 .playlist-chip {
   display: inline-flex;
   align-items: center;
@@ -1188,12 +1245,14 @@
   max-width: 260px;
 }
 
+.playlist-card:hover,
 .playlist-chip:hover {
   border-color: var(--border-strong);
   color: var(--text-primary);
   background: #1f1f26;
 }
 
+.playlist-card.active,
 .playlist-chip.active {
   border-color: var(--accent-cyan);
   background: rgba(0, 229, 255, 0.14);
@@ -1201,6 +1260,7 @@
   box-shadow: 0 0 0 1px var(--accent-cyan);
 }
 
+.playlist-card-top,
 .playlist-chip-top {
   display: inline-flex;
   align-items: center;
@@ -1208,6 +1268,7 @@
   min-width: 0;
 }
 
+.playlist-card-title,
 .playlist-chip-title {
   font-size: 0.74rem;
   font-weight: 600;
@@ -1218,6 +1279,7 @@
   max-width: 155px;
 }
 
+.playlist-card-badge,
 .playlist-chip-badge {
   font-family: var(--font-mono);
   font-size: 0.62rem;
@@ -1229,6 +1291,7 @@
   white-space: nowrap;
 }
 
+.playlist-card-sub,
 .playlist-chip-sub {
   font-family: var(--font-mono);
   font-size: 0.65rem;
