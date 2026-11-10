@@ -7,6 +7,7 @@ Workstation lokal berbasis web & CLI untuk **Audio Engineer**, **Operator FOH / 
 ## ✨ Fitur Utama (4-Stage Audio Engineering Pipeline)
 
 1. **`1. Ingest` (`/`) — Batch Audio Ingestion**
+   - **Pencarian In-App YouTube Music**: Cari lagu, playlist, atau album langsung di dalam aplikasi tanpa perlu membuka browser dan copy-paste link manual.
    - Ekstraksi audio berizin dari URL/Playlist dengan _Smart Fallback_ (`Native .opus 48kHz`, `Native AAC .m4a`, atau `MP3 CBR 320k/192k/128k/96k`).
    - Penyimpanan otomatis per folder playlist (`library/inbox/<Nama Playlist>/`) dan _Live Extraction Stream Monitor_.
 
@@ -120,13 +121,19 @@ Halaman Workstation:
 
 ## 💻 Penggunaan CLI (`audio_manager.py`)
 
-### 1. Audit Koleksi Audio Lokal ke CSV (Tanpa YouTube)
+### 1. Pencarian YouTube Music via Terminal
+
+```bash
+python3 audio_manager.py search "Sheila on 7" --type songs --limit 10
+```
+
+### 2. Audit Koleksi Audio Lokal ke CSV (Tanpa YouTube)
 
 ```bash
 python3 audio_manager.py scan "/path/ke/koleksi/musik" --out quality_report.csv
 ```
 
-### 2. Unduh Audio Berizin + Audit QC Otomatis
+### 3. Unduh Audio Berizin + Audit QC Otomatis
 
 ```bash
 # Native Opus 48kHz / AAC (0% Generation Loss):

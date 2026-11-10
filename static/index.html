@@ -54,16 +54,76 @@
           <span class="panel-badge">Native Audio Stream</span>
         </div>
 
-        <form id="ingestForm" class="ingest-form compact-settings-stack">
-          <div class="field-group compact-field">
-            <label for="urlInput" class="field-label">
-              <span>YouTube / YouTube Music URLs</span>
-              <span class="label-hint">Satu URL per baris (video tunggal atau playlist penuh)</span>
+        <!-- YouTube Music In-App Search Console -->
+        <div class="search-ingest-container">
+          <div class="search-header-row">
+            <label for="ytmSearchInput" class="field-label-prominent">
+              <span class="search-icon-chip">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+              </span>
+              <span>Pencarian YouTube Music</span>
+              <span class="label-hint">Cari lagu atau playlist langsung tanpa copy URL manual</span>
             </label>
+
+            <div class="search-type-chips" id="searchTypeChips">
+              <button type="button" class="search-chip active" data-type="songs">🎵 Lagu</button>
+              <button type="button" class="search-chip" data-type="playlists">📁 Playlist</button>
+              <button type="button" class="search-chip" data-type="albums">💿 Album</button>
+              <button type="button" class="search-chip" data-type="all">🌐 Semua</button>
+            </div>
+          </div>
+
+          <div class="search-bar-row">
+            <div class="search-input-wrap">
+              <input
+                type="text"
+                id="ytmSearchInput"
+                class="field-input search-text-input"
+                placeholder="Ketik judul lagu, musisi, atau playlist lalu tekan Enter..."
+                autocomplete="off"
+              >
+              <button type="button" id="btnClearSearchInput" class="btn-clear-search hidden" title="Hapus teks pencarian">&times;</button>
+            </div>
+            <button type="button" id="btnYtmSearch" class="btn-primary btn-search-submit">
+              <span id="searchSpinner" class="spinner-small hidden"></span>
+              <span id="searchText">Cari Musik</span>
+            </button>
+          </div>
+
+          <!-- Panel Hasil Pencarian Drawer -->
+          <div id="ytmResultsPanel" class="search-results-drawer hidden">
+            <div class="results-drawer-header">
+              <div class="results-drawer-meta">
+                <span id="resultsCountBadge" class="results-count-pill">0 hasil</span>
+                <span id="resultsQueryBadge" class="results-query-pill"></span>
+              </div>
+              <div class="results-drawer-actions">
+                <button type="button" id="btnSelectAllResults" class="btn-drawer-action">Pilih Semua</button>
+                <button type="button" id="btnAddSelectedResults" class="btn-drawer-action btn-add-selected">+ Masukkan Terpilih</button>
+                <button type="button" id="btnCloseResults" class="btn-drawer-action btn-close-drawer" title="Tutup">✕ Tutup</button>
+              </div>
+            </div>
+            <div id="ytmResultsList" class="search-results-list"></div>
+          </div>
+        </div>
+
+        <form id="ingestForm" class="ingest-form compact-settings-stack">
+
+          <div class="field-group compact-field">
+            <div class="field-label-split">
+              <label for="urlInput" class="field-label">
+                <span>Daftar URL Unduhan (Antrean Batch)</span>
+                <span class="label-hint">Satu URL per baris (video tunggal atau playlist penuh)</span>
+              </label>
+              <button type="button" id="btnClearUrls" class="btn-clear-urls" title="Bersihkan daftar URL">Bersihkan</button>
+            </div>
             <textarea
               id="urlInput"
               class="field-textarea"
-              rows="4"
+              rows="3"
               placeholder="https://www.youtube.com/watch?v=...&#10;https://music.youtube.com/watch?v=...&#10;https://www.youtube.com/playlist?list=..."
               required
             ></textarea>

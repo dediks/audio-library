@@ -220,7 +220,12 @@ Buka browser di **`http://127.0.0.1:8765`**.
 
 ### Tahap 1: `1. Ingest` (`/`)
 
-1. Tempelkan satu atau beberapa URL/Playlist pada kotak input.
+1. **Pencarian Langsung (In-App Search)** atau **Input URL Manual**:
+   - **Pencarian YouTube Music**: Ketik judul lagu, musisi, atau playlist di bar pencarian di bagian atas form, pilih tab filter (`🎵 Lagu`, `📁 Playlist`, `💿 Album`, `🌐 Semua`), lalu tekan Enter atau klik **Cari Musik**.
+     - Klik **`+ Ke Antrean`** untuk memasukkan URL ke kotak antrean.
+     - Centang beberapa item lalu klik **`+ Masukkan Terpilih`** untuk antrean massal.
+     - Klik **`⚡ Unduh`** untuk langsung mengunduh trek terpilih dalam 1-klik.
+   - **Input Manual**: Atau tempelkan satu atau beberapa URL/Playlist langsung pada kotak textarea input (satu URL per baris).
 2. Pilih **Mode Format**:
    - **Native Audio (`.opus` / `.m4a`)**: Tanpa _re-encoding_, mempertahankan kualitas sumber 100%.
    - **MP3 CBR (`320` / `192` / `128` / `96 kbps`)**: Langsung menghasilkan file `.mp3` siap putar.
@@ -257,13 +262,16 @@ Buka browser di **`http://127.0.0.1:8765`**.
 Selain melalui Web UI, Anda dapat menjalankan fungsi inti melalui terminal:
 
 ```bash
-# 1. Audit QC folder audio lokal & ekspor laporan CSV:
+# 1. Cari musik/playlist di YouTube Music langsung dari CLI:
+python3 audio_manager.py search "Sheila on 7" --type songs --limit 10
+
+# 2. Audit QC folder audio lokal & ekspor laporan CSV:
 python3 audio_manager.py scan "/path/ke/folder/audio" --out quality_report.csv
 
-# 2. Unduh Native Audio (Opus 48kHz / AAC) + QC:
+# 3. Unduh Native Audio (Opus 48kHz / AAC) + QC:
 python3 audio_manager.py download "URL_TRACK_ATAU_PLAYLIST" --authorized --playlist --scan
 
-# 3. Unduh langsung ke MP3 CBR 320 kbps:
+# 4. Unduh langsung ke MP3 CBR 320 kbps:
 python3 audio_manager.py download "URL_TRACK" --authorized --format mp3 --bitrate 320 --scan
 ```
 
@@ -303,6 +311,7 @@ Server lokal [`web_ui.py`](file:///home/dedik/project/audio-library-starter/web_
 | `POST` | `/api/install-update`   | Mengunduh paket installer resmi dan meluncurkan installer untuk pembaruan in-place otomatis (`download_url`).                                                                                                               |
 | `POST` | `/api/fs/mkdir`         | Membuat subfolder baru di dalam direktori tujuan (`parent_dir`, `name`).                                                                                                                                                    |
 | `POST` | `/api/fs/open-explorer` | Membuka folder sumber/playlist di File Manager sistem operasi (`source_dir`, `rel_path`).                                                                                                                                   |
+| `POST` | `/api/search`           | Mencari lagu, playlist, atau album di YouTube Music (`query`, `type`, `limit`, `use_cookies`). Mengembalikan metadata, thumbnail, durasi, dan URL siap unduh.                                                             |
 | `POST` | `/api/download`         | Menjadwalkan tugas Batch Ingestion (`urls`, `audio_format`, `audio_bitrate`, `is_playlist`, `use_cookies`, `auto_scan`).                                                                                                    |
 | `POST` | `/api/scan`             | Menjadwalkan audit penuh EBU R128 + Spektrum (`source_dir`).                                                                                                                                                                |
 | `POST` | `/api/probe`            | Memindai cepat metadata `ffprobe` + keaslian spektrum frekuensi (`source_dir`, `folder`, `probe_spectral`).                                                                                                                 |

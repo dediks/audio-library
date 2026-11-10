@@ -433,6 +433,9 @@ class TaskQueueManager:
             clean_u = u.strip() if isinstance(u, str) else ""
             if not clean_u:
                 continue
+            # Normalize YouTube Music playlist IDs: strip internal 'VL' prefix (e.g. list=VLPL... -> list=PL...)
+            if "list=VL" in clean_u:
+                clean_u = re.sub(r"([?&]list=)VL([a-zA-Z0-9_\-]+)", r"\1\2", clean_u)
             if not fs_browser.validate_url(clean_u):
                 invalid_count += 1
                 continue

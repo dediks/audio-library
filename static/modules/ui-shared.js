@@ -68,8 +68,6 @@ export {
   initSpaRouter,
   initPersistentDock,
   ensureFohAudioElement,
-  openUpdateModal,
-  checkForUpdatesUI,
 };
 
 /**

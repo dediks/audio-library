@@ -1139,7 +1139,7 @@ class AudioServerHandler(BaseHTTPRequestHandler):
     """Secure HTTP Request Handler with FOH Mobile Remote LAN Gate."""
 
     protocol_version = "HTTP/1.1"
-    timeout = 10.0
+    timeout = 60.0
 
     def is_localhost_client(self) -> bool:
         client_ip = str(self.client_address[0])
@@ -1149,6 +1149,14 @@ class AudioServerHandler(BaseHTTPRequestHandler):
         if host_hdr and host_hdr not in ("127.0.0.1", "localhost", "[::1]", "::1"):
             return False
         return True
+
+    def log_error(self, format, *args):
+        # In HTTP/1.1, persistent keep-alive client sockets naturally close when idle.
+        # Suppress benign socket timeout log so it does not pollute the server console.
+        msg = format % args
+        if "Request timed out" in msg:
+            return
+        self.log_message(format, *args)
 
     def log_message(self, format, *args):
         # Suppress noisy polling logs for /api/remote/state
@@ -1168,7 +1176,7 @@ class AudioServerHandler(BaseHTTPRequestHandler):
             "script-src 'self'; "
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
             "font-src 'self' https://fonts.gstatic.com; "
-            "img-src 'self' data:; "
+            "img-src 'self' data: https://*.googleusercontent.com https://*.ytimg.com https://*.ggpht.com; "
             "media-src 'self' blob:; "
             "connect-src 'self'; "
             "frame-ancestors 'none';",
@@ -1445,6 +1453,8 @@ class AudioServerHandler(BaseHTTPRequestHandler):
         elif path == "/api/download":
             status, resp = task_manager.enqueue_downloads(payload)
             self.send_json(status, resp)
+        elif path == "/api/search":
+            self._handle_post_search(payload)
         elif path == "/api/scan":
             self._handle_post_scan(payload)
         elif path == "/api/browse-dirs":
@@ -1491,6 +1501,33 @@ class AudioServerHandler(BaseHTTPRequestHandler):
             })
         else:
             self.send_error(404, "Endpoint not found")
+
+    def _handle_post_search(self, payload: dict) -> None:
+        query = str((payload or {}).get("query") or "").strip()
+        if not query:
+            self.send_json(400, {"ok": False, "error": "Kata kunci pencarian tidak boleh kosong."})
+            return
+        search_type = str((payload or {}).get("type") or "songs").strip().lower()
+        limit = min(max(int((payload or {}).get("limit") or 15), 1), 30)
+        use_cookies = bool((payload or {}).get("use_cookies", True))
+        cookies = COOKIES_FILE if use_cookies and COOKIES_FILE.is_file() else None
+
+        try:
+            results = audio_manager.search_youtube_music(
+                query=query,
+                search_type=search_type,
+                limit=limit,
+                cookies_file=cookies,
+            )
+            self.send_json(200, {
+                "ok": True,
+                "query": query,
+                "type": search_type,
+                "count": len(results),
+                "results": results,
+            })
+        except Exception as exc:
+            self.send_json(500, {"ok": False, "error": f"Pencarian gagal: {str(exc)}"})
 
     def _handle_post_scan(self, payload: dict | None = None) -> None:
         raw_src = (payload or {}).get("source_dir")

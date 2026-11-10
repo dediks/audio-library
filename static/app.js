@@ -214,6 +214,360 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  // 6. YouTube Music In-App Search
+  const ytmSearchInput = document.getElementById('ytmSearchInput');
+  const btnClearSearchInput = document.getElementById('btnClearSearchInput');
+  const btnYtmSearch = document.getElementById('btnYtmSearch');
+  const searchSpinner = document.getElementById('searchSpinner');
+  const searchText = document.getElementById('searchText');
+  const searchTypeChips = document.getElementById('searchTypeChips');
+  const ytmResultsPanel = document.getElementById('ytmResultsPanel');
+  const resultsCountBadge = document.getElementById('resultsCountBadge');
+  const resultsQueryBadge = document.getElementById('resultsQueryBadge');
+  const btnSelectAllResults = document.getElementById('btnSelectAllResults');
+  const btnAddSelectedResults = document.getElementById('btnAddSelectedResults');
+  const btnCloseResults = document.getElementById('btnCloseResults');
+  const ytmResultsList = document.getElementById('ytmResultsList');
+  const btnClearUrls = document.getElementById('btnClearUrls');
+
+  let currentSearchType = 'songs';
+  let currentSearchResults = [];
+  let isAllSelected = false;
+
+  function normalizeYtUrl(url) {
+    if (!url) return '';
+    return url.replace(/([?&]list=)VL([a-zA-Z0-9_-]+)/g, '$1$2');
+  }
+
+  function appendUrlToInput(url) {
+    if (!url) return;
+    const clean = normalizeYtUrl(url);
+    const current = urlInput.value.trim();
+    if (!current) {
+      urlInput.value = clean;
+    } else {
+      const existing = current.split('\n').map(l => l.trim());
+      if (!existing.includes(clean)) {
+        urlInput.value = current + '\n' + clean;
+      }
+    }
+  }
+
+  if (btnClearUrls) {
+    btnClearUrls.addEventListener('click', () => {
+      urlInput.value = '';
+      urlInput.focus();
+    });
+  }
+
+  if (searchTypeChips) {
+    const chips = searchTypeChips.querySelectorAll('.search-chip');
+    chips.forEach(chip => {
+      chip.addEventListener('click', () => {
+        chips.forEach(c => c.classList.remove('active'));
+        chip.classList.add('active');
+        currentSearchType = chip.dataset.type || 'songs';
+        const q = ytmSearchInput ? ytmSearchInput.value.trim() : '';
+        if (q && ytmResultsPanel && !ytmResultsPanel.classList.contains('hidden')) {
+          performSearch(q);
+        }
+      });
+    });
+  }
+
+  if (ytmSearchInput && btnClearSearchInput) {
+    ytmSearchInput.addEventListener('input', () => {
+      btnClearSearchInput.classList.toggle('hidden', !ytmSearchInput.value);
+    });
+    btnClearSearchInput.addEventListener('click', (e) => {
+      e.preventDefault();
+      ytmSearchInput.value = '';
+      btnClearSearchInput.classList.add('hidden');
+      if (ytmResultsPanel) ytmResultsPanel.classList.add('hidden');
+      ytmSearchInput.focus();
+    });
+    ytmSearchInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        e.stopPropagation();
+        const q = ytmSearchInput.value.trim();
+        if (q) {
+          performSearch(q);
+        } else {
+          ytmSearchInput.focus();
+          notify({
+            type: 'warning',
+            title: 'Kata Kunci Kosong',
+            message: 'Silakan ketik judul lagu, musisi, atau playlist sebelum mencari.',
+          });
+        }
+      }
+    });
+  }
+
+  if (btnYtmSearch) {
+    btnYtmSearch.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const q = ytmSearchInput ? ytmSearchInput.value.trim() : '';
+      if (q) {
+        performSearch(q);
+      } else {
+        if (ytmSearchInput) ytmSearchInput.focus();
+        notify({
+          type: 'warning',
+          title: 'Kata Kunci Kosong',
+          message: 'Silakan ketik judul lagu, musisi, atau playlist sebelum mencari.',
+        });
+      }
+    });
+  }
+
+  if (btnCloseResults) {
+    btnCloseResults.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (ytmResultsPanel) ytmResultsPanel.classList.add('hidden');
+    });
+  }
+
+  if (btnSelectAllResults) {
+    btnSelectAllResults.addEventListener('click', (e) => {
+      e.preventDefault();
+      isAllSelected = !isAllSelected;
+      if (ytmResultsList) {
+        const checkboxes = ytmResultsList.querySelectorAll('.result-checkbox');
+        checkboxes.forEach(cb => { cb.checked = isAllSelected; });
+      }
+      btnSelectAllResults.textContent = isAllSelected ? 'Batal Pilih' : 'Pilih Semua';
+    });
+  }
+
+  if (btnAddSelectedResults) {
+    btnAddSelectedResults.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (!ytmResultsList) return;
+      const checkboxes = ytmResultsList.querySelectorAll('.result-checkbox:checked');
+      if (checkboxes.length === 0) {
+        notify({
+          type: 'warning',
+          title: 'Tidak Ada Lagu Dipilih',
+          message: 'Centang kotak pada lagu yang ingin dimasukkan ke antrean.',
+        });
+        return;
+      }
+      let addedCount = 0;
+      checkboxes.forEach(cb => {
+        const itemUrl = cb.dataset.url;
+        if (itemUrl) {
+          appendUrlToInput(itemUrl);
+          addedCount++;
+        }
+      });
+      notify({
+        type: 'info',
+        title: 'URL Berhasil Ditambahkan',
+        message: `${addedCount} link YouTube Music telah dimasukkan ke daftar antrean.`,
+      });
+      if (ytmResultsPanel) ytmResultsPanel.classList.add('hidden');
+    });
+  }
+
+  async function performSearch(query) {
+    if (!query) return;
+    if (searchSpinner) searchSpinner.classList.remove('hidden');
+    if (searchText) searchText.textContent = 'Mencari...';
+    if (btnYtmSearch) btnYtmSearch.disabled = true;
+
+    // Immediately display interactive loading drawer
+    if (ytmResultsPanel) {
+      ytmResultsPanel.classList.remove('hidden');
+      if (resultsCountBadge) resultsCountBadge.textContent = 'Mencari...';
+      if (resultsQueryBadge) resultsQueryBadge.textContent = `"${query}"`;
+    }
+    if (ytmResultsList) {
+      ytmResultsList.replaceChildren();
+      const loadingDiv = document.createElement('div');
+      loadingDiv.className = 'results-empty-state';
+      const sp = document.createElement('span');
+      sp.className = 'spinner-small';
+      sp.style.marginRight = '8px';
+      const text = document.createElement('span');
+      text.textContent = `Sedang mencari "${query}" di YouTube Music...`;
+      loadingDiv.appendChild(sp);
+      loadingDiv.appendChild(text);
+      ytmResultsList.appendChild(loadingDiv);
+    }
+
+    const useCookies = optUseCookies ? optUseCookies.checked : true;
+    const { ok, data, error } = await apiPost('/api/search', {
+      query,
+      type: currentSearchType,
+      limit: 15,
+      use_cookies: useCookies,
+    });
+
+    if (searchSpinner) searchSpinner.classList.add('hidden');
+    if (searchText) searchText.textContent = 'Cari Musik';
+    if (btnYtmSearch) btnYtmSearch.disabled = false;
+
+    if (ok && data) {
+      currentSearchResults = data.results || [];
+      renderSearchResults(currentSearchResults, query);
+    } else {
+      const errMsg = error || 'Gagal memuat hasil pencarian.';
+      if (ytmResultsList) {
+        ytmResultsList.replaceChildren();
+        const errDiv = document.createElement('div');
+        errDiv.className = 'results-empty-state';
+        errDiv.style.color = 'var(--accent-red)';
+        const errText = document.createElement('span');
+        errText.textContent = `Gagal: ${errMsg}`;
+        errDiv.appendChild(errText);
+        ytmResultsList.appendChild(errDiv);
+      }
+      notify({
+        type: 'error',
+        title: 'Pencarian Gagal',
+        message: errMsg,
+      });
+    }
+  }
+
+  function renderSearchResults(items, query) {
+    if (!ytmResultsList || !ytmResultsPanel) return;
+    ytmResultsList.replaceChildren();
+    isAllSelected = false;
+    if (btnSelectAllResults) btnSelectAllResults.textContent = 'Pilih Semua';
+
+    if (resultsCountBadge) {
+      resultsCountBadge.textContent = `${items.length} hasil`;
+    }
+    if (resultsQueryBadge) {
+      resultsQueryBadge.textContent = `"${query}"`;
+    }
+
+    if (items.length === 0) {
+      const emptyDiv = document.createElement('div');
+      emptyDiv.className = 'results-empty-state';
+      const emptyText = document.createElement('span');
+      emptyText.textContent = `Tidak ditemukan hasil untuk "${query}". Coba kata kunci lain atau pilih tab 'Semua'.`;
+      emptyDiv.appendChild(emptyText);
+      ytmResultsList.appendChild(emptyDiv);
+      ytmResultsPanel.classList.remove('hidden');
+      return;
+    }
+
+    items.forEach(item => {
+      const card = document.createElement('div');
+      card.className = 'search-result-item';
+
+      // Checkbox
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.className = 'result-checkbox';
+      cb.dataset.url = item.url;
+      card.appendChild(cb);
+
+      // Thumbnail
+      if (item.thumbnail) {
+        const img = document.createElement('img');
+        img.className = 'result-thumb';
+        img.src = item.thumbnail;
+        img.alt = item.title || 'Cover';
+        img.loading = 'lazy';
+        img.onerror = () => { img.style.display = 'none'; };
+        card.appendChild(img);
+      } else {
+        const placeholder = document.createElement('div');
+        placeholder.className = 'result-thumb-placeholder';
+        placeholder.textContent = '♪';
+        card.appendChild(placeholder);
+      }
+
+      // Info
+      const info = document.createElement('div');
+      info.className = 'result-info';
+
+      const titleRow = document.createElement('div');
+      titleRow.className = 'result-title-row';
+
+      const titleSpan = document.createElement('span');
+      titleSpan.className = 'result-title';
+      titleSpan.textContent = item.title;
+      titleRow.appendChild(titleSpan);
+
+      const typeBadge = document.createElement('span');
+      typeBadge.className = `result-type-badge ${item.type || 'song'}`;
+      typeBadge.textContent = (item.type || 'song').toUpperCase();
+      titleRow.appendChild(typeBadge);
+
+      info.appendChild(titleRow);
+
+      const metaRow = document.createElement('div');
+      metaRow.className = 'result-meta-row';
+
+      if (item.artist) {
+        const artistSpan = document.createElement('span');
+        artistSpan.className = 'result-artist';
+        artistSpan.textContent = item.artist + (item.album ? ` • ${item.album}` : '');
+        metaRow.appendChild(artistSpan);
+      }
+
+      if (item.duration) {
+        const durSpan = document.createElement('span');
+        durSpan.className = 'result-duration';
+        durSpan.textContent = item.duration;
+        metaRow.appendChild(durSpan);
+      }
+
+      info.appendChild(metaRow);
+      card.appendChild(info);
+
+      // Actions
+      const actions = document.createElement('div');
+      actions.className = 'result-actions';
+
+      const btnEnqueue = document.createElement('button');
+      btnEnqueue.type = 'button';
+      btnEnqueue.className = 'btn-result-enqueue';
+      btnEnqueue.textContent = '+ Ke Antrean';
+      btnEnqueue.title = 'Tambahkan link ini ke daftar URL';
+      btnEnqueue.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        appendUrlToInput(item.url);
+        btnEnqueue.textContent = '✓ Ditambahkan';
+        setTimeout(() => { btnEnqueue.textContent = '+ Ke Antrean'; }, 1500);
+        notify({
+          type: 'info',
+          title: 'Trek Ditambahkan',
+          message: `"${item.title}" ditambahkan ke kotak URL.`,
+        });
+      });
+      actions.appendChild(btnEnqueue);
+
+      const btnDownload = document.createElement('button');
+      btnDownload.type = 'button';
+      btnDownload.className = 'btn-result-download';
+      btnDownload.textContent = '⚡ Unduh';
+      btnDownload.title = 'Langsung unduh trek ini';
+      btnDownload.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        urlInput.value = normalizeYtUrl(item.url);
+        if (item.type === 'playlist' && optPlaylist) {
+          optPlaylist.checked = true;
+        }
+        ytmResultsPanel.classList.add('hidden');
+        form.requestSubmit();
+      });
+      actions.appendChild(btnDownload);
+
+      card.appendChild(actions);
+      ytmResultsList.appendChild(card);
+    });
+
+    ytmResultsPanel.classList.remove('hidden');
+  }
+
   if (btnOpenInboxExplorer) {
     btnOpenInboxExplorer.addEventListener('click', () => {
       openFolderInExplorer('', currentInboxDir);
