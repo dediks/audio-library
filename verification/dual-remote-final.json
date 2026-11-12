@@ -1,0 +1,273 @@
+{
+  "verified_at_utc": "2026-11-12T13:13:28.168656+00:00",
+  "passed": true,
+  "candidate_sha256": "30887cf1ecfc58d2f13feafece961b7b28b625d82bbab13aeeb86683af7b5afd",
+  "candidate_rows": [
+    {
+      "path": "DUAL-REMOTE-PLAN.md",
+      "sha256": "f41eebd3a8ec823138dd198c310f042231f171c0ae826bcecfb24653f3f39f01"
+    },
+    {
+      "path": "HANDOFF-NATIVE-REMOTE.md",
+      "sha256": "c66f244ddcb357dd23ae901fcea1ccc73568d32adc6865783ad68699cf943994"
+    },
+    {
+      "path": "README.md",
+      "sha256": "2c4e5383ee56e2bd7888771fe2c4967c81a3fed8158d4244e3c3143b27458afd"
+    },
+    {
+      "path": "SECURE_REMOTE.md",
+      "sha256": "018cbdff509dbc25670594bbacdaa2c6cc690488f1cae9c95b9008724c37a0be"
+    },
+    {
+      "path": "desktop_app.py",
+      "sha256": "83a981f1c46a18a3739486f1afa3ade5c720057228b4eea191422c69ac453203"
+    },
+    {
+      "path": "static/player.html",
+      "sha256": "d75186a68bc3c76d8e83b93959f9f7a867bff61fbcce94aab089558a04bdd08b"
+    },
+    {
+      "path": "static/player.js",
+      "sha256": "6d37f07e0f83fbb87bb5838e80f71f3543a1a6bd01c1348d1da515f0e4988eee"
+    },
+    {
+      "path": "tests/dual-remote.test.mjs",
+      "sha256": "6b916838edfb327ab2481439bba9e29ba1e496a917f9c8b6d2abdf2e45e373d5"
+    },
+    {
+      "path": "tests/native-player.test.mjs",
+      "sha256": "b3c35471ccf542c409242bb24883dab896e23495cf6b7874f0fdc064e9c90a33"
+    },
+    {
+      "path": "tests/test_dual_remote.py",
+      "sha256": "3ddfd19ea5398a36f7d2bc2acb4560afffe9d43deff77da14899cf9c5710b247"
+    },
+    {
+      "path": "tests/test_native_admin.py",
+      "sha256": "ca92e32fdb5f226e46bdf451d84c0e69e308d7a1a29bc8391edafab005c37bd7"
+    },
+    {
+      "path": "tests/test_native_resources.py",
+      "sha256": "05de292816e82ef31cf64ce195f9f8b926639501c6a771cfa5fab0a566fb098b"
+    },
+    {
+      "path": "verification/dual-remote-baseline.json",
+      "sha256": "9caffacd1e209cb2934d2138aeb930dbeebb975362daf86b7239ba3bfa4aa7b8"
+    },
+    {
+      "path": "verification/dual-remote-tdd.json",
+      "sha256": "e6d5f764409da0e820c9cad35dc01f8c7e4afea540d24a6f02010014d982d273"
+    },
+    {
+      "path": "web_ui.py",
+      "sha256": "d349543a6ac8afc0a9629194c932be805962767f7bac182b34d1a3833abf6d90"
+    }
+  ],
+  "commands": [
+    {
+      "argv": [
+        ".venv/bin/python",
+        "tests/run_tests.py"
+      ],
+      "exit_code": 0,
+      "log": "verification/dual-remote-final-gate-1.txt"
+    },
+    {
+      "argv": [
+        "node",
+        "--unhandled-rejections=strict",
+        "tests/native-admin.test.mjs"
+      ],
+      "exit_code": 0,
+      "log": "verification/dual-remote-final-gate-2.txt"
+    },
+    {
+      "argv": [
+        "node",
+        "--unhandled-rejections=strict",
+        "tests/native-player.test.mjs"
+      ],
+      "exit_code": 0,
+      "log": "verification/dual-remote-final-gate-3.txt"
+    },
+    {
+      "argv": [
+        "node",
+        "--unhandled-rejections=strict",
+        "tests/dual-remote.test.mjs"
+      ],
+      "exit_code": 0,
+      "log": "verification/dual-remote-final-gate-4.txt"
+    },
+    {
+      "argv": [
+        ".venv/bin/python",
+        "-m",
+        "py_compile",
+        "web_ui.py",
+        "desktop_app.py",
+        "secure_remote.py",
+        "secure_remote_tls.py"
+      ],
+      "exit_code": 0,
+      "log": "verification/dual-remote-final-gate-5.txt"
+    },
+    {
+      "argv": [
+        "bash",
+        "-c",
+        "node --check --input-type=module < static/player.js"
+      ],
+      "exit_code": 0,
+      "log": "verification/dual-remote-final-gate-6.txt"
+    },
+    {
+      "argv": [
+        "git",
+        "diff",
+        "--cached",
+        "--check"
+      ],
+      "exit_code": 0,
+      "log": "verification/dual-remote-final-gate-7.txt"
+    }
+  ],
+  "python_tests": {
+    "passed": 74,
+    "total": 74,
+    "identities": [
+      "test_dual_remote.test_browser_pin_state_all_actions_and_device_controls",
+      "test_dual_remote.test_browser_reset_and_disconnect_all_only_clear_browser_commands",
+      "test_dual_remote.test_native_dialog_connect_form_wraps_without_changing_browser_modal",
+      "test_dual_remote.test_original_browser_modal_and_setup_block_have_exact_20702751_parity",
+      "test_dual_remote.test_shared_master_queue_is_once_only_and_browser_reset_preserves_native",
+      "test_dual_remote.test_simulated_lan_socket_keeps_browser_allowlist_but_cannot_forge_native_owner",
+      "test_ingest.test_build_ytdlp_command_performance_and_quality_flags",
+      "test_ingest.test_describe_format_tier",
+      "test_ingest.test_thumbnail_guarded_by_mutagen",
+      "test_ingest.test_youtube_audio_selector_strictly_anti_drc",
+      "test_ingest.test_youtube_opus_selector_prioritizes_opus_lossless",
+      "test_native_admin.test_cli_launcher_preserves_browser_startup_and_cleans_tls",
+      "test_native_admin.test_desktop_launcher_uses_local_owner_and_cleans_tls",
+      "test_native_admin.test_local_admin_csrf_lifecycle_and_native_command_handoff",
+      "test_native_admin.test_plaintext_nonlocal_gate_does_not_trust_forwarded_headers",
+      "test_native_limits.test_admin_snapshot_marks_session_expired_without_token_poll",
+      "test_native_limits.test_consumer_claim_rechecks_device_permission_and_master_before_execution",
+      "test_native_limits.test_local_request_logging_never_includes_raw_remote_request",
+      "test_native_limits.test_master_reopen_and_heartbeat_gap_never_replay_queued_work",
+      "test_native_limits.test_packaging_manifest_includes_session_tls_runtime",
+      "test_native_limits.test_revocation_and_role_downgrade_cancel_queued_and_pending_commands",
+      "test_native_resources.test_local_ui_port_conflict_keeps_legacy_loopback_fallback",
+      "test_native_resources.test_old_windows_temp_runtime_fails_before_creating_key_files",
+      "test_native_resources.test_shutdown_cannot_join_a_registered_but_unstarted_worker",
+      "test_native_resources.test_tls_connections_have_absolute_deadline_even_for_partial_requests",
+      "test_native_state.test_state_has_bounded_track_title_without_paths_or_library_metadata",
+      "test_organizer.test_ambiguous_word_after_dash_is_kept",
+      "test_organizer.test_apply_rejected_when_plan_drifted",
+      "test_organizer.test_apply_with_matching_plan",
+      "test_organizer.test_batch_rename_rolls_back_when_stage_fails",
+      "test_organizer.test_batch_rename_swap_numbers",
+      "test_organizer.test_clean_basic_numbering",
+      "test_organizer.test_clean_dot_mode_and_replace_old_number",
+      "test_organizer.test_clean_keep_yt_id",
+      "test_organizer.test_clean_strips_junk_tags",
+      "test_organizer.test_numbering_none_keeps_names_and_3digit_pads",
+      "test_organizer.test_organize_never_overwrites_and_artist_template",
+      "test_organizer.test_organize_preview_apply_and_undo",
+      "test_organizer.test_single_rename_case_only",
+      "test_organizer.test_sort_by_name_is_natural",
+      "test_organizer.test_sort_by_selection_keeps_order",
+      "test_organizer.test_title_starting_with_number_is_kept",
+      "test_organizer.test_trailing_dash_tag_and_bracket_ambiguous_removed",
+      "test_organizer.test_ui_numbering_aliases",
+      "test_organizer.test_undo_empty_history",
+      "test_organizer.test_undo_refuses_when_original_name_taken",
+      "test_organizer.test_undo_restores_names",
+      "test_search.test_extract_playlist_canonical_and_browse_ids",
+      "test_search.test_format_item_subtitle_deduplication",
+      "test_search.test_get_preview_stream_info_empty",
+      "test_search.test_get_preview_stream_info_formats_extraction",
+      "test_search.test_inspect_playlist_innertube_mock",
+      "test_search.test_inspect_playlist_ytdlp_fallback",
+      "test_search.test_javascript_syntax_clean",
+      "test_search.test_parse_music_responsive_item_playlist",
+      "test_search.test_parse_music_responsive_item_playlist_track_count",
+      "test_search.test_parse_music_responsive_item_song",
+      "test_search.test_search_empty_or_whitespace_returns_empty",
+      "test_search.test_search_youtube_music_fallback_to_ytdlp",
+      "test_search.test_search_youtube_music_innertube_mock",
+      "test_search.test_web_ui_audio_server_handler_timeout_config",
+      "test_search.test_web_ui_csp_allows_youtube_images",
+      "test_search.test_web_ui_playlist_inspect_handler",
+      "test_search.test_web_ui_search_handler_empty_query_400",
+      "test_search.test_web_ui_search_handler_success",
+      "test_search.test_web_ui_stream_preview_handler",
+      "test_search.test_web_ui_suppresses_request_timed_out_log",
+      "test_search.test_youtube_music_playlist_vl_prefix_stripped",
+      "test_secure_remote.test_commands_deduplicate_expire_and_require_observed_ack",
+      "test_secure_remote.test_pairing_requires_one_time_invite_and_local_approval",
+      "test_secure_remote.test_tls_pinned_pair_state_roles_and_strict_protocol",
+      "test_update_checker.test_check_for_updates_mock_release",
+      "test_update_checker.test_install_update_package_url_validation",
+      "test_update_checker.test_parse_semver"
+    ]
+  },
+  "node_harnesses_passed": 3,
+  "protected_files_unchanged": 12,
+  "native_modules_unchanged": 4,
+  "browser_actions_preserved": 25,
+  "original_browser_modal_and_setup_exact_bytes_match": true,
+  "android_repo_unchanged": true,
+  "actual_chromium_fixture": {
+    "local_desktop_dialogs_separate": true,
+    "insecure_origin_http_0_0_0_0_simulated_lan": true,
+    "secure_context": false,
+    "crypto_randomUUID_type": "undefined",
+    "browser_remote_mode_initialized": true,
+    "native_button_hidden": true,
+    "js_error_count_observed": 0,
+    "native_dialog_horizontal_overflow_before_px": 110,
+    "native_dialog_horizontal_overflow_after_px": 0,
+    "scope": "Actual Chromium renderer with test-only LAN peer classification on strictly loopback HTTP, not physical HP-LAN proof",
+    "temporary_fixture_stopped": true,
+    "secrets_in_screenshot": false
+  },
+  "parent_additional_TDD": {
+    "native_form_layout": "Actual DOM overflow110px RED; wrappingform contract RED; Native-only inline constraints GREEN0px; browser modal unchanged"
+  },
+  "phone_windows_wsl_audio_device_acceptance": false,
+  "legacy_http_pin_risk_explicitly_accepted": true,
+  "ca_installed": false,
+  "new_dependencies_installed": false,
+  "push_performed": false,
+  "independent_review": {
+    "passed": true,
+    "security_concerns": [],
+    "logic_errors": [],
+    "suggestions": [],
+    "review_delegation": "deleg_d4cfca3d",
+    "initial_review": "deleg_4678513a",
+    "reviewed_candidate_sha256": "30887cf1ecfc58d2f13feafece961b7b28b625d82bbab13aeeb86683af7b5afd",
+    "summary": "Composed full-candidate review and focused independent delta re-review. Original cross-poll blocker independently reproduced RED against oldblob7f04c0a and closed by actual-function Stop/Play/load_track subsequent-poll regressions; no stale playback, truthful rejected/unknown acknowledgements, failed-fetch retention, successfulhandoff clearing, duplicate suppression and64-ackcap verified. All3Node harnesses strictunhandledpass; native/local playback and same-response guards preserved. All15frozenpaths matched index/worktree, onlydeclared3paths changed,4native modules unchanged. No socket/install/write/commit/push by reviewers.",
+    "closed_blockers": [
+      "Nativeexecution no longer holdsHTTPpollguard; nextbrowserStop/Play/load can be fetched duringoldnativeauthorization"
+    ],
+    "review_scope": "Full initial candidate1e47d7c9 plus exactruntime/test/checkpoint delta to30887cf1; additionalfinal reports/handoff self-inspected beforecommit.",
+    "physical_device_tested": false
+  },
+  "host_gates_passed": true,
+  "promotion_allowed": true,
+  "closed_by_implementation_not_yet_reviewed": {
+    "review": "deleg_4678513a",
+    "blocker": "Nativeexecution heldnextHTTPpoll",
+    "fix": "Dispatchconsumer synchronously and recordacks asynchronously withoutawaitingexecution in pollguard; honestunknownonunexpectedrejection",
+    "red": "actualcrosspoll fetchcount1expected2",
+    "green": "actualconsumer/poll/playercrosspollStopPlayloadTrack+acknextpoll+dedup regressions pass",
+    "initial_review_record": "verification/dual-remote-review-initial.json"
+  },
+  "static_added_line_scan": {
+    "findings": [],
+    "heuristic_not_proof": true
+  }
+}

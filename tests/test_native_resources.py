@@ -71,7 +71,9 @@ def test_local_ui_port_conflict_keeps_legacy_loopback_fallback():
     busy.listen(1)
     server = None
     try:
-        server, port = create_server('127.0.0.1', busy.getsockname()[1])
+        from unittest.mock import patch
+        with patch('web_ui._cleanup_stale_wsl_listen_port'):
+            server, port = create_server('127.0.0.1', busy.getsockname()[1])
         assert port != busy.getsockname()[1]
         assert server.server_address[0] == '127.0.0.1'
         assert not server.secure_remote.enabled

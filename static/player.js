@@ -2859,26 +2859,620 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  const nativeAdmin = initNativeRemoteAdmin({ document, renderQr: renderQrToCanvas });
-  let nativeAdminTimer = null;
-  function openRemoteModal() {
+  let currentRemoteServerPort = 8765;
+  let latestWslPowerShellCmd = '';
+
+  function renderQrForRemoteUrl(targetUrl, labelHint = '') {
+    if (!remoteQrCanvas) return;
+    const ok = renderQrToCanvas(remoteQrCanvas, targetUrl, { sizePx: 180, margin: 3 });
+    if (remoteQrCaption) {
+      if (ok) {
+        try {
+          const parsed = new URL(targetUrl);
+          remoteQrCaption.textContent = labelHint
+            ? `${parsed.hostname} (${labelHint})`
+            : `Scan QR (${parsed.host})`;
+        } catch (_e) {
+          remoteQrCaption.textContent = 'Scan QR dengan Kamera HP';
+        }
+      } else {
+        remoteQrCaption.textContent = 'Menunggu IP Wi-Fi...';
+      }
+    }
+  }
+
+  const btnDisableWslBridge = document.getElementById('btnDisableWslBridge');
+  function renderWslBridgeStatusUI(wslInfo) {
+    if (!remoteWslBridgeBox) return;
+    if (!wslInfo || !wslInfo.is_wsl) {
+      remoteWslBridgeBox.classList.add('hidden');
+      return;
+    }
+    remoteWslBridgeBox.classList.remove('hidden');
+    latestWslPowerShellCmd = wslInfo.powershell_admin_cmd || '';
+    const isActive = Boolean(wslInfo.bridge_active);
+    remoteWslBridgeBox.classList.toggle('active', isActive);
+    if (btnDisableWslBridge) {
+      btnDisableWslBridge.classList.toggle('hidden', !isActive);
+    }
+
+    if (isActive) {
+      if (remoteWslBridgeTitle) {
+        remoteWslBridgeTitle.textContent = `✓ Jembatan Port Windows -> WSL2 (${wslInfo.wsl_ip || 'Aktif'}) Sudah Terbuka`;
+      }
+      if (remoteWslBridgeDesc) {
+        remoteWslBridgeDesc.textContent =
+          'Hanya TCP Port 8765 yang diteruskan ke WSL2 (dilindungi PIN 4-Digit & LAN Gate). Anda dapat menekan "Tutup Port" kapan saja setelah selesai manggung.';
+      }
+      if (btnEnableWslBridgeText) {
+        btnEnableWslBridgeText.textContent = 'Perbarui Bridge WSL2';
+      }
+    } else {
+      if (remoteWslBridgeTitle) {
+        remoteWslBridgeTitle.textContent =
+          '⚠️ Mode WSL2 Terdeteksi: Akses dari HP Memerlukan Jembatan Port Windows';
+      }
+      if (remoteWslBridgeDesc) {
+        remoteWslBridgeDesc.textContent = `Aplikasi berjalan di dalam WSL2 (IP virtual internal: ${wslInfo.wsl_ip || '172.x.x.x'}). Agar HP di Wi-Fi bisa membuka player ini, klik tombol "Aktifkan Akses HP (1-Klik)" lalu klik Yes pada jendela konfirmasi Windows.`;
+      }
+      if (btnEnableWslBridgeText) {
+        btnEnableWslBridgeText.textContent = 'Aktifkan Akses HP (1-Klik)';
+      }
+    }
+  }
+
+  function renderRemoteUrlItems(interfacesList, fallbackUrls, pinCode) {
+    if (!remoteUrlList) return;
+    remoteUrlList.replaceChildren();
+
+    const items =
+      Array.isArray(interfacesList) && interfacesList.length > 0
+        ? interfacesList
+        : (fallbackUrls || []).map(u => ({
+            url: u,
+            label: 'Jaringan Lokal',
+            reachable_from_hp: true,
+          }));
+
+    if (items.length === 0) {
+      const fallbackSimUrl = `${window.location.origin}/player?remote=1&pin=${encodeURIComponent(pinCode || remotePin || '')}`;
+      renderQrForRemoteUrl(fallbackSimUrl, 'Simulasi Lokal');
+
+      const emptyItem = document.createElement('div');
+      emptyItem.className = 'remote-url-item';
+      const msg = document.createElement('span');
+      msg.className = 'remote-url-code';
+      msg.textContent =
+        'Belum terdeteksi IP Wi-Fi/Hotspot otomatis. Ketik IP Wi-Fi Laptop Anda pada kolom manual di bawah atau klik Refresh IP.';
+      emptyItem.appendChild(msg);
+      remoteUrlList.appendChild(emptyItem);
+      return;
+    }
+
+    const firstItem = items[0];
+    renderQrForRemoteUrl(
+      firstItem.url,
+      firstItem.reachable_from_hp ? 'Wi-Fi / LAN' : 'WSL2 Internal'
+    );
+
+    items.forEach((item, idx) => {
+      const fullUrl = item.url;
+      const row = document.createElement('div');
+      row.className = 'remote-url-item' + (idx === 0 ? ' active' : '');
+      row.title = 'Klik untuk menampilkan alamat IP ini pada QR Code';
+
+      const leftCol = document.createElement('div');
+      leftCol.className = 'remote-url-item-left';
+
+      const badgeEl = document.createElement('span');
+      badgeEl.className =
+        'remote-url-badge' + (item.reachable_from_hp === false ? ' warn' : '');
+      badgeEl.textContent = item.label || 'Jaringan Lokal';
+
+      const codeEl = document.createElement('code');
+      codeEl.className = 'remote-url-code';
+      codeEl.textContent = fullUrl;
+
+      leftCol.appendChild(badgeEl);
+      leftCol.appendChild(codeEl);
+
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.className = 'btn-nudge';
+      copyBtn.textContent = 'Salin Link';
+      copyBtn.addEventListener('click', async e => {
+        e.stopPropagation();
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(fullUrl);
+            copyBtn.textContent = 'Tersalin ✓';
+            setTimeout(() => {
+              copyBtn.textContent = 'Salin Link';
+            }, 1800);
+          }
+        } catch (_e) {
+          // Ignore clipboard errors
+        }
+      });
+
+      row.addEventListener('click', () => {
+        Array.from(remoteUrlList.querySelectorAll('.remote-url-item')).forEach(el => {
+          el.classList.remove('active');
+        });
+        row.classList.add('active');
+        renderQrForRemoteUrl(
+          fullUrl,
+          item.reachable_from_hp === false ? 'WSL2 Internal' : 'Wi-Fi / LAN'
+        );
+      });
+
+      row.appendChild(leftCol);
+      row.appendChild(copyBtn);
+      remoteUrlList.appendChild(row);
+    });
+  }
+
+  let lastRenderedClientsSig = '';
+  function renderConnectedRemoteClients(activeList = [], blockedList = [], forceRender = false) {
+    if (!remoteClientsList) return;
+    const safeActive = Array.isArray(activeList) ? activeList : [];
+    const safeBlocked = Array.isArray(blockedList) ? blockedList : [];
+
+    // Signature excluding idle_seconds so DOM buttons aren't recreated every 350ms while user hovers/clicks
+    const sigObj = {
+      a: safeActive.map(c => `${c.client_id}:${c.role}:${c.commands_sent || 0}:${c.ip}:${c.label}`),
+      b: safeBlocked.map(b => `${b.client_id}:${b.ip}:${b.label}`),
+    };
+    const sig = JSON.stringify(sigObj);
+    if (!forceRender && sig === lastRenderedClientsSig) {
+      return;
+    }
+    lastRenderedClientsSig = sig;
+
+    if (btnKickAllRemotes) {
+      btnKickAllRemotes.classList.toggle('hidden', safeActive.length === 0);
+    }
+
+    remoteClientsList.replaceChildren();
+    if (safeActive.length === 0) {
+      const emptyEl = document.createElement('div');
+      emptyEl.className = 'remote-client-empty';
+      emptyEl.textContent = 'Belum ada HP yang terhubung saat ini.';
+      remoteClientsList.appendChild(emptyEl);
+    } else {
+      safeActive.forEach(client => {
+        const row = document.createElement('div');
+        row.className = 'remote-client-item';
+
+        const infoCol = document.createElement('div');
+        infoCol.className = 'remote-client-info';
+
+        const nameRow = document.createElement('div');
+        nameRow.className = 'remote-client-name';
+
+        const dot = document.createElement('span');
+        dot.className = 'remote-client-dot';
+        nameRow.appendChild(dot);
+
+        const labelSpan = document.createElement('span');
+        labelSpan.textContent = client.label || 'Perangkat HP';
+        nameRow.appendChild(labelSpan);
+
+        const metaRow = document.createElement('div');
+        metaRow.className = 'remote-client-meta';
+        const shortId = String(client.tag || client.client_id || '').slice(-4);
+        const cmdCount = Number(client.commands_sent || client.cmd_count) || 0;
+        metaRow.textContent = `IP: ${client.ip || '-'} • ID #${shortId} • ${cmdCount} aksi`;
+
+        infoCol.appendChild(nameRow);
+        infoCol.appendChild(metaRow);
+
+        const actionsCol = document.createElement('div');
+        actionsCol.className = 'remote-client-actions';
+
+        const isViewOnly = client.role === 'view_only';
+        const roleBtn = document.createElement('button');
+        roleBtn.type = 'button';
+        roleBtn.className = 'btn-client-role' + (isViewOnly ? ' view-only' : '');
+        roleBtn.textContent = isViewOnly ? '👁️ Pantau Saja' : '🎛️ Kontrol Penuh';
+        roleBtn.title = isViewOnly
+          ? 'HP ini hanya bisa melihat layar tanpa mengubah fader/lagu. Klik untuk beri Kontrol Penuh.'
+          : 'HP ini bisa mengontrol Fader & Lagu. Klik untuk ubah ke Mode Pantau Saja (View-Only).';
+        roleBtn.addEventListener('click', async () => {
+          const nextRole = isViewOnly ? 'control' : 'view_only';
+          const { ok, data } = await apiPost('/api/remote/clients', {
+            action: 'set_role',
+            client_id: client.client_id,
+            role: nextRole,
+          });
+          if (ok && data) {
+            renderConnectedRemoteClients(data.active_remotes, data.blocked_remotes, true);
+            notify({
+              type: 'info',
+              title: nextRole === 'view_only' ? 'Mode Pantau (View-Only) Aktif' : 'Mode Kontrol Penuh Aktif',
+              message: `${client.label || 'HP'} (${client.ip}) kini dalam mode ${
+                nextRole === 'view_only' ? 'Pantau Saja' : 'Kontrol Penuh'
+              }.`,
+              duration: 2800,
+            });
+          }
+        });
+
+        const kickBtn = document.createElement('button');
+        kickBtn.type = 'button';
+        kickBtn.className = 'btn-client-kick';
+        kickBtn.textContent = '✕ Putus';
+        kickBtn.title = 'Putus koneksi & blokir HP ini dari Master Deck';
+        kickBtn.addEventListener('click', async () => {
+          const { ok, data } = await apiPost('/api/remote/clients', {
+            action: 'kick',
+            client_id: client.client_id,
+          });
+          if (ok && data) {
+            renderConnectedRemoteClients(data.active_remotes, data.blocked_remotes, true);
+            const cnt = Number(data.active_remotes_count) || 0;
+            if (remoteModalClientCount) {
+              remoteModalClientCount.textContent =
+                cnt > 0 ? `● ${cnt} HP Terhubung Aktif` : '0 HP Terhubung (Siap Menerima Koneksi)';
+            }
+            if (btnOpenRemoteModal && remoteHeaderLabel) {
+              btnOpenRemoteModal.classList.toggle('connected', cnt > 0);
+              remoteHeaderLabel.textContent = cnt > 0 ? `HP Remote (${cnt})` : 'HP Remote';
+            }
+            notify({
+              type: 'info',
+              title: 'Koneksi HP Diputus',
+              message: `${client.label || 'HP'} (${client.ip}) telah diputus dari Master Deck.`,
+              duration: 3000,
+            });
+          }
+        });
+
+        actionsCol.appendChild(roleBtn);
+        actionsCol.appendChild(kickBtn);
+        row.appendChild(infoCol);
+        row.appendChild(actionsCol);
+        remoteClientsList.appendChild(row);
+      });
+    }
+
+    if (remoteBlockedSection && remoteBlockedList) {
+      remoteBlockedSection.classList.toggle('hidden', safeBlocked.length === 0);
+      remoteBlockedList.replaceChildren();
+      safeBlocked.forEach(blocked => {
+        const row = document.createElement('div');
+        row.className = 'remote-client-item blocked';
+
+        const infoCol = document.createElement('div');
+        infoCol.className = 'remote-client-info';
+
+        const nameRow = document.createElement('div');
+        nameRow.className = 'remote-client-name';
+        nameRow.textContent = `⛔ ${blocked.label || 'Perangkat HP'}`;
+
+        const metaRow = document.createElement('div');
+        metaRow.className = 'remote-client-meta';
+        const shortId = String(blocked.client_id || '').slice(-4);
+        metaRow.textContent = `IP: ${blocked.ip || '-'} • ID #${shortId} (Diblokir)`;
+
+        infoCol.appendChild(nameRow);
+        infoCol.appendChild(metaRow);
+
+        const unblockBtn = document.createElement('button');
+        unblockBtn.type = 'button';
+        unblockBtn.className = 'btn-client-unblock';
+        unblockBtn.textContent = '✓ Izinkan Lagi';
+        unblockBtn.addEventListener('click', async () => {
+          const { ok, data } = await apiPost('/api/remote/clients', {
+            action: 'unblock',
+            client_id: blocked.client_id,
+          });
+          if (ok && data) {
+            renderConnectedRemoteClients(data.active_remotes, data.blocked_remotes, true);
+            notify({
+              type: 'success',
+              title: 'Perangkat Diizinkan Kembali',
+              message: `${blocked.label || 'HP'} (${blocked.ip}) dapat terhubung kembali.`,
+              duration: 2800,
+            });
+          }
+        });
+
+        row.appendChild(infoCol);
+        row.appendChild(unblockBtn);
+        remoteBlockedList.appendChild(row);
+      });
+    }
+  }
+
+  if (btnKickAllRemotes) {
+    btnKickAllRemotes.addEventListener('click', async () => {
+      const { ok, data } = await apiPost('/api/remote/clients', { action: 'kick_all' });
+      if (ok && data) {
+        renderConnectedRemoteClients(data.active_remotes, data.blocked_remotes, true);
+        if (remoteModalClientCount) {
+          remoteModalClientCount.textContent = '0 HP Terhubung (Siap Menerima Koneksi)';
+        }
+        if (btnOpenRemoteModal && remoteHeaderLabel) {
+          btnOpenRemoteModal.classList.remove('connected');
+          remoteHeaderLabel.textContent = 'HP Remote';
+        }
+        notify({
+          type: 'info',
+          title: 'Semua HP Diputus',
+          message: 'Seluruh perangkat HP yang terhubung telah diputus.',
+          duration: 3000,
+        });
+      }
+    });
+  }
+
+  async function refreshRemoteModalInfo(forceIpRefresh = false) {
+    try {
+      const res = await fetch('/api/remote/info' + (forceIpRefresh ? '?refresh=1' : ''), {
+        headers: {
+          'X-FOH-Client-ID': remoteClientId,
+        },
+      });
+      if (!res.ok) return;
+      const info = await res.json();
+      if (info.port) currentRemoteServerPort = Number(info.port) || 8765;
+      if (chkRemoteEnabled && typeof info.enabled === 'boolean') {
+        chkRemoteEnabled.checked = info.enabled;
+      }
+      if (remotePinDisplay && info.pin) {
+        remotePinDisplay.textContent = info.pin;
+        if (!isRemoteController) {
+          remotePin = info.pin;
+        }
+      }
+      if (remoteModalClientCount) {
+        const cnt = Number(info.active_remotes_count) || 0;
+        remoteModalClientCount.textContent =
+          cnt > 0 ? `● ${cnt} HP Terhubung Aktif` : '0 HP Terhubung (Siap Menerima Koneksi)';
+      }
+      renderConnectedRemoteClients(info.active_remotes, info.blocked_remotes, true);
+      renderWslBridgeStatusUI(info.wsl_bridge);
+      renderRemoteUrlItems(info.interfaces, info.remote_urls, info.pin);
+    } catch (_e) {
+      // Ignore network errors
+    }
+  }
+
+  function openRemoteModal(forcePinEntry = false) {
     if (!remoteModal) return;
+    const showPinEntry = isRemoteController || forcePinEntry;
+    if (remoteMasterSetupPanel) {
+      remoteMasterSetupPanel.classList.toggle('hidden', showPinEntry);
+    }
+    if (remoteClientPinPanel) {
+      remoteClientPinPanel.classList.toggle('hidden', !showPinEntry);
+    }
+    if (btnOpenRemoteSimTab) {
+      btnOpenRemoteSimTab.classList.toggle('hidden', showPinEntry);
+    }
     remoteModal.classList.remove('hidden');
-    nativeAdmin.refresh();
-    clearInterval(nativeAdminTimer);
-    nativeAdminTimer = setInterval(() => nativeAdmin.refresh(), 1500);
+
+    if (showPinEntry) {
+      if (remotePinInput) {
+        remotePinInput.value = remotePin || '';
+        setTimeout(() => remotePinInput.focus(), 50);
+      }
+    } else {
+      refreshRemoteModalInfo(false);
+    }
   }
+
   function closeRemoteModal() {
-    if (remoteModal) remoteModal.classList.add('hidden');
-    clearInterval(nativeAdminTimer);
-    nativeAdminTimer = null;
+    if (remoteModal) {
+      remoteModal.classList.add('hidden');
+    }
   }
-  if (btnOpenRemoteModal) btnOpenRemoteModal.addEventListener('click', openRemoteModal);
-  if (btnCloseRemoteModal) btnCloseRemoteModal.addEventListener('click', closeRemoteModal);
-  if (btnCancelRemoteModal) btnCancelRemoteModal.addEventListener('click', closeRemoteModal);
-  if (remoteModal) remoteModal.addEventListener('click', e => {
-    if (e.target === remoteModal) closeRemoteModal();
-  });
+
+  if (btnOpenRemoteModal) {
+    btnOpenRemoteModal.addEventListener('click', () => openRemoteModal(false));
+  }
+  if (btnRemotePinPrompt) {
+    btnRemotePinPrompt.addEventListener('click', () => openRemoteModal(true));
+  }
+  if (btnCloseRemoteModal) {
+    btnCloseRemoteModal.addEventListener('click', closeRemoteModal);
+  }
+  if (btnCancelRemoteModal) {
+    btnCancelRemoteModal.addEventListener('click', closeRemoteModal);
+  }
+  if (remoteModal) {
+    remoteModal.addEventListener('click', e => {
+      if (e.target === remoteModal) closeRemoteModal();
+    });
+  }
+  if (btnRefreshRemoteIps) {
+    btnRefreshRemoteIps.addEventListener('click', () => refreshRemoteModalInfo(true));
+  }
+  if (btnEnableWslBridge) {
+    btnEnableWslBridge.addEventListener('click', async () => {
+      btnEnableWslBridge.disabled = true;
+      if (btnEnableWslBridgeText) {
+        btnEnableWslBridgeText.textContent = 'Menunggu Izin Admin Windows...';
+      }
+      const { ok, data, error } = await apiPost('/api/remote/wsl-bridge', {});
+      btnEnableWslBridge.disabled = false;
+      if (data && data.wsl_bridge) {
+        renderWslBridgeStatusUI(data.wsl_bridge);
+      } else {
+        refreshRemoteModalInfo(true);
+      }
+      notify({
+        type: ok ? 'success' : 'info',
+        title: ok ? 'Jembatan Port WSL2 Aktif!' : 'Perlu Izin Administrator Windows',
+        message:
+          (data && data.message) ||
+          error ||
+          'Silakan klik Yes pada pop-up PowerShell atau jalankan perintah PowerShell secara manual.',
+        duration: 4200,
+      });
+    });
+  }
+  if (btnDisableWslBridge) {
+    btnDisableWslBridge.addEventListener('click', async () => {
+      btnDisableWslBridge.disabled = true;
+      btnDisableWslBridge.textContent = 'Menutup Port...';
+      const { ok, data } = await apiPost('/api/remote/wsl-bridge', { action: 'disable' });
+      btnDisableWslBridge.disabled = false;
+      btnDisableWslBridge.textContent = 'Tutup Port';
+      if (data && data.wsl_bridge) {
+        renderWslBridgeStatusUI(data.wsl_bridge);
+      } else {
+        refreshRemoteModalInfo(true);
+      }
+      notify({
+        type: ok ? 'info' : 'error',
+        title: ok ? 'Jembatan Port Ditutup' : 'Gagal Menutup Jembatan',
+        message: (data && data.message) || 'Aturan portproxy dan firewall Windows telah dihapus.',
+        duration: 3800,
+      });
+    });
+  }
+  if (btnCopyWslCmd) {
+    btnCopyWslCmd.addEventListener('click', async () => {
+      if (!latestWslPowerShellCmd) return;
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(latestWslPowerShellCmd);
+          btnCopyWslCmd.textContent = 'Cmd Tersalin ✓';
+          setTimeout(() => {
+            btnCopyWslCmd.textContent = 'Salin Cmd PowerShell';
+          }, 2000);
+          notify({
+            type: 'info',
+            title: 'Perintah PowerShell Disalin',
+            message: 'Buka PowerShell (Run as Administrator) di Windows, lalu Paste & tekan Enter.',
+            duration: 4000,
+          });
+        }
+      } catch (_e) {
+        // Ignore clipboard errors
+      }
+    });
+  }
+  function applyManualIpToQr() {
+    if (!remoteManualIpInput) return;
+    const rawIp = remoteManualIpInput.value.trim().replace(/^https?:\/\//i, '').split('/')[0].split(':')[0];
+    if (!rawIp) return;
+    const customUrl = `http://${rawIp}:${currentRemoteServerPort}/player?remote=1&pin=${encodeURIComponent(remotePin || '')}`;
+    renderQrForRemoteUrl(customUrl, 'IP Manual');
+    notify({
+      type: 'success',
+      title: 'QR Code Diperbarui',
+      message: `QR Code kini mengarah ke ${customUrl}`,
+      duration: 2800,
+    });
+  }
+  if (btnApplyManualIp) {
+    btnApplyManualIp.addEventListener('click', applyManualIpToQr);
+  }
+  if (remoteManualIpInput) {
+    remoteManualIpInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        applyManualIpToQr();
+      }
+    });
+  }
+  if (btnRegenRemotePin) {
+    btnRegenRemotePin.addEventListener('click', async () => {
+      const { ok, data } = await apiPost('/api/remote/state', { regenerate_pin: true });
+      if (ok && data && data.pin) {
+        if (remotePinDisplay) remotePinDisplay.textContent = data.pin;
+        refreshRemoteModalInfo(false);
+        notify({
+          type: 'info',
+          title: 'PIN FOH Remote Diperbarui',
+          message: `PIN baru: ${data.pin}. Masukkan PIN ini di HP Anda.`,
+          duration: 3000,
+        });
+      }
+    });
+  }
+  if (chkRemoteEnabled) {
+    chkRemoteEnabled.addEventListener('change', async () => {
+      await apiPost('/api/remote/state', { enabled: Boolean(chkRemoteEnabled.checked) });
+      refreshRemoteModalInfo(false);
+    });
+  }
+  if (btnOpenRemoteSimTab) {
+    btnOpenRemoteSimTab.addEventListener('click', () => {
+      const pinParam = remotePin ? `&pin=${encodeURIComponent(remotePin)}` : '';
+      window.open(`/player?remote=1${pinParam}`, '_blank');
+    });
+  }
+  if (btnExitRemoteSim) {
+    btnExitRemoteSim.addEventListener('click', () => {
+      window.location.href = '/player';
+    });
+  }
+
+  function submitClientPin() {
+    if (!remotePinInput) return;
+    const entered = remotePinInput.value.trim();
+    if (entered.length !== 4) {
+      if (remotePinFeedback) {
+        remotePinFeedback.textContent = 'PIN harus terdiri dari 4 angka.';
+      }
+      return;
+    }
+    remotePin = entered;
+    try {
+      localStorage.setItem(REMOTE_PIN_STORAGE_KEY, entered);
+    } catch (_e) {
+      // Ignore storage error
+    }
+    syncRemotePinButtonText();
+    closeRemoteModal();
+    pollRemoteStateFromMaster();
+  }
+
+  if (btnSaveRemotePin) {
+    btnSaveRemotePin.addEventListener('click', submitClientPin);
+  }
+  if (remotePinInput) {
+    remotePinInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        submitClientPin();
+      }
+    });
+  }
+
+  const androidRemoteModal = document.getElementById('androidRemoteModal');
+  const btnOpenAndroidRemoteModal = document.getElementById('btnOpenAndroidRemoteModal');
+  if (!isRemoteController) {
+    const nativeAdmin = initNativeRemoteAdmin({ document, renderQr: renderQrToCanvas });
+    let nativeAdminTimer = null;
+    function openAndroidRemoteModal() {
+      if (!androidRemoteModal) return;
+      androidRemoteModal.classList.remove('hidden');
+      nativeAdmin.refresh();
+      clearInterval(nativeAdminTimer);
+      nativeAdminTimer = setInterval(() => nativeAdmin.refresh(), 1500);
+    }
+    function closeAndroidRemoteModal() {
+      if (androidRemoteModal) androidRemoteModal.classList.add('hidden');
+      clearInterval(nativeAdminTimer);
+      nativeAdminTimer = null;
+    }
+    if (btnOpenAndroidRemoteModal) {
+      btnOpenAndroidRemoteModal.classList.remove('hidden');
+      btnOpenAndroidRemoteModal.addEventListener('click', openAndroidRemoteModal);
+    }
+    for (const id of ['btnCloseAndroidRemoteModal', 'btnCancelAndroidRemoteModal']) {
+      const button = document.getElementById(id);
+      if (button) button.addEventListener('click', closeAndroidRemoteModal);
+    }
+    if (androidRemoteModal) androidRemoteModal.addEventListener('click', e => {
+      if (e.target === androidRemoteModal) closeAndroidRemoteModal();
+    });
+  }
 
   let lastRemoteBlockToastAt = 0;
   async function sendRemoteCommand(action, params = {}) {
@@ -3167,7 +3761,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   let isMasterSyncInFlight = false;
-  const nativeMasterInstance = crypto.randomUUID();
+  const nativeMasterInstance = isRemoteController ? null : crypto.randomUUID();
   const nativeAcks = [];
   const consumeNativeCommand = createNativeCommandConsumer({
     media: () => audioEl,
@@ -3201,6 +3795,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (res.ok) {
         const data = await res.json();
         nativeAcks.splice(0, sentAcks.length);
+        if (data.pin) remotePin = data.pin;
         const cnt = Number(data.active_remotes_count) || 0;
         if (btnOpenRemoteModal && remoteHeaderLabel) {
           btnOpenRemoteModal.classList.toggle('connected', cnt > 0);
@@ -3210,11 +3805,20 @@ document.addEventListener('DOMContentLoaded', () => {
           remoteModalClientCount.textContent =
             cnt > 0 ? `● ${cnt} HP Terhubung Aktif` : '0 HP Terhubung (Siap Menerima Koneksi)';
         }
+        if (remoteModal && !remoteModal.classList.contains('hidden')) {
+          renderConnectedRemoteClients(data.active_remotes, data.blocked_remotes, false);
+        }
         if (Array.isArray(data.commands) && data.commands.length > 0) {
           for (const cmd of data.commands) {
             if (cmd.native_id) {
-              const ack = await consumeNativeCommand(cmd);
-              if (ack && nativeAcks.length < 64) nativeAcks.push(ack);
+              // Reserve native intent now, but never hold the HTTP poll lock
+              // while authorization or playback is pending.
+              consumeNativeCommand(cmd).then(ack => {
+                if (ack && nativeAcks.length < 64) nativeAcks.push(ack);
+              }, () => {
+                // Unexpected consumer failure cannot establish a media outcome.
+                if (nativeAcks.length < 64) nativeAcks.push({ command_id: cmd.native_id, status: 'unknown' });
+              });
             } else {
               executeRemoteCommandOnMaster(cmd);
             }

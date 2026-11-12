@@ -1,6 +1,6 @@
 # SWARARIA AUDIO LAB — Pro Audio Library, FOH QC & DSP Workstation
 
-> **Native Remote v1 (desktop foundation):** HTTP workstation sekarang hanya `127.0.0.1`; remote LAN HTTP/PIN lama sudah ditutup. Listener HTTPS default OFF, diaktifkan melalui modal HP Remote di PC dengan invite sesi, fingerprint, dan approval perangkat. Client Android belum termasuk. Kontrak API, batas keamanan, verifikasi, dan rollback: [SECURE_REMOTE.md](SECURE_REMOTE.md). Installer/runtime Windows belum diverifikasi.
+> **Browser + Android Remote (koreksi aditif):** HP browser remote HTTP/PIN dipertahankan seperti baseline lama melalui menu **HP Remote**. Menu **Android Remote** terpisah menambahkan HTTPS v1, fingerprint, invite dan approval untuk Android0.5; default OFF/manual ON. Tidak perlu memasang sertifikat di HP dan tidak ada perubahan APK. **HTTPS Android tidak melindungi jalur browser HTTP/PIN lama:** gunakan hanya LAN tepercaya, jangan expose internet atau menjalankan launcher default di VPS publik. Rencana/batas verifikasi: [DUAL-REMOTE-PLAN.md](DUAL-REMOTE-PLAN.md); kontrak native: [SECURE_REMOTE.md](SECURE_REMOTE.md). Windows/WSL/HP nyata tetap perlu diuji.
 
 Workstation lokal berbasis web & CLI untuk **Audio Engineer**, **Operator FOH / Soundsystem**, **DJ**, dan **Event Organizer**. Dirancang dengan estetika **shadcn/ui Dark High-Contrast** dan arsitektur **4 Halaman Dedicated** yang terhubung melalui _Shared Workspace State_.
 

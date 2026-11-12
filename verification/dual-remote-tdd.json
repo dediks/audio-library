@@ -1,0 +1,36 @@
+{
+  "base_commit": "3f872241e526cf839cd843a90cfd568424cb1149",
+  "candidate": "historical implementer checkpoint before parent staging, additional layout test and independent review; no push or install",
+  "checkpoint_note": "The73 tests/five new tests below describe the implementation checkpoint, not final acceptance. Parent subsequently ran74 tests/six new tests in dual-remote-parent.json. Initial independent review found a cross-poll blocker, preserved in dual-remote-review-initial.json; final review/report must close it before promotion.",
+  "scope": "additive desktop browser HTTP/PIN restoration plus separate Android Remote modal",
+  "tdd_slices": [
+    {"slice": "browser PIN/state and 25-action HTTP path", "red": "AssertionError: legacy browser information must be restored", "red_exit": 1, "green_exit": 0},
+    {"slice": "native fields require strict origin, old master cannot drain native queue", "red": "AssertionError: native fields require Origin even on loopback", "red_exit": 1, "green_exit": 0},
+    {"slice": "separate local-only Android modal initialization and timer", "red": "AssertionError: Android needs a separate affordance", "red_exit": 1, "green_exit": 0},
+    {"slice": "accepted browser LAN launcher defaults tested through loopback substitution", "red": "AssertionError: desktop preserves browser LAN startup; test substitutes loopback", "red_exit": 1, "green_exit": 0},
+    {"slice": "mixed poll browser transport supersedes delayed native Play", "red": "AssertionError: browser Stop cannot wait behind native authorization", "red_exit": 1, "green_exit": 0},
+    {"slice": "insecure HTTP browser skips native cryptographic identity initialization", "red_command": "node tests/dual-remote.test.mjs", "red": "AssertionError: Got unwanted exception: insecure HTTP browser initialization must not require crypto.randomUUID; Actual message: crypto.randomUUID is not a function", "red_exit": 1, "green_exit": 0, "regression": "VM executes actual player.js initialization with isRemoteController=true and crypto={}; initialization continues. Local native master calls crypto.randomUUID exactly once and preserves its result.", "verification_command": "node tests/dual-remote.test.mjs && node tests/native-admin.test.mjs && node tests/native-player.test.mjs && node --check static/player.js && node --check tests/dual-remote.test.mjs && git diff --check", "verification_exit": 0}
+  ],
+  "verification": {
+    "python_passed": 73,
+    "python_total": 73,
+    "new_python_tests_discovered": 5,
+    "python_command": "PYTHONPATH=/home/ubuntu/projects/audio-library-android-spike/app/src/main/res/raw/ytdlp .venv/bin/python tests/run_tests.py",
+    "node_harnesses": {"tests/native-admin.test.mjs": "passed", "tests/native-player.test.mjs": "passed", "tests/dual-remote.test.mjs": "passed"},
+    "browser_http_actions": 25,
+    "browser_actual_js_dispatch_actions": 25,
+    "browser_modal_and_setup_exact_20702751_parity": "passed",
+    "native_four_modules_byte_identical_to_base": true,
+    "python_compile": "passed",
+    "player_js_syntax": "passed",
+    "git_diff_check": "passed"
+  },
+  "intentional_assertion_updates": [
+    "410 removal assertions now require restored browser command/WSL endpoints; WSL operation mocked",
+    "wildcard startup compatibility asserted only through mocks; live fixtures explicit 127.0.0.1",
+    "legacy PIN startup text restored and captured, never reported",
+    "LAN rejection assertions scoped to native/admin/master and workstation mutations, retained browser allowlist separately exercised",
+    "WSL startup cleanup mocked in server fixtures"
+  ],
+  "limits": ["physical phone rendering and Android 0.5 interoperability not exercised", "Windows/WSL bridge privileged operations mocked, not executed", "independent parent review remains", "accepted legacy HTTP/PIN risk remains; native HTTPS does not protect legacy HTTP"]
+}

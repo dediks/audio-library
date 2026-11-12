@@ -1,5 +1,7 @@
 # Handoff — fondasi Native Remote desktop v1
 
+> **Dokumen historis rilis3f87224.** Pengguna kemudian meminta koreksi aditif: browser HTTP/PIN tetap seperti sebelumnya, Android memakai menu terpisah. Pernyataan di bawah tentang penutupan browser dan belum adanya client Android hanya menggambarkan rilis awal ini. Acuan koreksi sekarang: `DUAL-REMOTE-PLAN.md` dan `SECURE_REMOTE.md`; jangan menerapkan instruksi patch lama untuk memperoleh koreksi terbaru.
+
 ## Yang diserahkan
 
 Perubahan source desktop pada branch `feature/secure-native-remote-v1`, dari baseline `20702751ff2fdea5ace7d131dbaed7c0727d3c6c`. Tidak ada push, deployment, installer Windows baru, atau perubahan Android/laptop aktif.

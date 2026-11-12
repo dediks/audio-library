@@ -138,7 +138,7 @@ def launch_fallback_app_window(url: str) -> subprocess.Popen | None:
 
 
 def main() -> int:
-    bind_host = "127.0.0.1"
+    bind_host = "0.0.0.0"
     local_host = "127.0.0.1"
     preferred_port = 8765
 
@@ -149,11 +149,14 @@ def main() -> int:
     server_thread.start()
     wait_for_server(local_host, actual_port, timeout=5.0)
 
+    lan_ips = web_ui.get_local_lan_ips(force_refresh=True)
     print("=" * 65)
     print("  SWARARIA AUDIO LAB — DESKTOP APPLICATION MODE")
     print("=" * 65)
     print(f"  Local Workstation Engine : {url}")
-    print("  Native Remote TLS       : OFF — atur melalui modal Remote di PC")
+    if lan_ips:
+        print(f"  FOH Mobile Remote (HP)   : http://{lan_ips[0]}:{actual_port}/player?remote=1")
+        print(f"  FOH Remote Security PIN  : {web_ui.remote_hub.pin}")
     print(f"  Audio Library Inbox      : {web_ui.INBOX_DIR}")
     print("=" * 65)
 

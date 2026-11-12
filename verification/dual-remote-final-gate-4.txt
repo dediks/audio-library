@@ -1,0 +1,3 @@
+PASS dual remote: separate Android controls, local-only initialization, open/close timer
+PASS native identity: insecure HTTP browser continues; local master uses crypto.randomUUID once
+PASS actual legacy dispatcher: all 25 browser actions reach original engine

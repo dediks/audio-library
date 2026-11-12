@@ -1016,7 +1016,7 @@ class RemotePlayerHub:
                     "blocked_at": now,
                 }
             self.remote_clients.clear()
-            self.command_queue.clear()
+            self.command_queue = [c for c in self.command_queue if c.get("native_id")]
             return count
 
     def unblock_client(self, client_id: str) -> bool:
@@ -1046,14 +1046,14 @@ class RemotePlayerHub:
             self.pin = f"{secrets.randbelow(9000) + 1000:04d}"
             self.remote_clients.clear()
             self.blocked_clients.clear()
-            self.command_queue.clear()
+            self.command_queue = [c for c in self.command_queue if c.get("native_id")]
             return self.pin
 
     def set_enabled(self, flag: bool) -> bool:
         with self.lock:
             self.enabled = bool(flag)
             if not self.enabled:
-                self.command_queue.clear()
+                self.command_queue = [c for c in self.command_queue if c.get("native_id")]
                 self.remote_clients.clear()
             return self.enabled
 
@@ -1063,15 +1063,15 @@ class RemotePlayerHub:
             self._prune_clients_unlocked(now)
             return len(self.remote_clients)
 
-    def update_master_state(self, state_payload: dict | None) -> tuple[list[dict], int, str, bool]:
+    def update_master_state(self, state_payload: dict | None, include_native: bool = True) -> tuple[list[dict], int, str, bool]:
         now = time.time()
         with self.lock:
             if isinstance(state_payload, dict) and state_payload:
                 self.master_state = state_payload
                 self.master_updated_at = now
             self._prune_clients_unlocked(now)
-            pending = list(self.command_queue)
-            self.command_queue.clear()
+            pending = [c for c in self.command_queue if include_native or not c.get("native_id")]
+            self.command_queue = [c for c in self.command_queue if not include_native and c.get("native_id")]
             return pending, len(self.remote_clients), self.pin, self.enabled
 
     def get_remote_state(
@@ -1182,7 +1182,7 @@ class AudioServerHandler(BaseHTTPRequestHandler):
 
     def parse_request(self):
         valid = super().parse_request()
-        if valid and not self.local_request_allowed():
+        if valid and self.is_localhost_client() and not self.local_request_allowed():
             self.close_connection = True
             self.send_json(403, {'code': 'local_origin_required'})
             return False
@@ -1253,9 +1253,29 @@ class AudioServerHandler(BaseHTTPRequestHandler):
         path = parsed.path
         is_local = self.is_localhost_client()
 
+        # Security Gate for LAN / Wi-Fi devices (Smartphone Remote)
         if not is_local:
-            self.send_json(403, {"code": "tls_remote_required"})
-            return
+            if not remote_hub.enabled:
+                self.send_json(403, {"error": "FOH Mobile Remote sedang dinonaktifkan di Master Deck."})
+                return
+            if path in ("/", "/index.html"):
+                self.send_response(302)
+                self.send_header("Location", "/player?remote=1")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            allowed_lan_get = path in (
+                "/player",
+                "/player.html",
+                "/api/system",
+                "/api/library",
+                "/api/remote/info",
+                "/api/remote/state",
+            ) or path.startswith("/static/")
+            if not allowed_lan_get:
+                self.send_json(403, {"error": "Akses jaringan lokal hanya diizinkan untuk FOH Mobile Remote (/player)."})
+                return
+
         if path == '/api/native-remote':
             if not self.local_request_allowed():
                 self.send_json(403, {'code': 'local_origin_required'})
@@ -1299,8 +1319,66 @@ class AudioServerHandler(BaseHTTPRequestHandler):
             self.send_json(200, check_for_updates())
         elif path == "/api/undo-rename":
             self.send_json(200, {"ok": True, "last": fs_browser.peek_rename_history()})
-        elif path in ('/api/remote/info', '/api/remote/state'):
-            self.send_json(410, {'code': 'legacy_remote_removed', 'message': 'Gunakan native remote TLS v1 dari modal Remote di PC.'})
+        elif path == "/api/remote/info":
+            qs = parse_qs(parsed.query)
+            force_ip = qs.get("refresh", ["0"])[0] == "1"
+            interfaces = get_network_interfaces_detail(force_refresh=force_ip)
+            lan_ips = get_local_lan_ips(force_refresh=False)
+            actual_port = int(self.server.server_address[1])
+            remote_port = _get_wsl_remote_bridge_port(actual_port)
+            active_list, blocked_list = remote_hub.get_clients_lists()
+            info: dict = {
+                "ok": True,
+                "is_localhost": is_local,
+                "enabled": remote_hub.enabled,
+                "port": remote_port,
+                "lan_ips": lan_ips,
+                "master_online": (time.time() - remote_hub.master_updated_at) < 5.0,
+                "active_remotes_count": len(active_list),
+            }
+            if is_local:
+                info["pin"] = remote_hub.pin
+                info["active_remotes"] = active_list
+                info["blocked_remotes"] = blocked_list
+                info["interfaces"] = [
+                    {
+                        **iface,
+                        "url": f"http://{iface['ip']}:{remote_port}/player?remote=1&pin={remote_hub.pin}",
+                    }
+                    for iface in interfaces
+                ]
+                info["remote_urls"] = [
+                    f"http://{ip}:{remote_port}/player?remote=1&pin={remote_hub.pin}"
+                    for ip in lan_ips
+                ]
+                info["short_urls"] = [
+                    f"http://{ip}:{remote_port}"
+                    for ip in lan_ips
+                ]
+                info["wsl_bridge"] = get_wsl_bridge_status(actual_port)
+            self.send_json(200, info)
+        elif path == "/api/remote/state":
+            if not remote_hub.enabled:
+                self.send_json(403, {"ok": False, "error": "FOH Mobile Remote sedang dinonaktifkan.", "code": "DISABLED"})
+                return
+            qs = parse_qs(parsed.query)
+            pin = self.headers.get("X-FOH-PIN") or qs.get("pin", [None])[0]
+            if not remote_hub.verify_pin(pin):
+                self.send_json(401, {"ok": False, "error": "PIN FOH Remote tidak valid atau belum dimasukkan.", "code": "INVALID_PIN"})
+                return
+            client_ip = str(self.client_address[0])
+            raw_tag = (self.headers.get("X-FOH-Client-ID") or "mobile").strip()
+            client_tag = re.sub(r"[^a-zA-Z0-9_\-]", "", raw_tag)[:32] or "mobile"
+            client_id = f"{client_ip}:{client_tag}"
+            if remote_hub.is_client_blocked(client_id):
+                self.send_json(403, {
+                    "ok": False,
+                    "error": "Koneksi HP ini telah diputus oleh operator Master Deck.",
+                    "code": "KICKED",
+                })
+                return
+            ua = self.headers.get("User-Agent") or ""
+            self.send_json(200, remote_hub.get_remote_state(client_id, client_ip, client_tag, ua))
         elif path == "/api/queue":
             self.send_json(200, task_manager.get_snapshot(history_limit=10))
         elif path == "/api/library":
@@ -1370,10 +1448,15 @@ class AudioServerHandler(BaseHTTPRequestHandler):
         is_local = self.is_localhost_client()
 
         if not is_local:
-            self.send_json(403, {'code': 'tls_remote_required'})
-            return
+            if not remote_hub.enabled:
+                self.send_json(403, {"error": "FOH Mobile Remote sedang dinonaktifkan di Master Deck."})
+                return
+            if path != "/api/remote/command":
+                self.send_json(403, {"error": "Operasi ini hanya diizinkan langsung dari Master Laptop/PC."})
+                return
+
         self.close_connection = True
-        if not self.local_request_allowed(write=True):
+        if path.startswith('/api/native-remote') and not self.local_request_allowed(write=True):
             self.send_json(403, {'code': 'local_origin_required'})
             return
         if path.startswith('/api/native-remote') and self.path not in ('/api/native-remote', '/api/native-remote/claim'):
@@ -1408,20 +1491,110 @@ class AudioServerHandler(BaseHTTPRequestHandler):
             self.native_admin(payload)
             return
 
-        if path in ('/api/remote/wsl-bridge', '/api/remote/command', '/api/remote/clients'):
-            self.send_json(410, {'code': 'legacy_remote_removed'})
-        elif path == '/api/remote/state':
-            remote = self.server.secure_remote
-            try:
-                commands = remote.master_poll(payload.get('state'), payload.get('native_acks', []), payload.get('master_instance'))
-            except RemoteError as exc:
-                self.send_json(exc.status, {'code': exc.code})
+        if path == "/api/remote/wsl-bridge":
+            if not is_local:
+                self.send_json(403, {"error": "Hanya Master Deck lokal yang dapat mengatur bridge WSL2."})
                 return
-            info = remote.admin_status()
-            active = [d for d in info['devices'] if d['status'] == 'active']
-            self.send_json(200, {'ok': True, 'commands': commands,
-                                 'active_remotes_count': len(active),
-                                 'enabled': info['enabled']})
+            actual_port = int(self.server.server_address[1])
+            if payload.get("action") == "disable":
+                ok_bridge, msg_bridge, status_bridge = disable_wsl_port_bridge(actual_port)
+            else:
+                ok_bridge, msg_bridge, status_bridge = enable_wsl_port_bridge(actual_port)
+            self.send_json(200 if ok_bridge else 400, {
+                "ok": ok_bridge,
+                "message": msg_bridge,
+                "wsl_bridge": status_bridge,
+            })
+        elif path == "/api/remote/state":
+            if not is_local:
+                self.send_json(403, {"error": "Hanya Master Deck lokal yang dapat memperbarui state."})
+                return
+            native_master = 'master_instance' in payload or 'native_acks' in payload
+            if native_master and not self.local_request_allowed(write=True):
+                self.send_json(403, {'code': 'local_origin_required'})
+                return
+            if payload.get("regenerate_pin"):
+                remote_hub.regenerate_pin()
+            if "enabled" in payload and isinstance(payload["enabled"], bool):
+                remote_hub.set_enabled(payload["enabled"])
+            if native_master:
+                try:
+                    commands = self.server.secure_remote.master_poll(payload.get('state'), payload.get('native_acks', []), payload.get('master_instance'))
+                except RemoteError as exc:
+                    self.send_json(exc.status, {'code': exc.code})
+                    return
+                active_count = remote_hub.get_active_remotes_count()
+                current_pin, is_enabled = remote_hub.pin, remote_hub.enabled
+            else:
+                commands, active_count, current_pin, is_enabled = remote_hub.update_master_state(payload.get("state"), include_native=False)
+            active_list, blocked_list = remote_hub.get_clients_lists()
+            self.send_json(200, {
+                "ok": True,
+                "commands": commands,
+                "active_remotes_count": active_count,
+                "active_remotes": active_list,
+                "blocked_remotes": blocked_list,
+                "pin": current_pin,
+                "enabled": is_enabled,
+                "port": int(self.server.server_address[1]),
+            })
+        elif path == "/api/remote/clients":
+            if not is_local:
+                self.send_json(403, {"error": "Hanya Master Deck lokal yang dapat mengelola koneksi HP."})
+                return
+            op = str(payload.get("action") or "").strip().lower()
+            target_cid = str(payload.get("client_id") or "").strip()
+            if op == "kick" and target_cid:
+                remote_hub.kick_client(target_cid)
+            elif op == "kick_all":
+                remote_hub.kick_all_clients()
+            elif op == "unblock" and target_cid:
+                remote_hub.unblock_client(target_cid)
+            elif op == "set_role" and target_cid:
+                remote_hub.set_client_role(target_cid, str(payload.get("role") or "control"))
+            else:
+                self.send_json(400, {"ok": False, "error": "Perintah manajemen perangkat tidak valid."})
+                return
+            active_list, blocked_list = remote_hub.get_clients_lists()
+            self.send_json(200, {
+                "ok": True,
+                "active_remotes_count": len(active_list),
+                "active_remotes": active_list,
+                "blocked_remotes": blocked_list,
+            })
+        elif path == "/api/remote/command":
+            if not remote_hub.enabled:
+                self.send_json(403, {"ok": False, "error": "FOH Mobile Remote sedang dinonaktifkan.", "code": "DISABLED"})
+                return
+            pin = self.headers.get("X-FOH-PIN") or payload.get("pin")
+            if not remote_hub.verify_pin(pin):
+                self.send_json(401, {"ok": False, "error": "PIN FOH Remote tidak valid.", "code": "INVALID_PIN"})
+                return
+            action = str(payload.get("action") or "").strip()
+            if action not in ALLOWED_REMOTE_ACTIONS:
+                self.send_json(400, {"ok": False, "error": f"Action '{action}' tidak dikenali."})
+                return
+            client_ip = str(self.client_address[0])
+            raw_tag = (self.headers.get("X-FOH-Client-ID") or "mobile").strip()
+            client_tag = re.sub(r"[^a-zA-Z0-9_\-]", "", raw_tag)[:32] or "mobile"
+            client_id = f"{client_ip}:{client_tag}"
+            if remote_hub.is_client_blocked(client_id):
+                self.send_json(403, {
+                    "ok": False,
+                    "error": "Koneksi HP ini telah diputus oleh operator Master Deck.",
+                    "code": "KICKED",
+                })
+                return
+            if remote_hub.get_client_role(client_id) == "view_only":
+                self.send_json(403, {
+                    "ok": False,
+                    "error": "HP ini diatur ke mode Pantau Saja (View-Only) oleh Master Deck.",
+                    "code": "VIEW_ONLY",
+                })
+                return
+            ua = self.headers.get("User-Agent") or ""
+            cmd = remote_hub.enqueue_command(action, payload.get("params"), client_id, client_ip, client_tag, ua)
+            self.send_json(200, {"ok": True, "command_id": cmd["id"]})
         elif path == "/api/download":
             status, resp = task_manager.enqueue_downloads(payload)
             self.send_json(status, resp)
@@ -2035,16 +2208,20 @@ def ensure_worker_started() -> None:
             _worker_started = True
 
 
-def create_server(host: str = "127.0.0.1", port: int = 8765) -> tuple[ThreadingHTTPServer, int]:
-    """Local UI only. Secure LAN listener is explicitly enabled in the Remote modal."""
-    if host != '127.0.0.1':
-        raise ValueError('The plaintext workstation server must bind to 127.0.0.1')
+def create_server(host: str = "0.0.0.0", port: int = 8765) -> tuple[ThreadingHTTPServer, int]:
+    """Starts the background worker and creates the HTTP server, falling back to a free port if needed."""
     ensure_worker_started()
+    _cleanup_stale_wsl_listen_port(port)
+    ThreadingHTTPServer.allow_reuse_address = True
     try:
         server = LocalAudioServer((host, port), AudioServerHandler)
     except OSError:
-        server = LocalAudioServer((host, 0), AudioServerHandler)
-    return server, int(server.server_address[1])
+        try:
+            server = LocalAudioServer((host, 0), AudioServerHandler)
+        except OSError:
+            server = LocalAudioServer(("127.0.0.1", 0), AudioServerHandler)
+    actual_port = int(server.server_address[1])
+    return server, actual_port
 
 
 def main():
@@ -2055,16 +2232,20 @@ def main():
         yt_dlp.main()
         return
 
-    bind_host = "127.0.0.1"
+    bind_host = "0.0.0.0"  # Listens on LAN for FOH Mobile Remote (gated by PIN & localhost checks)
     local_host = "127.0.0.1"
     port = 8765
 
     server, actual_port = create_server(bind_host, port)
+    remote_port = _get_wsl_remote_bridge_port(actual_port)
+    lan_ips = get_local_lan_ips(force_refresh=True)
     print("=" * 65)
     print("  SWARARIA AUDIO LAB // BATCH INGESTION & SOUNDSYSTEM QC ENGINE")
     print("=" * 65)
     print(f"  Server running locally at : http://{local_host}:{actual_port}")
-    print("  Native Remote TLS        : OFF — atur melalui modal Remote di PC")
+    if lan_ips:
+        print(f"  FOH Mobile Remote (HP)    : http://{lan_ips[0]}:{remote_port}/player?remote=1")
+        print(f"  FOH Remote Security PIN   : {remote_hub.pin}")
     print(f"  Inbox Folder              : {INBOX_DIR}")
     print("  Press Ctrl+C to stop.")
     print("=" * 65)

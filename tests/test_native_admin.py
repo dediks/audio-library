@@ -11,8 +11,10 @@ def test_local_admin_csrf_lifecycle_and_native_command_handoff():
     import threading
     import web_ui
     import inspect
-    assert inspect.signature(web_ui.create_server).parameters['host'].default == '127.0.0.1'
-    server, port = web_ui.create_server(port=0)
+    assert inspect.signature(web_ui.create_server).parameters['host'].default == '0.0.0.0'  # accepted browser LAN compatibility
+    from unittest.mock import patch
+    with patch.object(web_ui, '_cleanup_stale_wsl_listen_port'):
+        server, port = web_ui.create_server('127.0.0.1', port=0)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     origin = f'http://127.0.0.1:{port}'
@@ -37,8 +39,11 @@ def test_local_admin_csrf_lifecycle_and_native_command_handoff():
                         {'Content-Type': 'text/plain'}):
             assert local('POST', '/api/native-remote', {'action': 'invite_open'}, headers)[0] in (403, 415)
         assert local('GET', '/api/native-remote?ignored=1')[0] == 404
-        assert local('POST', '/api/remote/wsl-bridge', {})[0] == 410
-        assert local('POST', '/api/remote/command', {'pin': web_ui.remote_hub.pin, 'action': 'play'})[0] == 410
+        from unittest.mock import patch
+        with patch.object(web_ui, 'enable_wsl_port_bridge', return_value=(True, 'ok', {})):
+            assert local('POST', '/api/remote/wsl-bridge', {})[0] == 200
+        assert local('POST', '/api/remote/command', {'pin': web_ui.remote_hub.pin, 'action': 'play'})[0] == 200
+        web_ui.remote_hub.update_master_state({})
         status, info = local('POST', '/api/native-remote', {'action': 'start', 'bind_ip': '127.0.0.1', 'port': 0})
         assert status == 200 and info['enabled']
         _, info = local('POST', '/api/native-remote', {'action': 'invite_open'})
@@ -86,9 +91,9 @@ def test_plaintext_nonlocal_gate_does_not_trust_forwarded_headers():
     from web_ui import AudioServerHandler
     from email.message import Message
     from io import BytesIO
-    for method, path in [('GET', '/api/library'), ('GET', '/api/remote/info'),
-                         ('GET', '/api/remote/state'), ('GET', '/api/native-remote'),
-                         ('POST', '/api/remote/command')]:
+    for method, path in [('GET', '/api/native-remote'), ('POST', '/api/native-remote/claim'),
+                         ('POST', '/api/remote/state'), ('POST', '/api/download'),
+                         ('POST', '/api/remote/wsl-bridge'), ('GET', '/api/queue')]:
         handler = AudioServerHandler.__new__(AudioServerHandler)
         handler.path = path
         handler.client_address = ('192.168.1.50', 9999)
@@ -113,8 +118,10 @@ def test_desktop_launcher_uses_local_owner_and_cleans_tls():
     servers = []
     real_create = web_ui.create_server
     def create(host, port):
-        assert host == '127.0.0.1', 'desktop must never open plaintext LAN listener'
-        server, actual = real_create(host, 0)
+        assert host == '0.0.0.0', 'desktop preserves browser LAN startup; test substitutes loopback'
+        from unittest.mock import patch
+        with patch.object(web_ui, '_cleanup_stale_wsl_listen_port'):
+            server, actual = real_create('127.0.0.1', 0)
         servers.append(server)
         return server, actual
     def start_view():
@@ -135,11 +142,11 @@ def test_desktop_launcher_uses_local_owner_and_cleans_tls():
             sys.modules['webview'] = previous
     assert servers[0].secure_remote.listener is None
     assert not servers[0].secure_remote.enabled
-    assert 'Security PIN' not in output.getvalue()
+    assert 'Security PIN' in output.getvalue()
     assert 'http://192.' not in output.getvalue()
 
 
-def test_cli_launcher_cleans_tls_and_does_not_print_pin():
+def test_cli_launcher_preserves_browser_startup_and_cleans_tls():
     import contextlib
     import io
     from unittest.mock import patch
@@ -147,8 +154,10 @@ def test_cli_launcher_cleans_tls_and_does_not_print_pin():
     real_create = web_ui.create_server
     servers = []
     def create(host, port):
-        assert host == '127.0.0.1'
-        server, actual = real_create(host, 0)
+        assert host == '0.0.0.0'
+        from unittest.mock import patch
+        with patch.object(web_ui, '_cleanup_stale_wsl_listen_port'):
+            server, actual = real_create('127.0.0.1', 0)
         servers.append(server)
         def serve():
             server.secure_remote.start('127.0.0.1', 0)
@@ -159,4 +168,4 @@ def test_cli_launcher_cleans_tls_and_does_not_print_pin():
     with patch.object(web_ui, 'create_server', create), patch.object(sys, 'argv', ['web_ui.py']), contextlib.redirect_stdout(output):
         web_ui.main()
     assert servers[0].secure_remote.listener is None
-    assert 'Security PIN' not in output.getvalue()
+    assert 'Security PIN' in output.getvalue()

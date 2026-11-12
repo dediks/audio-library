@@ -1,0 +1,7 @@
+PASS native player: observed play/pause/stop, rejection, no-track, TTL, dedup
+PASS real player polling integration and ack handoff
+PASS consumer permission recheck
+PASS first authorization: local/native Stop/Pause/Play, actual track load, synchronous ordering
+PASS actual playCurrentTrack: deferred resume expiry, superseding intent, revocation, local playback
+PASS mixed poll browser Stop/Play/track load supersede deferred native Play
+PASS cross-poll browser Stop/Play/track load, asynchronous ack handoff, native dedup

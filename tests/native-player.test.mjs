@@ -78,6 +78,7 @@ const context = {
 vm.createContext(context);
 vm.runInContext(polling, context);
 await vm.runInContext('pushMasterStateAndPollCommands()', context);
+await new Promise(resolve => setImmediate(resolve)); // Native completion is independent of the HTTP poll.
 await vm.runInContext('pushMasterStateAndPollCommands()', context);
 assert.equal(sent[1].native_acks?.[0]?.status, 'applied', 'actual localhost poll must carry observed native ack');
 assert.equal(sent[1].native_acks[0].command_id, 'polling-one');
@@ -116,6 +117,7 @@ function realTransportHarness({ delayFirstAuthorization = false } = {}) {
   let plays = 0;
   let allowed = true;
   const badges = [];
+  const sent = [];
   const audio = {
     paused: true, ended: false, readyState: 4, currentTime: 9, error: null,
     async play() { plays++; this.paused = false; },
@@ -147,8 +149,16 @@ function realTransportHarness({ delayFirstAuthorization = false } = {}) {
   vm.createContext(ctx);
   vm.runInContext(player.slice(player.indexOf('  function loadTrack('), player.indexOf('  function triggerSmoothFadeOut(')) + '\n' + polling, ctx);
   return {
-    audio, badges, resume, enteredResume, firstAuthorization, enteredAuthorization,
+    audio, badges, sent, resume, enteredResume, firstAuthorization, enteredAuthorization,
     get plays() { return plays; },
+    poll: commands => {
+      ctx.fetch = async (_url, options) => {
+        sent.push(JSON.parse(options.body));
+        return { ok: true, json: async () => ({ commands }) };
+      };
+      ctx.executeRemoteCommandOnMaster = command => vm.runInContext(command.action === 'load_track' ? "loadTrack({ rel_path: 'new-cue.wav' })" : command.action === 'play' ? 'playCurrentTrack()' : 'stopAndResetCue()', ctx);
+      return vm.runInContext('pushMasterStateAndPollCommands()', ctx);
+    },
     revoke() { allowed = false; },
     native: (id, action = 'play', expiry = 1005) => vm.runInContext(`consumeNativeCommand(${JSON.stringify(cmd(id, action, expiry))})`, ctx),
     load: () => vm.runInContext("loadTrack({ rel_path: 'new-cue.wav' })", ctx),
@@ -278,3 +288,47 @@ for (const origin of ['local', 'native']) {
   assert.equal(h.badges.at(-1), 'PLAYING');
 }
 console.log('PASS actual playCurrentTrack: deferred resume expiry, superseding intent, revocation, local playback');
+for (const action of ['stop', 'play', 'load_track']) {
+  const h = realTransportHarness({ delayFirstAuthorization: true });
+  const pending = h.poll([cmd(`mixed-${action}`), { action }]);
+  await h.enteredAuthorization.promise;
+  await settleContinuations();
+  if (action === 'stop') assert.equal(h.audio.currentTime, 0, 'browser Stop cannot wait behind native authorization');
+  if (action === 'load_track') assert.equal(h.audio.src, '/stream/new-cue.wav', 'browser track load cannot wait behind native authorization');
+  h.firstAuthorization.resolve();
+  h.resume.resolve();
+  await pending;
+  await settleContinuations();
+  assert.equal(h.plays, action === 'play' ? 1 : 0, `mixed ${action}: old native Play cannot resurrect`);
+}
+console.log('PASS mixed poll browser Stop/Play/track load supersede deferred native Play');
+for (const action of ['stop', 'play', 'load_track']) {
+  const h = realTransportHarness({ delayFirstAuthorization: true });
+  const oldPlay = cmd(`cross-poll-${action}`);
+  const firstPoll = h.poll([oldPlay]);
+  await h.enteredAuthorization.promise;
+  // Native authorization remains unresolved while the NEXT HTTP poll runs.
+  try {
+    await h.poll([oldPlay, { action }]);
+    assert.equal(h.sent.length, 2, `next poll must fetch browser ${action} during native authorization`);
+    assert.equal(h.sent[1].native_acks.length, 0, 'pending native execution has no premature ack');
+    if (action === 'stop') assert.equal(h.audio.currentTime, 0);
+    if (action === 'load_track') assert.equal(h.audio.src, '/stream/new-cue.wav');
+  } finally {
+    h.firstAuthorization.resolve();
+    h.resume.resolve();
+    await firstPoll;
+    await settleContinuations();
+  }
+  assert.equal(h.plays, action === 'play' ? 1 : 0, `cross-poll ${action}: superseded native Play must never start audio`);
+  assert.equal(h.audio.paused, action !== 'play');
+  await h.poll([oldPlay]);
+  assert.equal(h.sent[2].native_acks.length, 1, 'completed native ack is delivered on the next poll');
+  assert.equal(h.sent[2].native_acks[0].command_id, oldPlay.native_id);
+  assert.equal(h.sent[2].native_acks[0].status, 'rejected', 'ack honestly reports superseded native intent');
+  await settleContinuations();
+  await h.poll([]);
+  assert.equal(h.sent[3].native_acks.length, 0, 'successful ack handoff is not repeated');
+  assert.equal(h.plays, action === 'play' ? 1 : 0, 'duplicate native delivery has no playback effect');
+}
+console.log('PASS cross-poll browser Stop/Play/track load, asynchronous ack handoff, native dedup');

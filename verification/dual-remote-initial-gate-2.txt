@@ -1,0 +1,1 @@
+PASS secure modal start/stop, local QR/manual invite, untrusted label, approval
