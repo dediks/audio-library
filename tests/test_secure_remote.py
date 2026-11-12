@@ -173,3 +173,40 @@ def test_tls_pinned_pair_state_roles_and_strict_protocol():
         remote.stop()
     assert remote.listener is None
     assert not remote.enabled
+
+
+def test_tls_advertised_lan_san_and_posix_immediate_restart():
+    import os
+    import socket
+    import ssl
+    from cryptography import x509
+    from secure_remote import SecureRemote
+    from web_ui import RemotePlayerHub
+    remote = SecureRemote(RemotePlayerHub())
+    remote.start('127.0.0.1', 0, advertise_ip='192.168.18.47', advertise_port=8767)
+    try:
+        bind_port = remote.listener.server_address[1]
+        status = remote.admin_status()
+        assert status['url'] == 'https://192.168.18.47:8767'
+        assert status['bind_url'] == f'https://127.0.0.1:{bind_port}'
+        cert = x509.load_pem_x509_certificate(remote.certificate.encode('ascii'))
+        san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+        san_ips = {str(ip) for ip in san.get_values_for_type(x509.IPAddress)}
+        assert san_ips == {'127.0.0.1', '192.168.18.47'}
+        ctx = ssl.create_default_context(cadata=remote.certificate)
+        with socket.create_connection(('127.0.0.1', bind_port), timeout=2) as raw:
+            with ctx.wrap_socket(raw, server_hostname='192.168.18.47') as tls_sock:
+                assert tls_sock.version() is not None
+        try:
+            with socket.create_connection(('127.0.0.1', bind_port), timeout=2) as raw:
+                ctx.wrap_socket(raw, server_hostname='10.0.0.99')
+            assert False, 'unadvertised IP must fail SAN verification'
+        except ssl.SSLCertVerificationError:
+            pass
+    finally:
+        remote.stop()
+    if os.name == 'posix':
+        # Rebinding immediately on the same port after a real TLS client connection must work on POSIX.
+        remote2 = SecureRemote(RemotePlayerHub())
+        remote2.start('127.0.0.1', bind_port, advertise_ip='192.168.18.47', advertise_port=8767)
+        remote2.stop()

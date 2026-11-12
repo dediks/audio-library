@@ -45,22 +45,32 @@ class SecureRemote:
         self.listener_thread = None
         self.certificate = None
         self.connection_info = {}
+        self.bind_info = {}
         self.lifecycle_lock = threading.Lock()
 
-    def start(self, host, port=8766):
+    def start(self, host, port=8766, advertise_ip=None, advertise_port=None):
+        """Start the local mTLS/HTTPS remote listener, optionally advertising a bridged public endpoint."""
         from secure_remote_tls import NativeTLSServer, tls_context, validate_bind
         validate_bind(host, port)
+        public_ip = host if advertise_ip is None else advertise_ip
+        if advertise_ip is not None or advertise_port is not None:
+            public_check_port = port if advertise_port is None else advertise_port
+            validate_bind(public_ip, public_check_port)
         with self.lifecycle_lock:
             if self.listener:
                 raise RemoteError('already_enabled', 409)
             try:
-                context, certificate, fingerprint = tls_context(host)
+                extra_ips = (public_ip,) if public_ip != host else ()
+                context, certificate, fingerprint = tls_context(host, extra_ips=extra_ips)
                 listener = NativeTLSServer((host, port), self, context)
             except (OSError, ValueError):
                 raise RemoteError('listener_unavailable', 409) from None
             self.activate()
             self.certificate = certificate
-            self.connection_info = {'url': f'https://{host}:{listener.server_address[1]}',
+            actual_bind_port = listener.server_address[1]
+            actual_public_port = actual_bind_port if advertise_port is None else advertise_port
+            self.bind_info = {'ip': host, 'port': actual_bind_port}
+            self.connection_info = {'url': f'https://{public_ip}:{actual_public_port}',
                                     'fingerprint_sha256': fingerprint}
             self.listener = listener
             self.listener_thread = threading.Thread(target=listener.serve_forever,
@@ -76,6 +86,7 @@ class SecureRemote:
                 self.listener_thread.join(timeout=4)
                 self.listener = self.listener_thread = None
             self.connection_info = {}
+            self.bind_info = {}
             self.certificate = None
 
     def activate(self):
@@ -328,8 +339,13 @@ class SecureRemote:
                 if d['status'] in ('pending', 'active') and self.clock() >= d['expires_at']:
                     d['status'] = 'expired'
                     self._cancel_device_commands(d['device_id'])
-            return {'enabled': self.enabled, 'protocol': 'v1', **self.connection_info,
-                    'invite': self.invite[0] if self.invite else None,
-                    'invite_expires_at': self.invite[1] if self.invite else None,
-                    'devices': [{k: d[k] for k in ('device_id', 'label', 'status', 'role', 'expires_at')}
-                                for d in self.devices.values()]}
+            status = {'enabled': self.enabled, 'protocol': 'v1', **self.connection_info,
+                      'invite': self.invite[0] if self.invite else None,
+                      'invite_expires_at': self.invite[1] if self.invite else None,
+                      'devices': [{k: d[k] for k in ('device_id', 'label', 'status', 'role', 'expires_at')}
+                                  for d in self.devices.values()]}
+            if self.enabled and self.bind_info:
+                bind_url = f"https://{self.bind_info['ip']}:{self.bind_info['port']}"
+                if bind_url != self.connection_info.get('url'):
+                    status['bind_url'] = bind_url
+            return status

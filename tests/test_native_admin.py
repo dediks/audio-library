@@ -133,7 +133,7 @@ def test_desktop_launcher_uses_local_owner_and_cleans_tls():
     previous = sys.modules.get('webview')
     sys.modules['webview'] = fake_view
     try:
-        with patch.dict('os.environ', {'SWARARIA_FORCE_BROWSER': '0'}), patch.object(web_ui, 'create_server', create), contextlib.redirect_stdout(output):
+        with patch.dict('os.environ', {'SWARARIA_FORCE_BROWSER': '0'}), patch.object(web_ui, 'create_server', create), patch.object(web_ui, 'get_local_lan_ips', return_value=['10.0.0.2']), contextlib.redirect_stdout(output):
             assert desktop_app.main() == 0
     finally:
         if previous is None:
@@ -165,7 +165,109 @@ def test_cli_launcher_preserves_browser_startup_and_cleans_tls():
         server.serve_forever = serve
         return server, actual
     output = io.StringIO()
-    with patch.object(web_ui, 'create_server', create), patch.object(sys, 'argv', ['web_ui.py']), contextlib.redirect_stdout(output):
+    with patch.object(web_ui, 'create_server', create), patch.object(web_ui, 'get_local_lan_ips', return_value=['10.0.0.2']), patch.object(sys, 'argv', ['web_ui.py']), contextlib.redirect_stdout(output):
         web_ui.main()
     assert servers[0].secure_remote.listener is None
     assert 'Security PIN' in output.getvalue()
+
+
+def test_wsl2_nat_maps_windows_wifi_ip_avoids_foh_port_and_gates_bridge():
+    import http.client
+    import json
+    import socket
+    import ssl
+    import threading
+    from unittest.mock import patch
+    from cryptography import x509
+    import web_ui
+
+    with socket.socket() as s1, socket.socket() as s2:
+        s1.bind(('127.0.0.1', 0))
+        pub_port = s1.getsockname()[1]
+        s2.bind(('127.0.0.1', 0))
+        priv_port = s2.getsockname()[1]
+
+    with patch.object(web_ui, '_cleanup_stale_wsl_listen_port'):
+        server, port = web_ui.create_server('127.0.0.1', port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    origin = f'http://127.0.0.1:{port}'
+
+    def local(method, path, payload=None, headers=None):
+        c = http.client.HTTPConnection('127.0.0.1', port, timeout=4)
+        h = {'Content-Type': 'application/json', 'Origin': origin}
+        h.update(headers or {})
+        if h.get('Origin') is None:
+            del h['Origin']
+        c.request(method, path, json.dumps(payload) if payload is not None else None, h)
+        r = c.getresponse()
+        body = json.loads(r.read())
+        c.close()
+        return r.status, body
+
+    try:
+        foh_port = port + 1
+        with patch.object(web_ui, 'is_wsl_environment', return_value=True), \
+                patch.object(web_ui, '_get_linux_internal_ips', return_value=['192.168.85.3']), \
+                patch.object(web_ui, 'get_local_lan_ips', return_value=['192.168.18.47']):
+            st, info = local('GET', '/api/native-remote')
+            assert st == 200
+            assert info['default_bind_ip'] == '192.168.18.47'
+            assert info['is_wsl'] is True and info['is_wsl_nat'] is True
+            assert info['default_port'] != port and info['default_port'] != foh_port
+            assert 'wsl_bridge' not in info and 'pin' not in info and 'active_remotes' not in info
+
+            # Must refuse colliding with FOH WSL bridge port (port + 1).
+            st_res, body_res = local('POST', '/api/native-remote', {
+                'action': 'start', 'bind_ip': '192.168.18.47', 'port': foh_port
+            })
+            assert st_res == 409 and body_res['code'] == 'wsl_port_reserved'
+
+            # Starting with Windows Wi-Fi IP in WSL2 binds loopback internal port & puts Wi-Fi IP in cert SAN.
+            with patch.object(web_ui, '_get_wsl_native_internal_port', return_value=priv_port):
+                st_ok, info_ok = local('POST', '/api/native-remote', {
+                    'action': 'start', 'bind_ip': '192.168.18.47', 'port': pub_port
+                })
+            assert st_ok == 200 and info_ok['enabled'] is True
+            assert info_ok['url'] == f'https://192.168.18.47:{pub_port}'
+            assert info_ok['bind_url'] == f'https://127.0.0.1:{priv_port}'
+            cert = x509.load_pem_x509_certificate(server.secure_remote.certificate.encode('ascii'))
+            san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+            assert {str(ip) for ip in san.get_values_for_type(x509.IPAddress)} == {'127.0.0.1', '192.168.18.47'}
+
+            # Native bridge endpoint must verify localhost/Origin and inspect Windows rules cleanly.
+            assert local('GET', '/api/native-remote/wsl-bridge?foo=1')[0] == 404
+            assert local('POST', '/api/native-remote/wsl-bridge', {'action': 'status'}, {'Origin': 'http://evil.test'})[0] == 403
+            with patch.object(web_ui, '_list_windows_portproxy_rules', return_value=[('0.0.0.0', pub_port, '127.0.0.1', priv_port)]), \
+                    patch.object(web_ui, '_check_windows_firewall_rule', return_value=True), \
+                    patch.object(web_ui, '_find_windows_sys32_bin', return_value='/fake/curl.exe'), \
+                    patch.object(web_ui, '_verify_windows_tls_reachable', return_value=True):
+                st_b, body_b = local('POST', '/api/native-remote/wsl-bridge', {'action': 'status'})
+                assert st_b == 200 and body_b['bridge']['bridge_active'] is True
+                assert body_b['bridge']['public_port'] == pub_port and body_b['bridge']['internal_port'] == priv_port
+                assert 'connectport=' + str(priv_port) in body_b['bridge']['powershell_admin_cmd']
+
+            local('POST', '/api/native-remote', {'action': 'stop'})
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=4)
+
+
+def test_local_request_allowed_accepts_ipv6_loopback_host_with_matching_port():
+    from email.message import Message
+    from web_ui import AudioServerHandler
+
+    class DummyServer:
+        server_address = ('127.0.0.1', 8765)
+
+    h = AudioServerHandler.__new__(AudioServerHandler)
+    h.server = DummyServer()
+    h.client_address = ('::1', 54321)
+    h.headers = Message()
+    h.headers['Host'] = '[::1]:8765'
+    h.headers['Origin'] = 'http://[::1]:8765'
+    assert h.local_request_allowed(write=True) is True
+
+    h.headers.replace_header('Host', '[::1]:9999')
+    assert h.local_request_allowed(write=True) is False

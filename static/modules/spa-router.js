@@ -21,8 +21,8 @@ const ROUTE_CONFIG = {
   '/splitter.html': { key: 'multitrack', script: 'multitrack.js', title: 'SWARARIA AUDIO LAB // 5. Multitrack & Stem Splitter', css: 'splitter.css' },
   '/video-split': { key: 'video-split', script: 'video-split.js', title: 'SWARARIA AUDIO LAB // 6. Long Video Splitter', css: 'splitter.css' },
   '/video-split.html': { key: 'video-split', script: 'video-split.js', title: 'SWARARIA AUDIO LAB // 6. Long Video Splitter', css: 'splitter.css' },
-  '/player': { key: 'player', script: 'player.js', title: 'SWARARIA AUDIO LAB // 7. FOH Live Player & Cue Deck', css: ['converter.css', 'player.css'] },
-  '/player.html': { key: 'player', script: 'player.js', title: 'SWARARIA AUDIO LAB // 7. FOH Live Player & Cue Deck', css: ['converter.css', 'player.css'] },
+  '/player': { key: 'player', script: 'player.js', title: 'SWARARIA AUDIO LAB // 7. FOH Live Player & Cue Deck', css: ['converter.css', 'player.css', 'native-remote.css'] },
+  '/player.html': { key: 'player', script: 'player.js', title: 'SWARARIA AUDIO LAB // 7. FOH Live Player & Cue Deck', css: ['converter.css', 'player.css', 'native-remote.css'] },
 };
 
 const viewCache = new Map();

@@ -3452,7 +3452,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function openAndroidRemoteModal() {
       if (!androidRemoteModal) return;
       androidRemoteModal.classList.remove('hidden');
-      nativeAdmin.refresh();
+      nativeAdmin.refresh({ checkBridge: true });
       clearInterval(nativeAdminTimer);
       nativeAdminTimer = setInterval(() => nativeAdmin.refresh(), 1500);
     }
@@ -3761,7 +3761,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   let isMasterSyncInFlight = false;
-  const nativeMasterInstance = isRemoteController ? null : crypto.randomUUID();
+  const nativeMasterInstance = isRemoteController ? null : (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16); }));
   const nativeAcks = [];
   const consumeNativeCommand = createNativeCommandConsumer({
     media: () => audioEl,

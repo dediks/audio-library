@@ -51,9 +51,16 @@
 #androidRemoteModal #nativeFingerprint { display:block; overflow-wrap:anywhere; user-select:text; }
 #androidRemoteModal .native-security, #androidRemoteModal .native-manual { font-size:11px; color:var(--text-muted); }
 #androidRemoteModal summary { cursor:pointer; }
-#androidRemoteModal .native-wsl-guide { padding:10px 12px; border:1px solid var(--border-subtle); background:var(--bg-recessed); border-radius:var(--radius-md); color:var(--text-muted); font-size:11px; line-height:1.6; }
+#androidRemoteModal .native-wsl-guide { padding:10px 12px; border:1px solid var(--border-subtle); background:var(--bg-recessed); border-radius:var(--radius-md); color:var(--text-muted); font-size:11px; line-height:1.6; display:flex; flex-direction:column; gap:8px; }
 #androidRemoteModal .native-wsl-guide strong { color:var(--accent-amber); }
-#androidRemoteModal .native-wsl-guide p { margin-top:4px; }
+#androidRemoteModal .native-wsl-guide p { margin:0; }
+#androidRemoteModal .native-wsl-guide code { display:block; overflow-wrap:anywhere; user-select:text; font-size:10px; line-height:1.5; }
+#androidRemoteModal .native-bridge-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+#androidRemoteModal .native-bridge-banner { padding:10px 12px; border:1px solid rgba(245,158,11,0.45); background:rgba(245,158,11,0.08); border-radius:var(--radius-md); display:flex; flex-direction:column; gap:6px; }
+#androidRemoteModal .native-bridge-head { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+#androidRemoteModal .native-bridge-head strong { font-size:12px; color:var(--accent-amber); }
+#androidRemoteModal .native-bridge-banner.ready { border-color:rgba(16,185,129,0.4); background:rgba(16,185,129,0.08); }
+#androidRemoteModal .native-bridge-banner.ready strong { color:var(--accent-green); }
 #androidRemoteModal .native-device { display:grid; grid-template-columns:36px minmax(0,1fr) auto; padding:14px 12px; gap:8px 12px; }
 #androidRemoteModal .native-device-icon { display:flex; align-items:center; justify-content:center; width:36px; height:40px; grid-column:1; grid-row:1 / 3; border:1px solid var(--border-subtle); border-radius:var(--radius-md); background:var(--bg-recessed); color:var(--accent-cyan); }
 #androidRemoteModal .native-active .native-device-icon { color:var(--accent-green); }

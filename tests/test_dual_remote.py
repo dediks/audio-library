@@ -169,3 +169,128 @@ def test_native_dialog_connect_form_wraps_without_changing_browser_modal():
     assert '#androidRemoteModal .native-fields { display:grid;' in css
     assert 'grid-template-columns:minmax(0,1fr) 110px' in css
     assert '#androidRemoteModal .native-fields .toolbar-input { width:100%; min-width:0;' in css
+
+
+def test_wsl_foh_companion_bridge_security_and_forwarding():
+    import web_ui as web
+    hub = web.RemotePlayerHub()
+    with patch.object(web, 'remote_hub', hub), \
+            patch.object(web, 'is_wsl_environment', return_value=True), \
+            patch.object(web, '_cleanup_stale_wsl_listen_port'), \
+            patch.object(web, '_get_linux_internal_ips', return_value=['192.168.85.3']), \
+            patch.object(web, 'get_local_lan_ips', return_value=['192.168.18.47']):
+        server, primary_port = web.create_server('0.0.0.0', 0)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            internal_port = server.wsl_foh_internal_port
+            assert internal_port is not None
+            assert internal_port not in (primary_port, primary_port + 1)
+            assert web._get_wsl_foh_internal_port(primary_port) == internal_port
+            bridge_port = web._get_wsl_remote_bridge_port(primary_port)
+
+            def bridged_req(method, path, payload=None, headers=None, expect_json=True):
+                conn = http.client.HTTPConnection('127.0.0.1', internal_port, timeout=4)
+                h = {'Content-Type': 'application/json'}
+                h.update(headers or {})
+                conn.request(method, path, json.dumps(payload) if payload is not None else None, h)
+                resp = conn.getresponse()
+                raw = resp.read()
+                loc = resp.getheader('Location')
+                conn.close()
+                if expect_json and raw:
+                    return resp.status, json.loads(raw), loc
+                return resp.status, raw, loc
+
+            lan_host = {'Host': f'192.168.18.47:{bridge_port}'}
+            assert bridged_req('GET', '/api/system', headers=lan_host)[0] == 200
+            st_root, _, loc_root = bridged_req('GET', '/', headers=lan_host, expect_json=False)
+            assert st_root == 302 and loc_root == '/player?remote=1'
+            assert bridged_req('GET', '/player', headers=lan_host, expect_json=False)[0] == 200
+            st_info, info, _ = bridged_req('GET', '/api/remote/info', headers=lan_host)
+            assert st_info == 200
+            assert info['is_localhost'] is False and info['port'] == bridge_port
+            assert 'pin' not in info and 'wsl_bridge' not in info and 'active_remotes' not in info
+
+            foh_headers = {**lan_host, 'X-FOH-PIN': hub.pin, 'X-FOH-Client-ID': 'hp-wsl-test'}
+            assert bridged_req('GET', '/api/remote/state', headers=foh_headers)[0] == 200
+            assert bridged_req('POST', '/api/remote/command', {'action': 'play'}, headers=foh_headers)[0] == 200
+
+            forged = {'Host': f'127.0.0.1:{primary_port}', 'Origin': f'http://127.0.0.1:{primary_port}'}
+            _, forged_info, _ = bridged_req('GET', '/api/remote/info', headers=forged)
+            assert forged_info['is_localhost'] is False
+            assert 'pin' not in forged_info and 'wsl_bridge' not in forged_info and 'active_remotes' not in forged_info
+            for method, path, body in [
+                ('GET', '/api/native-remote', None),
+                ('GET', '/api/download?path=foo', None),
+                ('GET', '/api/queue', None),
+                ('POST', '/api/native-remote', {'action': 'start'}),
+                ('POST', '/api/remote/state', {'state': {}}),
+                ('POST', '/api/remote/clients', {'action': 'kick', 'client_id': 'hp-wsl-test'}),
+                ('POST', '/api/remote/wsl-bridge', {}),
+            ]:
+                assert bridged_req(method, path, body, headers=forged)[0] == 403, f'{method} {path} must reject bridged forgery'
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(4)
+            assert primary_port not in web._active_wsl_foh_ports
+
+
+def test_wsl_foh_bridge_status_targets_internal_port_and_avoids_native_collision():
+    import web_ui as web
+    with patch.object(web, 'is_wsl_environment', return_value=True), \
+            patch.object(web, '_active_wsl_foh_ports', {}), \
+            patch.object(web, '_get_linux_internal_ips', return_value=['192.168.85.3']), \
+            patch.object(web, 'get_local_lan_ips', return_value=['192.168.18.47']):
+        assert web._get_wsl_remote_bridge_port(8765) == 8766
+        assert web._get_native_remote_default_port(8765) == 8767
+        assert web._get_wsl_native_internal_port(8767, 8765) == 8768
+        assert web._get_wsl_foh_internal_port(8765) == 8769
+        assert web._get_wsl_native_internal_port(8768, 8765) not in {8765, 8766, 8768, 8769}
+
+        def fake_bin(name):
+            return f'/fake/{name}' if name in ('netsh.exe', 'curl.exe') else None
+
+        with patch.object(web, '_find_windows_sys32_bin', side_effect=fake_bin), \
+                patch.object(web, '_list_windows_portproxy_rules', return_value=[('0.0.0.0', 8766, '192.168.85.3', 8765)]), \
+                patch.object(web, '_check_windows_firewall_rule', return_value=True), \
+                patch.object(web, '_verify_windows_http_reachable', return_value=False):
+            st_old = web.get_wsl_bridge_status(8765)
+            assert st_old['bridge_active'] is False
+            assert st_old['bridge_port'] == 8766 and st_old['internal_port'] == 8769
+            assert 'connectport=8769 connectaddress=127.0.0.1' in st_old['powershell_admin_cmd']
+
+        with patch.object(web, '_find_windows_sys32_bin', side_effect=lambda n: '/fake/netsh.exe' if n == 'netsh.exe' else None), \
+                patch.object(web, '_list_windows_portproxy_rules', return_value=[('0.0.0.0', 8766, '192.168.85.3', 8765)]), \
+                patch.object(web, '_check_windows_firewall_rule', return_value=True):
+            assert web.get_wsl_bridge_status(8765)['bridge_active'] is False
+
+        with patch.object(web, '_find_windows_sys32_bin', side_effect=fake_bin), \
+                patch.object(web, '_list_windows_portproxy_rules', return_value=[('0.0.0.0', 8766, '127.0.0.1', 8769)]), \
+                patch.object(web, '_check_windows_firewall_rule', return_value=True), \
+                patch.object(web, '_verify_windows_http_reachable', return_value=True):
+            assert web.get_wsl_bridge_status(8765)['bridge_active'] is True
+
+        with patch.object(web, '_find_windows_sys32_bin', side_effect=fake_bin), \
+                patch.object(web, '_list_windows_portproxy_rules', return_value=[('0.0.0.0', 8766, '127.0.0.1', 8769)]), \
+                patch.object(web, '_check_windows_firewall_rule', return_value=False), \
+                patch.object(web, '_verify_windows_http_reachable', return_value=True):
+            assert web.get_wsl_bridge_status(8765)['bridge_active'] is False
+
+        with patch.object(web, '_find_windows_sys32_bin', side_effect=lambda n: '/fake/' + n if n in ('powershell.exe', 'netsh.exe', 'curl.exe') else None), \
+                patch.object(web, '_run_elevated_windows_powershell', return_value=(True, '')) as run_ps, \
+                patch.object(web, '_list_windows_portproxy_rules', return_value=[('0.0.0.0', 8766, '127.0.0.1', 8769)]), \
+                patch.object(web, '_check_windows_firewall_rule', return_value=True), \
+                patch.object(web, '_verify_windows_http_reachable', return_value=True):
+            ok_en, msg_en, st_en = web.enable_wsl_port_bridge(8765)
+            assert ok_en is True and st_en['bridge_active'] is True and '127.0.0.1:8769' in msg_en
+            en_cmd = ' '.join(run_ps.call_args[0][0])
+            assert 'connectport=8769 connectaddress=127.0.0.1' in en_cmd
+            assert 'listenport=8765' in en_cmd and 'Swararia FOH Remote 8766' in en_cmd
+
+            run_ps.reset_mock()
+            ok_dis, _, _ = web.disable_wsl_port_bridge(8765)
+            assert ok_dis is True
+            dis_cmd = ' '.join(run_ps.call_args[0][0])
+            assert 'listenport=8766' in dis_cmd and 'listenport=8769' in dis_cmd

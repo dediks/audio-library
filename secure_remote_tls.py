@@ -18,7 +18,7 @@ import time
 from secure_remote import RemoteError
 
 
-def tls_context(host):
+def tls_context(host, extra_ips=()):
     # CPython 3.12.4 fixed Windows mkdtemp permissions (CVE-2024-4030).
     # Never write session keys using an older Windows runtime's inherited ACLs.
     if os.name == 'nt' and tuple(sys.version_info[:3]) < (3, 12, 4):
@@ -27,13 +27,14 @@ def tls_context(host):
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import ec
     from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
+    san_ips = list(dict.fromkeys(ipaddress.ip_address(ip) for ip in (host, *extra_ips) if ip))
     key = ec.generate_private_key(ec.SECP256R1())
     subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'Swararia session remote')])
     now = datetime.now(timezone.utc)
     cert = (x509.CertificateBuilder().subject_name(subject).issuer_name(subject)
             .public_key(key.public_key()).serial_number(x509.random_serial_number())
             .not_valid_before(now - timedelta(minutes=1)).not_valid_after(now + timedelta(hours=12))
-            .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address(host))]), critical=False)
+            .add_extension(x509.SubjectAlternativeName([x509.IPAddress(addr) for addr in san_ips]), critical=False)
             .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
             .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
             .sign(key, hashes.SHA256()))
@@ -68,7 +69,9 @@ def validate_bind(host, port):
 
 
 class NativeTLSServer(HTTPServer):
-    allow_reuse_address = False
+    # POSIX SO_REUSEADDR allows immediate rebind after TIME_WAIT without permitting
+    # another live socket to hijack the port; Windows keeps SO_REUSEADDR disabled.
+    allow_reuse_address = os.name == 'posix'
     request_queue_size = 16
     CONNECTION_TTL = 6
 

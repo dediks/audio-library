@@ -216,6 +216,57 @@ test('pairing has one manual disclosure and compact invitation actions', async (
   const css=fs.readFileSync(new URL('../static/native-remote.css',import.meta.url),'utf8');
   assert.match(css, /#androidRemoteModal #nativeManual\s*>\s*summary\s*\{\s*display:\s*none/,'do not show a duplicate manual-code trigger');
 });
+test('wsl2 defaults, bridge status banner and manual port reservation work cleanly', async () => {
+  const nodes = new Map([...html.matchAll(/<[^>]*\bid="([^"]+)"[^>]*>/g)].map(m => [m[1], new Element(m[0])]));
+  const doc = { getElementById: id => nodes.get(id), createElement: tag => Object.assign(new Element(), { tagName: tag }), createElementNS: () => new Element() };
+  for (const node of nodes.values()) node.owner = doc;
+  globalThis.document = doc;
+  const el = id => nodes.get(id);
+  const bridgeCalls = [];
+  let bridgeState = {
+    is_wsl: true, is_windows: false, needs_portproxy: true, bridge_active: false, has_portproxy: false,
+    firewall_active: false, port_conflict: false, wifi_ip: '192.168.18.47', public_port: 8767, internal_port: 8768,
+    tls_reachable: null, powershell_admin_cmd: 'netsh interface portproxy add v4tov4 listenport=8767 connectport=8768',
+  };
+  let remoteState = {
+    enabled: false, lan_ips: ['192.168.18.47'], default_bind_ip: '192.168.18.47', default_port: 8767, is_wsl: true, devices: [],
+  };
+  const admin = initNativeRemoteAdmin({
+    document: doc,
+    renderQr: () => true,
+    request: async payload => {
+      if (payload?.action === 'start') {
+        if (payload.port === 8766) throw new Error('wsl_port_reserved');
+        remoteState = { ...remoteState, enabled: true, url: `https://${payload.bind_ip}:${payload.port}`, bind_url: 'https://127.0.0.1:8768', fingerprint_sha256: 'ab'.repeat(32) };
+      }
+      if (payload?.action === 'invite_open') remoteState = { ...remoteState, invite: 'fixture', invite_expires_at: Date.now() / 1000 + 90 };
+      return structuredClone(remoteState);
+    },
+    bridgeRequest: async payload => {
+      bridgeCalls.push(payload);
+      if (payload.action === 'enable') {
+        bridgeState = { ...bridgeState, bridge_active: true, has_portproxy: true, firewall_active: true, tls_reachable: true };
+        return { ok: true, message: 'Bridge aktif!', bridge: structuredClone(bridgeState) };
+      }
+      return { ok: true, bridge: structuredClone(bridgeState) };
+    },
+  });
+  await admin.refresh({ checkBridge: true });
+  assert.equal(el('nativeBindIp').value, '192.168.18.47');
+  assert.equal(el('nativePort').value, '8767');
+  assert.ok(visible(el('nativeBridgeBox')));
+  assert.ok(visible(el('nativeBridgeBanner')));
+  el('nativePort').value = '8766';
+  await click(el('nativeStart'));
+  assert.match(el('nativeFeedback').textContent, /8767/);
+  el('nativePort').value = '8767';
+  await click(el('nativeStart'));
+  assert.match(el('nativeConnection').textContent, /192\.168\.18\.47:8767/);
+  assert.match(el('nativeConnection').textContent, /127\.0.0\.1:8768/);
+  await click(el('nativeBridgeBannerEnable'));
+  assert.ok(bridgeCalls.some(c => c.action === 'enable'));
+  assert.ok(el('nativeBridgeBanner').classList.contains('ready'));
+});
 let failed = 0;
 for (const [name, fn] of tests) { try { await fn(); console.log('PASS',name); } catch(e) { failed++; console.error('FAIL',name,e); } }
 console.log(`Summary: ${tests.length-failed}/${tests.length} passed.`);

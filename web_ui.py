@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import hmac
+import ipaddress
 import json
 import mimetypes
 import os
@@ -272,6 +273,14 @@ def _is_valid_lan_ipv4(candidate: str) -> bool:
     return len(parts) == 4 and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts)
 
 
+def _is_rfc1918_ipv4(candidate: str) -> bool:
+    try:
+        ip = ipaddress.IPv4Address(candidate.strip())
+    except (ValueError, ipaddress.AddressValueError):
+        return False
+    return any(ip in ipaddress.ip_network(net) for net in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
+
+
 def _find_windows_sys32_bin(exe_name: str) -> str | None:
     """Locates a Windows System32 executable from WSL or native Windows."""
     found = shutil.which(exe_name)
@@ -292,6 +301,7 @@ def _parse_windows_ipconfig() -> list[dict]:
     try:
         raw = subprocess.check_output(
             [ipconfig_bin],
+            stdin=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
             errors="ignore",
@@ -493,6 +503,7 @@ def _verify_windows_http_reachable(ip: str, port: int) -> bool:
                 "1.5",
                 f"http://{ip}:{port}/api/system",
             ],
+            stdin=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
             errors="ignore",
@@ -520,6 +531,7 @@ def _cleanup_stale_wsl_listen_port(port: int) -> None:
     try:
         out = subprocess.check_output(
             [netsh_bin, "interface", "portproxy", "show", "v4tov4"],
+            stdin=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
             errors="ignore",
@@ -567,95 +579,117 @@ def _cleanup_stale_wsl_listen_port(port: int) -> None:
         pass
 
 
+_wsl_foh_ports_lock = threading.Lock()
+_active_wsl_foh_ports: dict[int, int] = {}
+
+
+def _get_wsl_foh_internal_port(server_port: int) -> int:
+    """Returns the internal WSL2 loopback port for the dedicated bridged FOH listener."""
+    with _wsl_foh_ports_lock:
+        active = _active_wsl_foh_ports.get(int(server_port))
+    if active:
+        return active
+    bridge_port = _get_wsl_remote_bridge_port(server_port)
+    reserved = {int(server_port), int(bridge_port)}
+    try:
+        android_pub = _get_native_remote_default_port(int(server_port))
+        reserved.add(android_pub)
+        reserved.add(_get_wsl_native_internal_port(android_pub, int(server_port), _include_foh_internal=False))
+    except Exception:
+        reserved.update({8767, 8768})
+    for delta in range(1, 32):
+        candidate = bridge_port + delta
+        if 1024 <= candidate <= 65535 and candidate not in reserved:
+            return candidate
+    for delta in range(1, 32):
+        candidate = int(server_port) - delta
+        if 1024 <= candidate <= 65535 and candidate not in reserved:
+            return candidate
+    return 8769
+
+
+def _foh_bridge_script_lines(
+    port: int,
+    bridge_port: int,
+    internal_port: int,
+    wifi_ip: str,
+    quiet: bool = False,
+) -> list[str]:
+    suffix = " | Out-Null;" if quiet else ""
+    rule_name = f"Swararia FOH Remote {bridge_port}"
+    parts: list[str] = [
+        f"netsh interface portproxy delete v4tov4 listenport={port} listenaddress=0.0.0.0{suffix}",
+    ]
+    if wifi_ip:
+        parts.append(f"netsh interface portproxy delete v4tov4 listenport={port} listenaddress={wifi_ip}{suffix}")
+    parts.append(f'netsh advfirewall firewall delete rule name="Swararia FOH Remote {port}"{suffix}')
+    parts.extend(_native_bridge_script_lines(True, bridge_port, internal_port, wifi_ip, rule_name, quiet=quiet))
+    return parts
+
+
 def get_wsl_bridge_status(port: int) -> dict:
-    """Checks if Windows portproxy is forwarding Wi-Fi IP:8766 -> 127.0.0.1:8765 (wslrelay) into WSL2."""
+    """Checks if Windows portproxy is forwarding Wi-Fi IP:8766 -> 127.0.0.1:8769 (bridged WSL2 FOH listener)."""
     if not is_wsl_environment():
         return {"is_wsl": False, "bridge_active": True, "bridge_port": port}
 
     bridge_port = _get_wsl_remote_bridge_port(port)
+    internal_port = _get_wsl_foh_internal_port(port)
     wsl_ips = _get_linux_internal_ips()
     wsl_ip = wsl_ips[0] if wsl_ips else ""
     lan_ips = get_local_lan_ips(force_refresh=False)
     wifi_ip = lan_ips[0] if lan_ips else ""
+    rule_name = f"Swararia FOH Remote {bridge_port}"
 
-    netsh_bin = _find_windows_sys32_bin("netsh.exe")
-    has_rule = False
-    if netsh_bin:
-        try:
-            out = subprocess.check_output(
-                [netsh_bin, "interface", "portproxy", "show", "v4tov4"],
-                text=True,
-                encoding="utf-8",
-                errors="ignore",
-                timeout=2.0,
-            )
-            for line in out.splitlines():
-                m = re.match(
-                    r"^\s*(\d{1,3}(?:\.\d{1,3}){3}|\*)\s+(\d+)\s+(\d{1,3}(?:\.\d{1,3}){3}|\*)\s+(\d+)",
-                    line,
-                )
-                if m and int(m.group(2)) == bridge_port and int(m.group(4)) == port:
-                    has_rule = True
-                    break
-        except Exception:
-            pass
+    rules = _list_windows_portproxy_rules()
+    valid_addrs = {"0.0.0.0", "*"}
+    if wifi_ip:
+        valid_addrs.add(wifi_ip)
+    has_primary_rule = any(
+        lp == bridge_port and la in valid_addrs and (ca, cp) == ("127.0.0.1", internal_port)
+        for (la, lp, ca, cp) in rules
+    )
+    has_fallback_rule = bool(wsl_ip) and any(
+        lp == bridge_port and la in valid_addrs and (ca, cp) in {(wsl_ip, port), (wsl_ip, internal_port)}
+        for (la, lp, ca, cp) in rules
+    )
+    firewall_active = _check_windows_firewall_rule(rule_name) if _find_windows_sys32_bin("netsh.exe") else True
 
     if wifi_ip and _find_windows_sys32_bin("curl.exe"):
-        bridge_active = has_rule and _verify_windows_http_reachable(wifi_ip, bridge_port)
+        has_rule = has_primary_rule or has_fallback_rule
+        bridge_active = has_rule and firewall_active and _verify_windows_http_reachable(wifi_ip, bridge_port)
     else:
-        bridge_active = has_rule
+        has_rule = has_primary_rule
+        bridge_active = has_rule and firewall_active
 
-    listen_addr = wifi_ip if wifi_ip else "0.0.0.0"
-    ps_cmd = (
-        f"Start-Service iphlpsvc -ErrorAction SilentlyContinue; "
-        f"netsh interface portproxy delete v4tov4 listenport={port} listenaddress=0.0.0.0; "
-        f"netsh interface portproxy delete v4tov4 listenport={port} listenaddress={listen_addr}; "
-        f"netsh interface portproxy delete v4tov4 listenport={bridge_port} listenaddress=0.0.0.0; "
-        f"netsh interface portproxy delete v4tov4 listenport={bridge_port} listenaddress={listen_addr}; "
-        f"netsh interface portproxy add v4tov4 listenport={bridge_port} listenaddress=0.0.0.0 connectport={port} connectaddress=127.0.0.1; "
-        f"netsh advfirewall firewall delete rule name=\"Swararia FOH Remote {bridge_port}\"; "
-        f"netsh advfirewall firewall add rule name=\"Swararia FOH Remote {bridge_port}\" dir=in action=allow protocol=TCP localport={bridge_port} profile=any"
-    )
+    ps_parts = _foh_bridge_script_lines(port, bridge_port, internal_port, wifi_ip, quiet=False)
     return {
         "is_wsl": True,
         "wsl_ip": wsl_ip,
         "wifi_ip": wifi_ip,
         "bridge_port": bridge_port,
+        "internal_port": internal_port,
         "bridge_active": bridge_active,
-        "powershell_admin_cmd": ps_cmd,
+        "powershell_admin_cmd": "; ".join(ps_parts),
     }
 
 
 def enable_wsl_port_bridge(port: int) -> tuple[bool, str, dict]:
-    """Launches an elevated Windows PowerShell UAC prompt to bridge Windows Wi-Fi port 8766 -> 127.0.0.1:8765 (wslrelay)."""
+    """Launches an elevated Windows PowerShell UAC prompt to bridge Wi-Fi port 8766 -> 127.0.0.1:8769 (wslrelay)."""
     status = get_wsl_bridge_status(port)
     if not status.get("is_wsl"):
         return True, "Bukan lingkungan WSL2 (tidak memerlukan bridge).", status
     bridge_port = _get_wsl_remote_bridge_port(port)
+    internal_port = int(status.get("internal_port") or _get_wsl_foh_internal_port(port))
     wsl_ip = status.get("wsl_ip") or ""
 
     lan_ips = get_local_lan_ips(force_refresh=True)
     wifi_ip = lan_ips[0] if lan_ips else ""
     listen_addr = wifi_ip if wifi_ip else "0.0.0.0"
 
-    ps_bin = _find_windows_sys32_bin("powershell.exe")
-    if not ps_bin:
+    if not _find_windows_sys32_bin("powershell.exe"):
         return False, "powershell.exe tidak ditemukan dari WSL2.", status
 
-    inner_lines = [
-        "Set-Service iphlpsvc -StartupType Automatic -ErrorAction SilentlyContinue;",
-        "Start-Service iphlpsvc -ErrorAction SilentlyContinue;",
-        # Always remove any old rules on `port` (8765) so wslrelay on 127.0.0.1:8765 is never blocked
-        f"netsh interface portproxy delete v4tov4 listenport={port} listenaddress=0.0.0.0 | Out-Null;",
-        f"netsh interface portproxy delete v4tov4 listenport={port} listenaddress={listen_addr} | Out-Null;",
-        f"netsh interface portproxy delete v4tov4 listenport={bridge_port} listenaddress=0.0.0.0 | Out-Null;",
-        f"netsh interface portproxy delete v4tov4 listenport={bridge_port} listenaddress={listen_addr} | Out-Null;",
-        f"netsh advfirewall firewall delete rule name=\"Swararia FOH Remote {port}\" | Out-Null;",
-        f"netsh advfirewall firewall delete rule name=\"Swararia FOH Remote {bridge_port}\" | Out-Null;",
-        f"netsh advfirewall firewall add rule name=\"Swararia FOH Remote {bridge_port}\" dir=in action=allow protocol=TCP localport={bridge_port} profile=any | Out-Null;",
-        # Primary path: 0.0.0.0:8766 -> 127.0.0.1:8765 (uses wslrelay AF_VSOCK, immune to Hyper-V firewall & server restarts)
-        f"netsh interface portproxy add v4tov4 listenport={bridge_port} listenaddress=0.0.0.0 connectport={port} connectaddress=127.0.0.1 | Out-Null;",
-    ]
+    inner_lines = _foh_bridge_script_lines(port, bridge_port, internal_port, wifi_ip, quiet=True)
     if wifi_ip and wsl_ip:
         inner_lines.extend([
             f"$code = (& curl.exe -s -o NUL -w '%{{http_code}}' --max-time 2 'http://{wifi_ip}:{bridge_port}/api/system');",
@@ -666,31 +700,15 @@ def enable_wsl_port_bridge(port: int) -> tuple[bool, str, dict]:
             "}",
         ])
 
-    inner_script = " ".join(inner_lines)
-    inner_b64 = base64.b64encode(inner_script.encode("utf-16le")).decode("ascii")
-    outer_cmd = (
-        f"Start-Process powershell.exe -Verb RunAs -WindowStyle Hidden "
-        f"-Wait -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand','{inner_b64}'"
-    )
-    outer_b64 = base64.b64encode(outer_cmd.encode("utf-16le")).decode("ascii")
-    try:
-        subprocess.run(
-            [ps_bin, "-NoProfile", "-NonInteractive", "-EncodedCommand", outer_b64],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="ignore",
-            timeout=35.0,
-            check=False,
-        )
-    except Exception as exc:
-        return False, f"Gagal menjalankan PowerShell UAC: {exc}", get_wsl_bridge_status(port)
+    ok_exec, exec_err = _run_elevated_windows_powershell(inner_lines, timeout=35.0)
+    if not ok_exec:
+        return False, f"Gagal menjalankan PowerShell UAC: {exec_err}", get_wsl_bridge_status(port)
 
     updated = get_wsl_bridge_status(port)
     if updated.get("bridge_active"):
         return (
             True,
-            f"Jembatan Port {bridge_port} ({listen_addr}:{bridge_port} -> WSL2:{port}) berhasil diaktifkan & terverifikasi!",
+            f"Jembatan Port {bridge_port} ({listen_addr}:{bridge_port} -> 127.0.0.1:{internal_port}) berhasil diaktifkan & terverifikasi!",
             updated,
         )
     return (
@@ -701,38 +719,163 @@ def enable_wsl_port_bridge(port: int) -> tuple[bool, str, dict]:
 
 
 def disable_wsl_port_bridge(port: int) -> tuple[bool, str, dict]:
-    """Removes the Windows portproxy rule and firewall rules for the specified port."""
+    """Removes the Windows portproxy rule and firewall rules for the specified FOH bridge port."""
     status = get_wsl_bridge_status(port)
     if not status.get("is_wsl"):
         return True, "Bukan lingkungan WSL2.", status
 
     bridge_port = _get_wsl_remote_bridge_port(port)
+    internal_port = int(status.get("internal_port") or _get_wsl_foh_internal_port(port))
     lan_ips = get_local_lan_ips(force_refresh=True)
     wifi_ip = lan_ips[0] if lan_ips else ""
-    ps_bin = _find_windows_sys32_bin("powershell.exe")
-    if not ps_bin:
+    if not _find_windows_sys32_bin("powershell.exe"):
         return False, "powershell.exe tidak ditemukan.", status
 
     inner_lines = [
         f"netsh interface portproxy delete v4tov4 listenport={port} listenaddress=0.0.0.0 | Out-Null;",
         f"netsh interface portproxy delete v4tov4 listenport={bridge_port} listenaddress=0.0.0.0 | Out-Null;",
+        f"netsh interface portproxy delete v4tov4 listenport={internal_port} listenaddress=0.0.0.0 | Out-Null;",
+    ]
+    if wifi_ip:
+        inner_lines.extend([
+            f"netsh interface portproxy delete v4tov4 listenport={port} listenaddress={wifi_ip} | Out-Null;",
+            f"netsh interface portproxy delete v4tov4 listenport={bridge_port} listenaddress={wifi_ip} | Out-Null;",
+            f"netsh interface portproxy delete v4tov4 listenport={internal_port} listenaddress={wifi_ip} | Out-Null;",
+        ])
+    inner_lines.extend([
         f"netsh advfirewall firewall delete rule name=\"Swararia FOH Remote {port}\" | Out-Null;",
         f"netsh advfirewall firewall delete rule name=\"Swararia FOH Remote {bridge_port}\" | Out-Null;",
         "try {",
         f"  Remove-NetFirewallHyperVRule -Name 'SwarariaFOH{port}' -ErrorAction SilentlyContinue;",
         "  Set-NetFirewallHyperVVMSetting -Name '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' -DefaultInboundAction Block -ErrorAction SilentlyContinue | Out-Null;",
         "} catch {}",
-    ]
-    if wifi_ip:
-        inner_lines.insert(
-            1,
-            f"netsh interface portproxy delete v4tov4 listenport={port} listenaddress={wifi_ip} | Out-Null;",
-        )
-        inner_lines.insert(
-            2,
-            f"netsh interface portproxy delete v4tov4 listenport={bridge_port} listenaddress={wifi_ip} | Out-Null;",
-        )
+    ])
 
+    ok_exec, exec_err = _run_elevated_windows_powershell(inner_lines, timeout=30.0)
+    if not ok_exec:
+        return False, f"Gagal menutup jembatan port: {exec_err}", get_wsl_bridge_status(port)
+
+    updated = get_wsl_bridge_status(port)
+    return True, f"Jembatan Port {bridge_port} & aturan Firewall telah dihapus kembali (Tertutup Rapat).", updated
+
+
+def _get_native_remote_default_port(http_port: int) -> int:
+    """Returns default Android Remote port, skipping web UI and FOH WSL bridge ports."""
+    is_wsl = is_wsl_environment()
+    reserved = {http_port}
+    if is_wsl:
+        reserved.add(_get_wsl_remote_bridge_port(http_port))
+    port = 8767 if is_wsl else 8766
+    limit = 65534 if is_wsl else 65535
+    while port in reserved and port < limit:
+        port += 1
+    if port in reserved:
+        port = 8766
+        while port in reserved and port > 1024:
+            port -= 1
+    return port
+
+
+def _get_wsl_native_internal_port(
+    public_port: int,
+    http_port: int,
+    _include_foh_internal: bool = True,
+) -> int:
+    """Chooses an internal WSL2 loopback port distinct from public_port, web UI, and FOH bridge."""
+    reserved = {public_port, http_port, _get_wsl_remote_bridge_port(http_port)}
+    if _include_foh_internal:
+        reserved.add(_get_wsl_foh_internal_port(http_port))
+    for delta in range(1, 32):
+        for candidate in (public_port + delta, public_port - delta):
+            if 1024 <= candidate <= 65535 and candidate not in reserved:
+                return candidate
+    return 8768
+
+
+def _list_windows_portproxy_rules() -> list[tuple[str, int, str, int]]:
+    netsh_bin = _find_windows_sys32_bin("netsh.exe")
+    if not netsh_bin:
+        return []
+    rules: list[tuple[str, int, str, int]] = []
+    try:
+        out = subprocess.check_output(
+            [netsh_bin, "interface", "portproxy", "show", "v4tov4"],
+            stdin=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=2.5,
+        )
+        for line in out.splitlines():
+            m = re.match(
+                r"^\s*(\d{1,3}(?:\.\d{1,3}){3}|\*)\s+(\d+)\s+(\d{1,3}(?:\.\d{1,3}){3}|\*)\s+(\d+)",
+                line,
+            )
+            if m:
+                rules.append((m.group(1), int(m.group(2)), m.group(3), int(m.group(4))))
+    except Exception:
+        pass
+    return rules
+
+
+def _check_windows_firewall_rule(rule_name: str) -> bool:
+    netsh_bin = _find_windows_sys32_bin("netsh.exe")
+    if not netsh_bin:
+        return False
+    try:
+        proc = subprocess.run(
+            [netsh_bin, "advfirewall", "firewall", "show", "rule", f"name={rule_name}"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=2.5,
+            check=False,
+        )
+        if proc.returncode != 0:
+            return False
+        low = proc.stdout.lower()
+        return ("enabled:" in low and "yes" in low and "direction:" in low and "in" in low)
+    except Exception:
+        return False
+
+
+def _verify_windows_tls_reachable(ip: str, port: int) -> bool:
+    """Tests from Windows host side whether https://ip:port/v1/state responds with HTTP 401 from NativeTLSServer."""
+    if not ip or not _is_rfc1918_ipv4(ip):
+        return False
+    curl_bin = _find_windows_sys32_bin("curl.exe")
+    if not curl_bin:
+        return False
+    try:
+        out = subprocess.check_output(
+            [
+                curl_bin,
+                "-sk",
+                "-o",
+                "NUL",
+                "-w",
+                "%{http_code}",
+                "--max-time",
+                "1.5",
+                f"https://{ip}:{int(port)}/v1/state",
+            ],
+            stdin=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=2.5,
+        ).strip()
+        return out == "401"
+    except Exception:
+        return False
+
+
+def _run_elevated_windows_powershell(inner_lines: list[str], timeout: float = 35.0) -> tuple[bool, str]:
+    ps_bin = _find_windows_sys32_bin("powershell.exe")
+    if not ps_bin:
+        return False, "powershell.exe tidak ditemukan dari lingkungan ini."
     inner_script = " ".join(inner_lines)
     inner_b64 = base64.b64encode(inner_script.encode("utf-16le")).decode("ascii")
     outer_cmd = (
@@ -743,18 +886,240 @@ def disable_wsl_port_bridge(port: int) -> tuple[bool, str, dict]:
     try:
         subprocess.run(
             [ps_bin, "-NoProfile", "-NonInteractive", "-EncodedCommand", outer_b64],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="ignore",
-            timeout=30.0,
+            timeout=timeout,
             check=False,
         )
+        return True, ""
     except Exception as exc:
-        return False, f"Gagal menutup jembatan port: {exc}", get_wsl_bridge_status(port)
+        return False, str(exc)
 
-    updated = get_wsl_bridge_status(port)
-    return True, f"Jembatan Port {bridge_port} & aturan Firewall telah dihapus kembali (Tertutup Rapat).", updated
+
+def _validated_bridge_target(http_port: int, public_port: int | None, wifi_ip: str, native_local_port: int | None) -> tuple[int, int, str]:
+    default_port = _get_native_remote_default_port(http_port)
+    eff_port = int(public_port) if isinstance(public_port, int) and not isinstance(public_port, bool) and 1 <= public_port <= 65535 else default_port
+    eff_ip = wifi_ip.strip() if isinstance(wifi_ip, str) and _is_rfc1918_ipv4(wifi_ip) else ""
+    if not eff_ip:
+        rfc_ips = [ip for ip in get_local_lan_ips(force_refresh=False) if _is_rfc1918_ipv4(ip)]
+        eff_ip = rfc_ips[0] if rfc_ips else ""
+    eff_local = int(native_local_port) if isinstance(native_local_port, int) and not isinstance(native_local_port, bool) and 1 <= native_local_port <= 65535 else _get_wsl_native_internal_port(eff_port, http_port)
+    return eff_port, eff_local, eff_ip
+
+
+def _native_bridge_script_lines(
+    needs_portproxy: bool,
+    eff_port: int,
+    internal_port: int,
+    eff_ip: str,
+    rule_name: str,
+    quiet: bool = False,
+) -> list[str]:
+    suffix = " | Out-Null;" if quiet else ""
+    parts: list[str] = []
+    if needs_portproxy:
+        if quiet:
+            parts.append("Set-Service iphlpsvc -StartupType Automatic -ErrorAction SilentlyContinue;")
+        parts.extend([
+            "Start-Service iphlpsvc -ErrorAction SilentlyContinue" + (";" if quiet else ""),
+            f"netsh interface portproxy delete v4tov4 listenport={eff_port} listenaddress=0.0.0.0{suffix}",
+        ])
+        if eff_ip:
+            parts.append(f"netsh interface portproxy delete v4tov4 listenport={eff_port} listenaddress={eff_ip}{suffix}")
+        parts.append(f"netsh interface portproxy delete v4tov4 listenport={internal_port} listenaddress=0.0.0.0{suffix}")
+        if eff_ip:
+            parts.append(f"netsh interface portproxy delete v4tov4 listenport={internal_port} listenaddress={eff_ip}{suffix}")
+        parts.append(
+            f"netsh interface portproxy add v4tov4 listenport={eff_port} listenaddress=0.0.0.0 connectport={internal_port} connectaddress=127.0.0.1{suffix}"
+        )
+    parts.extend([
+        f'netsh advfirewall firewall delete rule name="{rule_name}"{suffix}',
+        f'netsh advfirewall firewall add rule name="{rule_name}" dir=in action=allow protocol=TCP localport={eff_port} profile=any{suffix}',
+    ])
+    return parts
+
+
+def get_native_remote_bridge_status(
+    http_port: int,
+    public_port: int | None = None,
+    wifi_ip: str = "",
+    native_enabled: bool = False,
+    native_local_port: int | None = None,
+) -> dict:
+    """Inspects Windows portproxy/firewall readiness for Android Remote in WSL2 or native Windows."""
+    is_wsl = is_wsl_environment()
+    is_windows = os.name == "nt"
+    eff_port, internal_port, eff_ip = _validated_bridge_target(http_port, public_port, wifi_ip, native_local_port)
+    foh_bridge_port = _get_wsl_remote_bridge_port(http_port) if is_wsl else http_port
+    linux_ips = _get_linux_internal_ips() if is_wsl else []
+    wsl_ip = linux_ips[0] if linux_ips else ""
+
+    if not is_wsl and not is_windows:
+        return {
+            "mode": "native_posix",
+            "is_wsl": False,
+            "is_windows": False,
+            "needs_portproxy": False,
+            "needs_firewall": False,
+            "bridge_active": True,
+            "has_portproxy": False,
+            "firewall_active": True,
+            "port_conflict": eff_port == http_port,
+            "foh_bridge_port": foh_bridge_port,
+            "wifi_ip": eff_ip,
+            "public_port": eff_port,
+            "internal_port": eff_port,
+            "tls_reachable": None,
+            "powershell_admin_cmd": "",
+        }
+
+    needs_portproxy = bool(is_wsl and (not eff_ip or eff_ip not in linux_ips))
+    rule_name = f"Swararia Android Remote {eff_port}"
+    port_conflict = eff_port == http_port or (is_wsl and eff_port == foh_bridge_port)
+
+    has_portproxy = True
+    if needs_portproxy:
+        valid_targets = {("127.0.0.1", internal_port)}
+        if wsl_ip:
+            valid_targets.add((wsl_ip, eff_port))
+            valid_targets.add((wsl_ip, internal_port))
+        has_portproxy = any(
+            lp == eff_port and la in ("0.0.0.0", "*", eff_ip) and (ca, cp) in valid_targets
+            for (la, lp, ca, cp) in _list_windows_portproxy_rules()
+        )
+
+    firewall_active = _check_windows_firewall_rule(rule_name)
+    tls_reachable = None
+    if native_enabled and eff_ip and not port_conflict and _find_windows_sys32_bin("curl.exe"):
+        tls_reachable = _verify_windows_tls_reachable(eff_ip, eff_port)
+
+    cmd_parts = _native_bridge_script_lines(
+        needs_portproxy, eff_port, internal_port, eff_ip, rule_name, quiet=False
+    )
+
+    bridge_active = (
+        not port_conflict
+        and has_portproxy
+        and firewall_active
+        and (tls_reachable is True if tls_reachable is not None else True)
+    )
+    return {
+        "mode": "wsl2_nat" if needs_portproxy else ("wsl2_mirrored" if is_wsl else "windows_native"),
+        "is_wsl": is_wsl,
+        "is_windows": is_windows,
+        "needs_portproxy": needs_portproxy,
+        "needs_firewall": True,
+        "bridge_active": bridge_active,
+        "has_portproxy": has_portproxy,
+        "firewall_active": firewall_active,
+        "port_conflict": port_conflict,
+        "foh_bridge_port": foh_bridge_port,
+        "wifi_ip": eff_ip,
+        "wsl_ip": wsl_ip,
+        "public_port": eff_port,
+        "internal_port": internal_port if needs_portproxy else eff_port,
+        "tls_reachable": tls_reachable,
+        "powershell_admin_cmd": "; ".join(cmd_parts),
+    }
+
+
+def enable_native_remote_bridge(
+    http_port: int,
+    public_port: int | None = None,
+    wifi_ip: str = "",
+    native_enabled: bool = False,
+    native_local_port: int | None = None,
+) -> tuple[bool, str, dict]:
+    """Prompts Windows UAC (explicit user action only) to enable Android Remote portproxy & firewall."""
+    status = get_native_remote_bridge_status(
+        http_port,
+        public_port=public_port,
+        wifi_ip=wifi_ip,
+        native_enabled=native_enabled,
+        native_local_port=native_local_port,
+    )
+    if not status.get("is_wsl") and not status.get("is_windows"):
+        return True, "Tidak memerlukan bridge Windows.", status
+    if status.get("port_conflict"):
+        return False, f"Port {status['public_port']} dipakai UI / FOH Remote WSL. Gunakan port {_get_native_remote_default_port(http_port)}.", status
+
+    eff_port = status["public_port"]
+    internal_port = status["internal_port"]
+    eff_ip = status.get("wifi_ip") or ""
+    rule_name = f"Swararia Android Remote {eff_port}"
+
+    inner_lines = _native_bridge_script_lines(
+        bool(status.get("needs_portproxy")), eff_port, internal_port, eff_ip, rule_name, quiet=True
+    )
+
+    ok_ps, err = _run_elevated_windows_powershell(inner_lines, timeout=35.0)
+    if not ok_ps:
+        return False, f"Gagal menjalankan PowerShell UAC: {err}", status
+
+    updated = get_native_remote_bridge_status(
+        http_port,
+        public_port=eff_port,
+        wifi_ip=eff_ip,
+        native_enabled=native_enabled,
+        native_local_port=native_local_port,
+    )
+    if updated.get("bridge_active"):
+        if native_enabled and updated.get("tls_reachable"):
+            return True, f"Bridge/Firewall Android Remote {eff_port} aktif & TLS terverifikasi!", updated
+        return True, f"Aturan Bridge/Firewall Windows untuk port {eff_port} aktif. Klik 'Hubungkan Android' jika belum aktif.", updated
+    return (
+        False,
+        "Bridge/Firewall belum aktif (Pastikan klik 'Yes' pada jendela konfirmasi Admin Windows dan 'Hubungkan Android' sudah aktif).",
+        updated,
+    )
+
+
+def disable_native_remote_bridge(
+    http_port: int,
+    public_port: int | None = None,
+    wifi_ip: str = "",
+    native_enabled: bool = False,
+    native_local_port: int | None = None,
+) -> tuple[bool, str, dict]:
+    """Removes the Windows portproxy and firewall rule for Android Remote without disturbing FOH Remote."""
+    status = get_native_remote_bridge_status(
+        http_port,
+        public_port=public_port,
+        wifi_ip=wifi_ip,
+        native_enabled=native_enabled,
+        native_local_port=native_local_port,
+    )
+    if not status.get("is_wsl") and not status.get("is_windows"):
+        return True, "Bukan lingkungan Windows/WSL2.", status
+    if status.get("port_conflict"):
+        return False, f"Port {status['public_port']} dipakai FOH Remote / UI sehingga tidak dihapus dari panel ini.", status
+
+    eff_port = status["public_port"]
+    eff_ip = status.get("wifi_ip") or ""
+    rule_name = f"Swararia Android Remote {eff_port}"
+    inner_lines = [
+        f'netsh advfirewall firewall delete rule name="{rule_name}" | Out-Null;',
+    ]
+    if status.get("needs_portproxy"):
+        inner_lines.insert(0, f"netsh interface portproxy delete v4tov4 listenport={eff_port} listenaddress=0.0.0.0 | Out-Null;")
+        if eff_ip:
+            inner_lines.insert(1, f"netsh interface portproxy delete v4tov4 listenport={eff_port} listenaddress={eff_ip} | Out-Null;")
+
+    ok_ps, err = _run_elevated_windows_powershell(inner_lines, timeout=30.0)
+    if not ok_ps:
+        return False, f"Gagal menghapus aturan Windows: {err}", status
+
+    updated = get_native_remote_bridge_status(
+        http_port,
+        public_port=eff_port,
+        wifi_ip=eff_ip,
+        native_enabled=native_enabled,
+        native_local_port=native_local_port,
+    )
+    return True, f"Aturan Bridge/Firewall Android Remote port {eff_port} telah dihapus.", updated
 
 
 ALLOWED_REMOTE_ACTIONS = {
@@ -1146,9 +1511,73 @@ class LocalAudioServer(ThreadingHTTPServer):
 
     def __init__(self, address, handler):
         self.secure_remote = SecureRemote(remote_hub)
+        self._wsl_foh_bridge_server = None
+        self._wsl_foh_bridge_thread = None
+        self.wsl_foh_internal_port: int | None = None
         super().__init__(address, handler)
+        if is_wsl_environment() and address and str(address[0]) == "0.0.0.0":
+            self._start_wsl_foh_bridge()
+
+    def _start_wsl_foh_bridge(self) -> None:
+        primary_port = int(self.server_address[1])
+        preferred_port = _get_wsl_foh_internal_port(primary_port)
+        bridge_srv = None
+        for candidate_port in (preferred_port, 0):
+            try:
+                bridge_srv = _FohBridgeServer(
+                    ("127.0.0.1", candidate_port),
+                    _FohBridgedHandler,
+                    parent_server=self,
+                )
+                break
+            except OSError:
+                continue
+        if bridge_srv is None:
+            return
+        actual_internal = int(bridge_srv.server_address[1])
+        self._wsl_foh_bridge_server = bridge_srv
+        self.wsl_foh_internal_port = actual_internal
+        with _wsl_foh_ports_lock:
+            _active_wsl_foh_ports[primary_port] = actual_internal
+        started = threading.Event()
+
+        def _serve() -> None:
+            started.set()
+            bridge_srv.serve_forever()
+
+        thread = threading.Thread(target=_serve, daemon=True)
+        self._wsl_foh_bridge_thread = thread
+        thread.start()
+        started.wait(timeout=1.0)
+
+    def _stop_wsl_foh_bridge(self) -> None:
+        bridge_srv = self._wsl_foh_bridge_server
+        bridge_thread = self._wsl_foh_bridge_thread
+        internal_port = self.wsl_foh_internal_port
+        self._wsl_foh_bridge_server = None
+        self._wsl_foh_bridge_thread = None
+        self.wsl_foh_internal_port = None
+        try:
+            primary_port = int(self.server_address[1])
+            with _wsl_foh_ports_lock:
+                if internal_port is not None and _active_wsl_foh_ports.get(primary_port) == internal_port:
+                    _active_wsl_foh_ports.pop(primary_port, None)
+        except Exception:
+            pass
+        if bridge_srv is not None:
+            try:
+                bridge_srv.shutdown()
+            except Exception:
+                pass
+            try:
+                bridge_srv.server_close()
+            except Exception:
+                pass
+        if bridge_thread is not None and bridge_thread.is_alive():
+            bridge_thread.join(timeout=2.0)
 
     def server_close(self):
+        self._stop_wsl_foh_bridge()
         self.secure_remote.stop()
         super().server_close()
 
@@ -1167,18 +1596,76 @@ class AudioServerHandler(BaseHTTPRequestHandler):
         if not self.is_localhost_client():
             return False
         port = self.server.server_address[1]
-        hosts = (f'127.0.0.1:{port}', f'localhost:{port}')
         host = self.headers.get('Host', '')
-        if len(self.headers.get_all('Host', [])) != 1 or host not in hosts:
+        if len(self.headers.get_all('Host', [])) != 1:
+            return False
+        try:
+            parsed_host = urlparse(f'http://{host}')
+            host_port = parsed_host.port
+        except ValueError:
+            return False
+        if (parsed_host.username or parsed_host.password or parsed_host.path
+                or parsed_host.query or parsed_host.fragment or '@' in host):
+            return False
+        host_name = (parsed_host.hostname or '').strip().lower()
+        if host_name not in ('127.0.0.1', 'localhost', '::1'):
+            return False
+        if host_port is not None and host_port != port:
+            return False
+        if host_port is None and port != 80:
             return False
         origin = self.headers.get('Origin')
         if len(self.headers.get_all('Origin', [])) > 1 or (write and not origin):
             return False
-        if origin and origin != f'http://{host}':
-            return False
+        if origin:
+            parsed = urlparse(origin)
+            orig_host = (parsed.hostname or '').strip().lower()
+            if orig_host not in ('127.0.0.1', 'localhost', '::1'):
+                return False
+            if parsed.port is not None and parsed.port != port:
+                return False
         if self.headers.get('Sec-Fetch-Site') not in (None, 'same-origin', 'none'):
             return False
         return True
+
+    def _build_native_admin_status(self, force_refresh: bool = False) -> dict:
+        remote = self.server.secure_remote
+        status = remote.admin_status()
+        http_port = int(self.server.server_address[1])
+        is_wsl = is_wsl_environment()
+        lan_ips = [ip for ip in get_local_lan_ips(force_refresh=force_refresh) if _is_rfc1918_ipv4(ip)]
+        linux_ips = _get_linux_internal_ips() if is_wsl else []
+        status['lan_ips'] = lan_ips
+        if lan_ips:
+            status['default_bind_ip'] = lan_ips[0]
+        status['default_port'] = _get_native_remote_default_port(http_port)
+        status['is_wsl'] = is_wsl
+        status['is_wsl_nat'] = bool(is_wsl and (not lan_ips or lan_ips[0] not in linux_ips))
+        status['is_windows'] = (os.name == 'nt')
+        if is_wsl:
+            status['foh_bridge_port'] = _get_wsl_remote_bridge_port(http_port)
+        return status
+
+    def _resolve_native_bridge_target(self, payload: dict | None = None) -> tuple[int, int | None, str, bool, int | None]:
+        http_port = int(self.server.server_address[1])
+        remote = self.server.secure_remote
+        with remote.lock:
+            enabled = bool(remote.enabled)
+            conn_url = remote.connection_info.get('url', '') if enabled else ''
+            bind_port = remote.bind_info.get('port') if enabled else None
+        if enabled and conn_url:
+            parsed = urlparse(conn_url)
+            return http_port, parsed.port, (parsed.hostname or ''), True, bind_port
+        req_ip = ''
+        req_port = None
+        if isinstance(payload, dict):
+            cand_ip = payload.get('bind_ip')
+            if isinstance(cand_ip, str) and _is_rfc1918_ipv4(cand_ip):
+                req_ip = cand_ip.strip()
+            cand_port = payload.get('port')
+            if type(cand_port) is int and 1 <= cand_port <= 65535:
+                req_port = cand_port
+        return http_port, req_port, req_ip, False, None
 
     def parse_request(self):
         valid = super().parse_request()
@@ -1199,7 +1686,26 @@ class AudioServerHandler(BaseHTTPRequestHandler):
             if not isinstance(op, str) or op not in fields or set(payload) - fields[op]:
                 raise RemoteError('invalid_admin_action', 400)
             if op == 'start':
-                remote.start(payload.get('bind_ip'), payload.get('port', 8766))
+                bind_ip = payload.get('bind_ip')
+                http_port = int(self.server.server_address[1])
+                port = payload.get('port', _get_native_remote_default_port(http_port))
+                from secure_remote_tls import validate_bind
+                validate_bind(bind_ip, port)
+                is_wsl = is_wsl_environment()
+                linux_ips = set(_get_linux_internal_ips()) if is_wsl else set()
+                if is_wsl and not ipaddress.IPv4Address(bind_ip).is_loopback and bind_ip not in linux_ips:
+                    reachable_ips = {ip for ip in get_local_lan_ips(force_refresh=False) if _is_rfc1918_ipv4(ip)}
+                    if bind_ip not in reachable_ips:
+                        reachable_ips = {ip for ip in get_local_lan_ips(force_refresh=True) if _is_rfc1918_ipv4(ip)}
+                    if bind_ip in reachable_ips:
+                        if port in (http_port, _get_wsl_remote_bridge_port(http_port)):
+                            raise RemoteError('wsl_port_reserved', 409)
+                        internal_port = _get_wsl_native_internal_port(port, http_port)
+                        remote.start('127.0.0.1', internal_port, advertise_ip=bind_ip, advertise_port=port)
+                    else:
+                        remote.start(bind_ip, port)
+                else:
+                    remote.start(bind_ip, port)
             elif op == 'stop':
                 remote.stop()
             elif op == 'invite_open':
@@ -1210,7 +1716,7 @@ class AudioServerHandler(BaseHTTPRequestHandler):
                 remote.approve(payload.get('device_id'), payload.get('role'))
             elif op in ('deny', 'revoke'):
                 remote.revoke(payload.get('device_id'), deny=op == 'deny')
-            self.send_json(200, remote.admin_status())
+            self.send_json(200, self._build_native_admin_status(force_refresh=False))
         except RemoteError as exc:
             self.send_json(exc.status, {'code': exc.code})
         except (ValueError, TypeError):
@@ -1282,7 +1788,23 @@ class AudioServerHandler(BaseHTTPRequestHandler):
             elif self.path != path:
                 self.send_json(404, {'code': 'unknown_route'})
             else:
-                self.send_json(200, self.server.secure_remote.admin_status())
+                self.send_json(200, self._build_native_admin_status(force_refresh=False))
+            return
+
+        if path == '/api/native-remote/wsl-bridge':
+            if not self.local_request_allowed():
+                self.send_json(403, {'code': 'local_origin_required'})
+            elif self.path != path:
+                self.send_json(404, {'code': 'unknown_route'})
+            else:
+                http_port, eff_port, eff_ip, enabled, bind_port = self._resolve_native_bridge_target()
+                self.send_json(200, get_native_remote_bridge_status(
+                    http_port,
+                    public_port=eff_port,
+                    wifi_ip=eff_ip,
+                    native_enabled=enabled,
+                    native_local_port=bind_port,
+                ))
             return
 
         if path in ("/", "/index.html"):
@@ -1459,7 +1981,7 @@ class AudioServerHandler(BaseHTTPRequestHandler):
         if path.startswith('/api/native-remote') and not self.local_request_allowed(write=True):
             self.send_json(403, {'code': 'local_origin_required'})
             return
-        if path.startswith('/api/native-remote') and self.path not in ('/api/native-remote', '/api/native-remote/claim'):
+        if path.startswith('/api/native-remote') and self.path not in ('/api/native-remote', '/api/native-remote/claim', '/api/native-remote/wsl-bridge'):
             self.send_json(404, {'code': 'unknown_route'})
             return
         if self.headers.get('Content-Type', '').split(';')[0].lower() != 'application/json':
@@ -1486,6 +2008,40 @@ class AudioServerHandler(BaseHTTPRequestHandler):
                 self.send_json(400, {'code': 'invalid_fields'})
             else:
                 self.send_json(200, self.server.secure_remote.claim(payload['command_id'], payload['master_instance']))
+            return
+        if path == '/api/native-remote/wsl-bridge':
+            op = payload.get('action', 'status')
+            if op not in ('status', 'enable', 'disable') or (set(payload) - {'action', 'bind_ip', 'port'}):
+                self.send_json(400, {'code': 'invalid_fields'})
+                return
+            http_port, eff_port, eff_ip, enabled, bind_port = self._resolve_native_bridge_target(payload)
+            if op == 'status':
+                bridge = get_native_remote_bridge_status(
+                    http_port,
+                    public_port=eff_port,
+                    wifi_ip=eff_ip,
+                    native_enabled=enabled,
+                    native_local_port=bind_port,
+                )
+                self.send_json(200, {'ok': True, 'bridge': bridge})
+            elif op == 'disable':
+                ok_bridge, msg_bridge, bridge = disable_native_remote_bridge(
+                    http_port,
+                    public_port=eff_port,
+                    wifi_ip=eff_ip,
+                    native_enabled=enabled,
+                    native_local_port=bind_port,
+                )
+                self.send_json(200 if ok_bridge else 409, {'ok': ok_bridge, 'message': msg_bridge, 'bridge': bridge})
+            else:
+                ok_bridge, msg_bridge, bridge = enable_native_remote_bridge(
+                    http_port,
+                    public_port=eff_port,
+                    wifi_ip=eff_ip,
+                    native_enabled=enabled,
+                    native_local_port=bind_port,
+                )
+                self.send_json(200 if ok_bridge else 409, {'ok': ok_bridge, 'message': msg_bridge, 'bridge': bridge})
             return
         if path == '/api/native-remote':
             self.native_admin(payload)
@@ -2192,6 +2748,38 @@ class AudioServerHandler(BaseHTTPRequestHandler):
 
     def scan_library(self) -> list[dict]:
         return metadata_cache.scan_library(INBOX_DIR)
+
+
+class _FohBridgedHandler(AudioServerHandler):
+    """Handles WSL2 Windows portproxy -> wslrelay FOH traffic strictly as a non-localhost LAN client."""
+
+    class _ServerProxy:
+        __slots__ = ("_inner", "server_address")
+
+        def __init__(self, inner, primary_port: int) -> None:
+            self._inner = inner
+            self.server_address = ("0.0.0.0", primary_port)
+
+        def __getattr__(self, name: str):
+            return getattr(self._inner, name)
+
+    def __init__(self, request, client_address, server):
+        proxy = self._ServerProxy(server, int(getattr(server, "primary_port", server.server_address[1])))
+        super().__init__(request, client_address, proxy)
+
+    def is_localhost_client(self) -> bool:
+        return False
+
+
+class _FohBridgeServer(ThreadingHTTPServer):
+    """Loopback-only WSL2 companion HTTP listener for wslrelay FOH portproxy forwarding."""
+    daemon_threads = True
+    allow_reuse_address = True
+
+    def __init__(self, address, handler, parent_server: LocalAudioServer):
+        self.secure_remote = parent_server.secure_remote
+        self.primary_port = int(parent_server.server_address[1])
+        super().__init__(address, handler)
 
 
 _worker_started = False
