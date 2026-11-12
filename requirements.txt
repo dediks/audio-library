@@ -2,6 +2,8 @@
 # Engine ekstraksi audio berizin (mendukung Smart Fallback, thumbnail, & metadata)
 yt-dlp[default]>=2024.0.0
 mutagen>=1.47.0
+# Session-only TLS certificate generation for the optional native remote listener
+cryptography==50.0.2
 
 # Native Desktop Window Engine (otomatis terpasang di Windows & macOS via prebuilt wheel)
 pywebview>=5.0; sys_platform == 'win32' or sys_platform == 'darwin'

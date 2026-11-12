@@ -16,11 +16,20 @@ datas = [
 binaries = []
 hiddenimports = [
     "web_ui",
+    "secure_remote",
+    "secure_remote_tls",
     "audio_manager",
     "task_engine",
     "fs_browser",
     "splitter_engine",
 ]
+
+# Session TLS runtime, including cryptography's native Rust extension. Fail the
+# package preparation if absent; never ship an insecure HTTP fallback.
+crypto_ret = collect_all("cryptography")
+datas += crypto_ret[0]
+binaries += crypto_ret[1]
+hiddenimports += crypto_ret[2]
 
 # 2. Bundle vendored yt_dlp if present in .vendor/, or collect from environment
 vendor_ytdlp = project_dir / ".vendor" / "yt_dlp"

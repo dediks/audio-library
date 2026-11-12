@@ -1,0 +1,110 @@
+{
+  "kind": "observed RED -> GREEN tracer-bullet checkpoints; not a fabricated test-run transcript",
+  "checkpoints": [
+    {
+      "slice": "pairing",
+      "observed_red": "ModuleNotFoundError: secure_remote",
+      "observed_green": "pairing one-time invite + approval passed"
+    },
+    {
+      "slice": "command lifecycle",
+      "observed_red": "AttributeError: command",
+      "observed_green": "accepted/pending/applied/expired/unknown, dedup and role passed"
+    },
+    {
+      "slice": "TLS slice",
+      "observed_red": "AttributeError: start",
+      "observed_green": "real loopback pin/SAN/default trust rejection + negative HTTP passed"
+    },
+    {
+      "slice": "local admin bridge",
+      "observed_red": "AssertionError: plaintext UI must be loopback only",
+      "observed_green": "local CSRF/roles/native handoff passed"
+    },
+    {
+      "slice": "native media consumer",
+      "observed_red": "ENOENT: native-remote-player.js",
+      "observed_green": "Node fake-media observation/rejection/no-track/TTL passed"
+    },
+    {
+      "slice": "real player poll ack",
+      "observed_red": "actual localhost poll must carry observed native ack",
+      "observed_green": "real poll function sends observed ack passed"
+    },
+    {
+      "slice": "modal slice",
+      "observed_red": "ENOENT: native-remote-admin.js",
+      "observed_green": "Node controls/QR/untrusted labels/approval passed"
+    },
+    {
+      "slice": "desktop lifecycle",
+      "observed_red": "desktop must never open plaintext LAN listener",
+      "observed_green": "both launcher lifecycle checks passed"
+    },
+    {
+      "slice": "revocation",
+      "observed_red": "queued record not rejected",
+      "observed_green": "queued rejected/in-flight unknown/downgrade passed"
+    },
+    {
+      "slice": "explicit expiry",
+      "observed_red": "admin snapshot not expired",
+      "observed_green": "expired/disabled states passed"
+    },
+    {
+      "slice": "logging",
+      "observed_red": "request fixture appeared in log",
+      "observed_green": "raw request logging suppressed passed"
+    },
+    {
+      "slice": "master replacement",
+      "observed_red": "AttributeError: master_poll",
+      "observed_green": "new master/heartbeat gap cancellation passed"
+    },
+    {
+      "slice": "consumer claim",
+      "observed_red": "AttributeError: claim",
+      "observed_green": "device/master permission recheck passed"
+    },
+    {
+      "slice": "claim transport",
+      "observed_red": "KeyError: authorized",
+      "observed_green": "local claim + CSRF passed"
+    },
+    {
+      "slice": "JS claim integration",
+      "observed_red": "real player must reauthorize delivery",
+      "observed_green": "actual player authorizer call passed"
+    },
+    {
+      "slice": "fail-closed authorizer",
+      "observed_red": "unconfigured consumer returned applied",
+      "observed_green": "unconfigured consumer rejects before engine passed"
+    },
+    {
+      "slice": "packaging manifest",
+      "observed_red": "cryptography pin missing",
+      "observed_green": "pin + spec syntax/native runtime declaration passed"
+    },
+    {
+      "slice": "absolute deadline",
+      "observed_red": "partial request recv TimeoutError",
+      "observed_green": "absolute connection deadline passed"
+    },
+    {
+      "slice": "shutdown/start race",
+      "observed_red": "cannot join thread before it is started",
+      "observed_green": "worker publish/start atomic with shutdown passed"
+    },
+    {
+      "slice": "UI fallback",
+      "observed_red": "LocalAudioServer missing secure_remote during failed bind",
+      "observed_green": "local-only UI port fallback passed"
+    },
+    {
+      "slice": "Windows fail closed",
+      "observed_red": "missing secure_temp runtime guard",
+      "observed_green": "old Windows temp runtime rejected before key files passed"
+    }
+  ]
+}

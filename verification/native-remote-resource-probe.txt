@@ -1,0 +1,2 @@
+PASS POSIX 0700/0600 temp key files removed before listener; TLS minimum 1.2; 32-device/256-record caps; pairing rate limit
+exit_code=0

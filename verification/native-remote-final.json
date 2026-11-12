@@ -1,0 +1,53 @@
+{
+  "base_commit": "20702751ff2fdea5ace7d131dbaed7c0727d3c6c",
+  "branch": "feature/secure-native-remote-v1",
+  "scope": "desktop only; unstaged; no commit/push/install/installer",
+  "commands": {
+    "python_full": {
+      "command": "PYTHONPATH=/home/ubuntu/projects/audio-library-android-spike/app/src/main/res/raw/ytdlp .venv/bin/python tests/run_tests.py",
+      "exit_code": 0
+    },
+    "node_harnesses": {
+      "command": "node tests/native-player.test.mjs && node tests/native-admin.test.mjs",
+      "exit_code": 0
+    },
+    "syntax": {
+      "command": ".venv/bin/python -m py_compile secure_remote.py secure_remote_tls.py web_ui.py desktop_app.py tests/test_secure_remote.py tests/test_native_admin.py tests/test_native_limits.py tests/test_native_resources.py && node --check static/player.js && node --check static/modules/native-remote-player.js && node --check static/modules/native-remote-admin.js && git diff --check",
+      "exit_code": 0
+    },
+    "provenance": {
+      "command": "git rev-parse HEAD && .venv/bin/python --version && node --version && .venv/bin/python -c \"import cryptography; print('cryptography', cryptography.__version__)\" && sha256sum /home/ubuntu/projects/audio-library-android-spike/app/src/main/res/raw/ytdlp",
+      "exit_code": 0
+    }
+  },
+  "python_passed": 67,
+  "python_failed": 0,
+  "python_summary": "Summary: 67/67 passed.",
+  "baseline": {
+    "dependency_complete_result": "50/50 (parent verified restored base)",
+    "initial_incomplete_environment": "48/50; missing yt_dlp in two baseline tests",
+    "fixture": "read-only zipimport archive via per-command PYTHONPATH; not a production import or package installation",
+    "archive_version": "2026.10.26",
+    "archive_sha256": "e51e69e89489f199530f13d32a4342da3ddb2cf34842f364603a066db05afbf3"
+  },
+  "actual_local_browser": {
+    "existing_player_modal_opened": true,
+    "default_off": true,
+    "https_loopback_start": true,
+    "invite_manual_and_existing_offline_qr": true,
+    "fingerprint_compared_and_pinned_hostname_checks": true,
+    "pending_pair_approved_in_ui": true,
+    "untrusted_label_literal_no_injected_elements": true,
+    "master_online": true,
+    "no_track_play": "accepted -> rejected through real JS polling/ack",
+    "ui_revoke_and_stop": true,
+    "pairing_cleared_on_stop": true,
+    "server_sigint_exit_code": 0
+  },
+  "limits": [
+    "Windows runtime/ACL/installer not run",
+    "real mobile/LAN/client acceptance not run",
+    "no exactly-once claim; uncertain in-flight outcomes remain unknown"
+  ],
+  "execution_deviation": "Initial RED integration test called the pre-change default create_server and briefly bound its existing 0.0.0.0 listener; finally shutdown/closed it. Test now checks the default signature before socket creation; all subsequent runtime listener tests explicitly loopback. No firewall/bridge changes or intended public exposure."
+}

@@ -549,121 +549,43 @@
         <button type="button" id="btnCloseRemoteModal" class="btn-text" aria-label="Close">&#10005;</button>
       </div>
       <div class="modal-body remote-modal-body">
-        <!-- Master Deck Pairing Panel (Shown on Laptop/PC) -->
-        <div id="remoteMasterSetupPanel">
+        <section aria-label="Secure Native Remote">
           <div class="remote-status-strip">
-            <div class="remote-status-info">
-              <span class="remote-status-title">Wireless Access</span>
-              <span class="remote-status-sub" id="remoteModalClientCount">0 Connected</span>
-            </div>
-            <label class="autotrim-check-wrap">
-              <input type="checkbox" id="chkRemoteEnabled" checked>
-              <span>Enable</span>
+            <strong>Native Remote · <span id="nativeStatus" role="status">Nonaktif</span></strong>
+            <button type="button" id="nativeRefresh" class="btn-nudge">Refresh</button>
+          </div>
+          <p>Kontrol Play, Pause, Stop melalui HTTPS di LAN privat. Browser remote HTTP/PIN lama sudah dinonaktifkan. Client native diperlukan; aplikasi Android belum termasuk tahap ini.</p>
+          <div class="remote-manual-ip-row">
+            <label>IP LAN PC
+              <input id="nativeBindIp" class="toolbar-input" type="text" placeholder="192.168.1.20" autocomplete="off" spellcheck="false">
             </label>
+            <label>Port
+              <input id="nativePort" class="toolbar-input" type="number" min="1" max="65535" value="8766">
+            </label>
+            <button type="button" id="nativeStart" class="btn-accent">Aktifkan HTTPS</button>
+            <button type="button" id="nativeStop" class="btn-nudge" disabled>Nonaktifkan</button>
           </div>
-
-          <!-- WSL2 Port Bridge Strip (Auto-shown on WSL2) -->
-          <div class="remote-wsl-bridge-box hidden" id="remoteWslBridgeBox">
-            <div class="remote-wsl-bridge-top">
-              <div class="remote-wsl-bridge-info">
-                <strong id="remoteWslBridgeTitle">WSL2 Port Bridge</strong>
-                <p id="remoteWslBridgeDesc">Forward Wi-Fi port to WSL2</p>
-              </div>
-              <div class="remote-wsl-bridge-actions">
-                <button type="button" id="btnEnableWslBridge" class="btn-accent btn-sm">
-                  <span id="btnEnableWslBridgeText">Connect</span>
-                </button>
-                <button type="button" id="btnDisableWslBridge" class="btn-nudge hidden" title="Close port bridge">
-                  Disconnect
-                </button>
-                <button type="button" id="btnCopyWslCmd" class="btn-nudge" title="Copy PowerShell Admin command">
-                  Copy Cmd
-                </button>
-              </div>
-            </div>
+          <p id="nativeConnection">Listener belum aktif.</p>
+          <label>Fingerprint SHA-256 · cocokkan di client
+            <code id="nativeFingerprint" style="display:block;overflow-wrap:anywhere;user-select:text">—</code>
+          </label>
+          <div class="remote-manual-ip-row">
+            <button type="button" id="nativeInviteOpen" class="btn-nudge" disabled>Buka invite · 90 detik</button>
+            <button type="button" id="nativeInviteClose" class="btn-nudge" disabled>Tutup invite</button>
           </div>
-
-          <div class="remote-pairing-grid">
-            <div class="remote-qr-card">
-              <div class="remote-qr-frame">
-                <canvas id="remoteQrCanvas" width="144" height="144" aria-label="Remote QR Code"></canvas>
-              </div>
-              <span class="remote-qr-caption" id="remoteQrCaption">Scan QR</span>
-            </div>
-
-            <div class="remote-pairing-right">
-              <div class="remote-pin-card">
-                <div class="remote-pin-info">
-                  <span class="remote-pin-label">PIN</span>
-                  <strong class="remote-pin-code" id="remotePinDisplay">----</strong>
-                </div>
-                <button type="button" id="btnRegenRemotePin" class="btn-nudge" title="Generate new 4-digit PIN">
-                  New PIN
-                </button>
-              </div>
-
-              <div class="remote-url-section">
-                <div class="remote-url-header">
-                  <span class="remote-url-title">Network IP</span>
-                  <button type="button" id="btnRefreshRemoteIps" class="btn-nudge">Refresh</button>
-                </div>
-                <div class="remote-url-list" id="remoteUrlList"></div>
-
-                <div class="remote-manual-ip-row">
-                  <input
-                    type="text"
-                    id="remoteManualIpInput"
-                    class="toolbar-input remote-manual-ip-input"
-                    placeholder="Custom IP (e.g. 192.168.1.20)"
-                    aria-label="Custom IP"
-                  >
-                  <button type="button" id="btnApplyManualIp" class="btn-nudge">Connect</button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Connected Devices List & Individual Disconnect/Role Control -->
-          <div class="remote-clients-box" id="remoteClientsBox">
-            <div class="remote-clients-header">
-              <span class="remote-url-title">Devices</span>
-              <button type="button" id="btnKickAllRemotes" class="btn-nudge hidden" title="Disconnect all devices">
-                Disconnect All
-              </button>
-            </div>
-            <div class="remote-clients-list" id="remoteClientsList"></div>
-            <div class="remote-blocked-section hidden" id="remoteBlockedSection">
-              <span class="remote-blocked-title">Blocked</span>
-              <div class="remote-blocked-list" id="remoteBlockedList"></div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Client PIN Entry Panel (Shown when opened on Smartphone or Sim Tab) -->
-        <div id="remoteClientPinPanel" class="hidden">
-          <div class="remote-pin-entry-box">
-            <label for="remotePinInput" class="remote-pin-label">Enter 4-Digit PIN</label>
-            <div class="remote-pin-input-row">
-              <input
-                type="text"
-                id="remotePinInput"
-                class="toolbar-input remote-pin-input"
-                maxlength="4"
-                inputmode="numeric"
-                pattern="[0-9]*"
-                placeholder="0000"
-                autocomplete="off"
-              >
-              <button type="button" id="btnSaveRemotePin" class="btn-primary">Connect</button>
-            </div>
-            <p class="remote-pin-feedback" id="remotePinFeedback">4-digit PIN from Master Deck.</p>
-          </div>
-        </div>
+          <p id="nativeInviteStatus">Invite tertutup.</p>
+          <canvas id="nativeQr" class="hidden" width="180" height="180" aria-label="QR pairing privat"></canvas>
+          <label>Pairing string manual
+            <textarea id="nativePairing" class="toolbar-input" readonly rows="3" spellcheck="false" autocomplete="off" style="width:100%;resize:vertical" aria-label="Pairing string privat"></textarea>
+          </label>
+          <button type="button" id="nativeCopy" class="btn-nudge" disabled>Salin pairing string</button>
+          <p id="nativeFeedback" role="status" aria-live="polite"></p>
+          <h4>Persetujuan &amp; perangkat sesi ini</h4>
+          <div id="nativeDevices" class="remote-clients-list"></div>
+          <p>Putus akses atau menonaktifkan remote tidak menghentikan audio PC. Invite, sertifikat, dan token hanya berlaku untuk sesi ini. Jangan forward port ke internet.</p>
+        </section>
       </div>
       <div class="modal-footer remote-modal-footer">
-        <button type="button" id="btnOpenRemoteSimTab" class="btn-chip accent" title="Open remote simulator in new tab">
-          Open Simulator
-        </button>
         <button type="button" id="btnCancelRemoteModal" class="btn-secondary">Close</button>
       </div>
     </div>

@@ -1,0 +1,201 @@
+{
+  "stage": "desktop-source-verified",
+  "approved_scope": "Desktop-only local source update; user pushes manually. No Android/laptop installation/Windows installer/public exposure authorized.",
+  "repository": "/home/ubuntu/projects/swararia-desktop",
+  "branch": "feature/secure-native-remote-v1",
+  "verified_at_utc": "2026-11-12T06:10:03.358999+00:00",
+  "fingerprint": "7f874d61c2b513d27b7f07275f97ae6255539881c44c3a70976be08581b24d26",
+  "runtime_rows": [
+    {
+      "path": "SwarariaAudioLab.spec",
+      "bytes": 2953,
+      "sha256": "06ca364810625ceb016fcdaa9e09ef6400c5f6b13aff43909928694f8155bd96"
+    },
+    {
+      "path": "desktop_app.py",
+      "bytes": 7016,
+      "sha256": "2b5b30bbe6aa2b9b7bf43f35099cbf6e64b221e73f4e03093b7840137c6ba930"
+    },
+    {
+      "path": "requirements.txt",
+      "bytes": 430,
+      "sha256": "8abd3523853076ce9c7c3db1b852330007f1566e61cc736a7363a9753241c8c5"
+    },
+    {
+      "path": "secure_remote.py",
+      "bytes": 14917,
+      "sha256": "282aa000bbe0291ba0aceca8c6e82b481fb80224ff8f43a15b8739339f3bac31"
+    },
+    {
+      "path": "secure_remote_tls.py",
+      "bytes": 12408,
+      "sha256": "c347715e0809b3d871242411e2fbc6fabb31b0f0e67297fe63e83e8de9723a34"
+    },
+    {
+      "path": "static/modules/native-remote-admin.js",
+      "bytes": 5724,
+      "sha256": "4b7885b17b95547f733a5cf1fff2ac4a3421c5d2db03fa50ac1fe72b5908cc6f"
+    },
+    {
+      "path": "static/modules/native-remote-player.js",
+      "bytes": 2967,
+      "sha256": "de69897cc4fa6ba58a7816a084b435a43296575ae5948ecbe007d75be8f3b19d"
+    },
+    {
+      "path": "static/player.html",
+      "bytes": 30745,
+      "sha256": "27e021ce8848ef0ead7407e8a44921478f0e2dbbed4591137206826b68494155"
+    },
+    {
+      "path": "static/player.js",
+      "bytes": 123198,
+      "sha256": "6e5ae7a066538daf9f446800751f73e7ed59e9723f24bfb76d99a23b64ff9c56"
+    },
+    {
+      "path": "tests/native-admin.test.mjs",
+      "bytes": 3041,
+      "sha256": "d3be437dd1c5d7949e53f18c9241b0683736325db91180809bbc615b79ceca59"
+    },
+    {
+      "path": "tests/native-player.test.mjs",
+      "bytes": 13428,
+      "sha256": "cf8fa80959d66a4d6bdf0f1c1925c062ee142e0aefde8c8df73da1983bc2d70e"
+    },
+    {
+      "path": "tests/test_native_admin.py",
+      "bytes": 8375,
+      "sha256": "91dbb29650f39e67ebfa72a7d09d912054482963c59be4cdfcddc20487f7df19"
+    },
+    {
+      "path": "tests/test_native_limits.py",
+      "bytes": 5493,
+      "sha256": "0ee67e1a1213397fe72fec11c6ef30326d8842d6f98f9bf28f88fd0814cb0dba"
+    },
+    {
+      "path": "tests/test_native_resources.py",
+      "bytes": 3592,
+      "sha256": "7f57f34e466d280d4c4aeaa9b223c9e385eeb747e7e92d3538348746945e4766"
+    },
+    {
+      "path": "tests/test_native_state.py",
+      "bytes": 1778,
+      "sha256": "f31a660d57271b28b72f63feeef75f28273b31a6371b258a84785a1687c2854f"
+    },
+    {
+      "path": "tests/test_secure_remote.py",
+      "bytes": 8411,
+      "sha256": "47d80f70ba9f9440653d217392fb3cc52fd990cf50c70db506364da16581dcf6"
+    },
+    {
+      "path": "web_ui.py",
+      "bytes": 85310,
+      "sha256": "e535c781e76ea56adb1183b79e1000f0bbe114aac1b390f57a538011efddd41d"
+    }
+  ],
+  "protected_core_unchanged": [
+    "audio_manager.py",
+    "fs_browser.py",
+    "task_engine.py",
+    "splitter_engine.py"
+  ],
+  "static_scan_matches": [],
+  "android_unchanged": true,
+  "base_commit": "20702751ff2fdea5ace7d131dbaed7c0727d3c6c",
+  "verification_passed": true,
+  "independent_review_passed": true,
+  "verification": {
+    "python": {
+      "passed": 68,
+      "failed": 0,
+      "exit_code": 0,
+      "command": "PYTHONPATH=/home/ubuntu/projects/audio-library-android-spike/app/src/main/res/raw/ytdlp .venv/bin/python tests/run_tests.py"
+    },
+    "node_harnesses": {
+      "passed": 2,
+      "exit_code": 0,
+      "commands": [
+        "node tests/native-admin.test.mjs",
+        "node tests/native-player.test.mjs"
+      ],
+      "regressions": [
+        "actual playCurrentTrack deferred AudioContext.resume",
+        "expiry and subsequent local/native Stop/Pause/Play/load",
+        "first authorization delayed and Stop before authorization microtask",
+        "revocation and ordinary local/native playback"
+      ]
+    },
+    "syntax_and_whitespace": {
+      "exit_code": 0,
+      "commands": [
+        ".venv/bin/python -m py_compile secure_remote.py secure_remote_tls.py web_ui.py desktop_app.py",
+        "node --check static/player.js",
+        "node --check static/modules/native-remote-player.js",
+        "node --check static/modules/native-remote-admin.js",
+        "git diff --cached --check"
+      ]
+    }
+  },
+  "reviews": {
+    "initial": {
+      "delegation": "deleg_570a7a53",
+      "passed": false,
+      "security_concerns": [],
+      "logic_blockers": 1,
+      "detail": "verification/native-remote-review-initial.json"
+    },
+    "first_fix": {
+      "delegation": "deleg_0744ffd6",
+      "passed": false,
+      "detail": "verification/native-remote-review-pass1.json"
+    },
+    "final": {
+      "delegation": "deleg_e15b9557",
+      "passed": true,
+      "security_concerns": [],
+      "logic_errors": [],
+      "suggestions": [],
+      "scope": "Exact final JS fix delta + actual staged lease wiring; other code bound to previous full/delta reviews. Delayed first auth + local Stop independently rejected with zero play calls. Newer Pause/Play/load preserved, valid delayed native Play still applied."
+    },
+    "all_reported_blockers_closed": true
+  },
+  "safe_title_red_green": {
+    "red": "AssertionError: Remote status must include safe display title",
+    "green": true,
+    "test": "test_native_state.test_state_has_bounded_track_title_without_paths_or_library_metadata"
+  },
+  "baseline": {
+    "original_passed": 50,
+    "original_failed": 0,
+    "same_cached_ytdlp_fixture": true,
+    "fixture_version": "2026.10.26",
+    "fixture_sha256": "e51e69e89489f199530f13d32a4342da3ddb2cf34842f364603a066db05afbf3",
+    "initial_incomplete_environment": "48/50 missing yt_dlp; resolved only per-test PYTHONPATH, no package/test modifications"
+  },
+  "dependency_installation": {
+    "location": ".venv only",
+    "packages": {
+      "cryptography": "50.0.2",
+      "cffi": "2.1.1",
+      "pycparser": "3.12"
+    },
+    "system_and_hermes_modified": false,
+    "windows_build_tools_installed": false
+  },
+  "recovery": {
+    "bundle": "/home/ubuntu/.local/share/swararia-private-backups/desktop-before-native-remote-20261112T050724081948Z.bundle",
+    "sha256": "13ea7c94e913844e50ca27c7db0cb42d1c956b495bafeda075ee1e620acf5477",
+    "restored_into_scratch_and_base_verified": true,
+    "windows_installer_or_collection_restore_tested": false
+  },
+  "limitations": [
+    "No Windows runtime/ACL/installer build",
+    "No actual Android native client or real HP-PC LAN/audio acceptance",
+    "Legacy plaintext LAN browser/PIN remote intentionally removed; local desktop remains",
+    "Source APP_VERSION unchanged; protocol v1 independent",
+    "No exactly-once guarantee; uncertain in-flight outcomes remain unknown"
+  ],
+  "execution_deviation": "Initial implementer RED test briefly used legacy wildcard listener before assertion; closed in cleanup. Fixed tests inspect default before constructing socket and use loopback. No firewall/bridge changes. Documented in handoff.",
+  "push_performed": false,
+  "release_published": false,
+  "laptop_or_android_installed": false
+}
