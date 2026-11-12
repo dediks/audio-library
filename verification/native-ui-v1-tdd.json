@@ -1,0 +1,37 @@
+{
+  "base": "f716c0c310888d167e547b4000867189f0c24376",
+  "branch": "feature/dual-browser-native-remote-v1",
+  "scope": "Unstaged desktop Android Remote modal UI only",
+  "test_command": "node --unhandled-rejections=strict tests/native-admin.test.mjs",
+  "vertical_cycles": [
+    {"slice": "Disabled intro and missing-IP progressive disclosure", "red": "0/1: actual HTML needs nativeOff", "green": "1/1"},
+    {"slice": "Real invitation, countdown, expiry and fresh clipboard deadline", "red": "1/2: expected Siap pairing", "green": "2/2"},
+    {"slice": "32 pending/active devices, safe labels, roles, deny/revoke and stable rows", "red": "2/3: expected Butuh persetujuan", "green": "3/3"},
+    {"slice": "Silent polling, mutation priority, busy guards and clipboard fallback", "red": "3/5: polling overwrote feedback; manual fallback stayed closed", "green": "5/5"},
+    {"slice": "Approved scoped composition and original SVG factory", "red": "5/6: missing safe phone icons", "green": "6/6"},
+    {"slice": "Invalid endpoint cannot show a QR-ready state", "red": "7/8: pairing panel incorrectly visible", "green": "8/8"}
+  ],
+  "additional_preservation_regression": "Failed role update rollback and out-of-order poll protection passed with existing race guards; no additional production behavior added for it",
+  "python_layout_contract": "Only obsolete native inline-form assertions migrated to native-only CSS; exact original browser modal/setup hashes retained",
+  "final_checks": {
+    "python": "74/74 passed with cached ytdlp PYTHONPATH and existing .venv",
+    "node_admin": "8/8 passed",
+    "node_native_player": "passed (7 reported groups)",
+    "node_dual_remote": "passed (3 reported groups)",
+    "module_syntax": "passed",
+    "python_compile": "passed for tests/test_dual_remote.py",
+    "git_diff_check": "passed",
+    "heuristic_added_line_security_scan": "no findings",
+    "approved_preview_files_byte_identical": 22,
+    "changed_existing_files": ["static/player.html", "static/modules/native-remote-admin.js", "tests/native-admin.test.mjs", "tests/test_dual_remote.py"],
+    "new_production_file": "static/native-remote.css",
+    "other_baseline_tracked_files": "byte-identical",
+    "staged": false,
+    "commit_install_push": false
+  },
+  "limits": [
+    "Node harness exercises real admin module and actual HTML IDs with a small DOM adapter, not Chromium layout",
+    "Parent-owned Chromium rendering and real API UI checks remain separate",
+    "Physical Windows/WSL/Android reachability, scanning, font scaling and audio acceptance remain unverified"
+  ]
+}

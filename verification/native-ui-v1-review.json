@@ -1,0 +1,12 @@
+{
+  "candidate_sha256": "5606193a9d38c868e805b6b59d95a2437585a941e4b52756c5c1e90295374738",
+  "delegation": "deleg_6e5a55a3",
+  "passed": true,
+  "security_concerns": [],
+  "logic_errors": [],
+  "suggestions": [],
+  "summary": "Independently reviewed complete Native admin module, scoped CSS, HTML changes, tests and caller/backend contracts. Active endpoint settings reflect server state while confirmed-disabled edits survive polling. Compact invitation controls retain manual fallback. Expiry guards, authoritative permissions, mixed devices, mutation/poll ordering, busy controls and safe labels/SVG verified. All 11 admin tests, both other Node harnesses and 74 Python tests passed. Whitespace and unchanged candidate/index checks passed. Heuristic matches were harmless RegExp.exec calls in tests. No files modified.",
+  "limitations": ["Physical Windows/WSL/phone/audio acceptance outside verdict"],
+  "parent_acceptance_evidence": "native-ui-v1-parent.json",
+  "initial_review_gap_closed": "Completed real API/TLS/Chromium acceptance recorded in parent evidence; final candidate reviewed independently after parent UI corrections."
+}

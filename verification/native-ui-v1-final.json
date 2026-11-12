@@ -1,0 +1,61 @@
+{
+  "status": "verified_local_source_release",
+  "base": "f716c0c310888d167e547b4000867189f0c24376",
+  "reviewed_candidate_sha256": "5606193a9d38c868e805b6b59d95a2437585a941e4b52756c5c1e90295374738",
+  "reviewed_rows": [
+    {
+      "path": "UI-ANDROID-REMOTE-V1.md",
+      "sha256": "73dc79237bad42dce559fc2b72c3fcf75ff102803b0b8d7fc660416df290700b"
+    },
+    {
+      "path": "static/modules/native-remote-admin.js",
+      "sha256": "695a6bd2e7eb18d4e0bd5a7c00715fc7aa69b5c6e89ca521c9541c872dfa71d5"
+    },
+    {
+      "path": "static/native-remote.css",
+      "sha256": "6e91ea03a851d80a7386905d86a2e44cbde735554fcdd0917e5e51899b56442d"
+    },
+    {
+      "path": "static/player.html",
+      "sha256": "57d1ac80987308ef795ab03cb9870460b0239c715c373e988ffdb5efbc5ee1d6"
+    },
+    {
+      "path": "tests/native-admin.test.mjs",
+      "sha256": "6b8802d90149a12c8e09cead1245bbb63e14c4f885048825945e304b173b719f"
+    },
+    {
+      "path": "tests/test_dual_remote.py",
+      "sha256": "8a3e7d66d571b4cb8303d198b5703faca5da0923f8d8f0198a2c014e9bc9dfb6"
+    },
+    {
+      "path": "verification/native-ui-v1-baseline.json",
+      "sha256": "1faab92e77ab005b6d856e7147565b7902ba78efd54138b2d466e5e1a6ff6fdd"
+    },
+    {
+      "path": "verification/native-ui-v1-tdd.json",
+      "sha256": "e31e6141a0a388d1f4f2a40d1ca2dd1720adee97d7b7da376201c5832b0ff6ca"
+    }
+  ],
+  "independent_review": "native-ui-v1-review.json",
+  "parent_api_and_ui_evidence": "native-ui-v1-parent.json",
+  "initial_review": "native-ui-v1-review-initial.json",
+  "initial_gap_closed": true,
+  "python_tests": 74,
+  "admin_node_tests": 11,
+  "other_node_harnesses": [
+    "native-player",
+    "dual-remote"
+  ],
+  "unchanged_base_files": 93,
+  "unchanged_preview_files": 22,
+  "source_only": true,
+  "push": false,
+  "installation": false,
+  "fixture_cleaned": true,
+  "limitations": [
+    "No physical phone or Windows/WSL network acceptance",
+    "No installed Windows app or installer update",
+    "No audio/device/streaming acceptance"
+  ],
+  "commit_id": "See adjacent dist release manifest; report is part of that commit."
+}

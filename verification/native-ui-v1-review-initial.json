@@ -1,0 +1,11 @@
+{
+  "candidate_sha256": "9010d3e7840873200346ba608561b584afe78403e48a3c55fa99a2db2e2012ef",
+  "delegation": "deleg_f9ebace5",
+  "historical_checkpoint": true,
+  "passed": false,
+  "security_concerns": [],
+  "logic_errors": ["Blocking verification gap, not an identified implementation defect: actual Chromium rendering and real loopback API UI acceptance were still in progress and completed evidence was not available for this review."],
+  "suggestions": [],
+  "summary": "Reviewer independently passed Python 74/74, admin 9/9, native-player and dual-remote harnesses, whitespace and protected hashes. No source defect identified. Failed closed solely awaiting actual browser/API evidence.",
+  "subsequent_evidence": "native-ui-v1-parent.json records completed real API/TLS/Chromium checks and parent corrections. Final candidate is 5606193a9d38c868e805b6b59d95a2437585a941e4b52756c5c1e90295374738; this initial verdict does not approve those later bytes. Final independent verdict required."
+}

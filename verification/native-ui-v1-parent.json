@@ -1,0 +1,129 @@
+{
+  "stage": "parent_checks_complete_independent_review_pending",
+  "base": "f716c0c310888d167e547b4000867189f0c24376",
+  "candidate_sha256": "5606193a9d38c868e805b6b59d95a2437585a941e4b52756c5c1e90295374738",
+  "reviewed_rows": [
+    {
+      "path": "UI-ANDROID-REMOTE-V1.md",
+      "sha256": "73dc79237bad42dce559fc2b72c3fcf75ff102803b0b8d7fc660416df290700b"
+    },
+    {
+      "path": "static/modules/native-remote-admin.js",
+      "sha256": "695a6bd2e7eb18d4e0bd5a7c00715fc7aa69b5c6e89ca521c9541c872dfa71d5"
+    },
+    {
+      "path": "static/native-remote.css",
+      "sha256": "6e91ea03a851d80a7386905d86a2e44cbde735554fcdd0917e5e51899b56442d"
+    },
+    {
+      "path": "static/player.html",
+      "sha256": "57d1ac80987308ef795ab03cb9870460b0239c715c373e988ffdb5efbc5ee1d6"
+    },
+    {
+      "path": "tests/native-admin.test.mjs",
+      "sha256": "6b8802d90149a12c8e09cead1245bbb63e14c4f885048825945e304b173b719f"
+    },
+    {
+      "path": "tests/test_dual_remote.py",
+      "sha256": "8a3e7d66d571b4cb8303d198b5703faca5da0923f8d8f0198a2c014e9bc9dfb6"
+    },
+    {
+      "path": "verification/native-ui-v1-baseline.json",
+      "sha256": "1faab92e77ab005b6d856e7147565b7902ba78efd54138b2d466e5e1a6ff6fdd"
+    },
+    {
+      "path": "verification/native-ui-v1-tdd.json",
+      "sha256": "e31e6141a0a388d1f4f2a40d1ca2dd1720adee97d7b7da376201c5832b0ff6ca"
+    }
+  ],
+  "python_tests": {
+    "passed": 74,
+    "total": 74
+  },
+  "node_admin_tests": {
+    "passed": 11,
+    "total": 11
+  },
+  "other_node_harnesses": [
+    "native-player",
+    "dual-remote"
+  ],
+  "node_strict_unhandled_rejections": true,
+  "syntax_and_staged_whitespace": true,
+  "unchanged_base_files": 93,
+  "base_changed_files": [
+    "static/modules/native-remote-admin.js",
+    "static/player.html",
+    "tests/native-admin.test.mjs",
+    "tests/test_dual_remote.py"
+  ],
+  "approved_preview_unchanged_files": 22,
+  "static_heuristic_scan": {
+    "added_lines_scanned": 711,
+    "findings": [
+      {
+        "path": "tests/native-admin.test.mjs",
+        "line": 11,
+        "category": "dynamic_eval",
+        "assessment": "Inspected RegExp.exec(attrs) in static HTML test adapter; not dynamic code execution"
+      },
+      {
+        "path": "tests/native-admin.test.mjs",
+        "line": 12,
+        "category": "dynamic_eval",
+        "assessment": "Inspected RegExp.exec(attrs) in static HTML test adapter; not dynamic code execution"
+      }
+    ],
+    "scope": "heuristic only, not proof of security"
+  },
+  "real_api_browser_checks": [
+    "initial disabled",
+    "missing IP focuses settings without POST",
+    "start native TLS listener",
+    "real HTTPS /v1/pair pending",
+    "approve and server-confirm role",
+    "change to view_only server-confirmed",
+    "pending plus active coexist",
+    "deny new pending preserves existing active",
+    "consumed invite clears private string and QR",
+    "expire invite clears copy/QR/string",
+    "revoke active device preserves listener",
+    "active settings after reload match real endpoint",
+    "stop confirms inactive and code cleared",
+    "1100x900 four state visual inspection",
+    "390x844 connected no horizontal clipping and visible footer"
+  ],
+  "parent_regressions": [
+    {
+      "case": "normal pending/connected hide empty-invitation warning",
+      "red": "8/9",
+      "green": "9/9"
+    },
+    {
+      "case": "active endpoint shows actual IP/port after reload; inactive edits preserved after confirmed disabled",
+      "red": "9/10",
+      "green": "10/10",
+      "test_arrangement_correction": "wait for server-confirmed disabled before editing formerly disabled fields"
+    },
+    {
+      "case": "one manual disclosure and compact invitation action row; normal pairing hint not duplicated",
+      "red": "10/11",
+      "green": "11/11"
+    }
+  ],
+  "fixture": {
+    "loopback_only": true,
+    "stopped_pid": 2635492,
+    "metadata_removed": true,
+    "http_and_both_tls_ports_closed": true,
+    "scratch_fixture_not_production": true
+  },
+  "installations": [],
+  "push_performed": false,
+  "limitations": [
+    "No physical phone or Windows/WSL network acceptance",
+    "No installed Windows app or installer update",
+    "No audio/device/streaming acceptance"
+  ],
+  "screenshots": "scratch/native-ui-real-api-evidence, pairing fully redacted"
+}

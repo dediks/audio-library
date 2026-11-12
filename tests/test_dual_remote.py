@@ -163,6 +163,9 @@ def test_original_browser_modal_and_setup_block_have_exact_20702751_parity():
 def test_native_dialog_connect_form_wraps_without_changing_browser_modal():
     html = (Path(__file__).resolve().parents[1] / 'static/player.html').read_text()
     native = html[html.index('id="androidRemoteModal"'):]
-    assert 'style="flex-wrap:wrap"' in native, 'native connect controls must wrap instead of clipping horizontally'
-    assert native.count('style="flex:1 1 10rem;min-width:0"') == 2
-    assert native.count('style="width:100%;min-width:0;box-sizing:border-box"') == 2
+    css = (Path(__file__).resolve().parents[1] / 'static/native-remote.css').read_text()
+    assert 'href="/static/native-remote.css"' in html
+    assert 'id="nativeSettings"' in native and 'class="native-fields"' in native
+    assert '#androidRemoteModal .native-fields { display:grid;' in css
+    assert 'grid-template-columns:minmax(0,1fr) 110px' in css
+    assert '#androidRemoteModal .native-fields .toolbar-input { width:100%; min-width:0;' in css
