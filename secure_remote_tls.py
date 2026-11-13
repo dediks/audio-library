@@ -270,6 +270,13 @@ class NativeHandler(BaseHTTPRequestHandler):
                         self._token(), action, payload['idempotency_key'],
                         track_id=payload['track_id'], auto_play=payload.get('auto_play', False),
                     )
+                if action == 'select_group':
+                    if set(payload) != {'action', 'idempotency_key', 'group_id'}:
+                        raise RemoteError('invalid_fields', 400)
+                    return 202, owner.command(
+                        self._token(), action, payload['idempotency_key'],
+                        group_id=payload['group_id'],
+                    )
                 if set(payload) != {'action', 'idempotency_key'}:
                     raise RemoteError('invalid_fields', 400)
                 return 202, owner.command(self._token(), action, payload['idempotency_key'])

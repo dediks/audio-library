@@ -3775,6 +3775,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const nativeIdByRelPath = new Map();
   const nativeRelPathById = new Map();
   let nativeTrackSeq = 0;
+  const nativeGroupIdByKey = new Map([['ALL', 'g_all']]);
+  const nativeGroupKeyById = new Map([['g_all', 'ALL']]);
+  let nativeGroupSeq = 0;
   let lastAckedNativeCatalogSig = '';
   function getNativeTrackId(relPath) {
     if (typeof relPath !== 'string' || !relPath) return null;
@@ -3786,27 +3789,56 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     return tid;
   }
+  function getNativeGroupId(key) {
+    const k = typeof key === 'string' && key ? key : 'ALL';
+    let gid = nativeGroupIdByKey.get(k);
+    if (!gid) {
+      gid = 'g_' + (++nativeGroupSeq).toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+      nativeGroupIdByKey.set(k, gid);
+      nativeGroupKeyById.set(gid, k);
+    }
+    return gid;
+  }
+  function formatSafeGroupName(raw) {
+    return String(raw || '')
+      .replace(/^📁\s*/, '')
+      .replace(/[/\\]+/g, ' › ')
+      .trim()
+      .slice(0, 60);
+  }
   function buildNativeCatalogSnapshot() {
     if (typeof allFiles === 'undefined' || !Array.isArray(allFiles)) return null;
     const vis = typeof visibleFiles !== 'undefined' && Array.isArray(visibleFiles) ? visibleFiles : [];
     const pl = typeof activePlaylist === 'string' && activePlaylist ? activePlaylist : 'ALL';
-    const list = pl !== 'ALL' && vis.length > 0 ? vis : allFiles;
+    const plFiles = pl === 'ALL'
+      ? allFiles
+      : (vis.length > 0 ? vis : allFiles.filter(f => f && (pl === '__ROOT__' ? f.folder === '' : f.folder === pl)));
     const playlistsArr = typeof allPlaylists !== 'undefined' && Array.isArray(allPlaylists) ? allPlaylists : [];
+    const groups = [{ id: getNativeGroupId('ALL'), name: 'Semua Lagu', count: allFiles.length }];
+    playlistsArr.forEach(p => {
+      if (!p || typeof p.name !== 'string' || !p.name || groups.length >= 64) return;
+      const gid = getNativeGroupId(p.name);
+      const safeName = formatSafeGroupName(p.label || p.name) || p.name;
+      const count = typeof p.total === 'number' && p.total >= 0 ? p.total : 0;
+      groups.push({ id: gid, name: safeName, count });
+    });
     let playlistLabel = 'Semua Lagu';
     if (pl !== 'ALL') {
       const matched = playlistsArr.find(p => p && p.name === pl);
-      const rawLabel = matched && matched.label ? matched.label : pl;
-      playlistLabel = String(rawLabel).replace(/^📁\s*/, '').trim() || pl;
+      playlistLabel = formatSafeGroupName(matched && matched.label ? matched.label : pl) || pl;
     }
     const items = [];
-    for (let i = 0; i < list.length && items.length < 250; i++) {
-      const f = list[i];
+    for (let i = 0; i < plFiles.length && items.length < 250; i++) {
+      const f = plFiles[i];
       if (!f || typeof f.rel_path !== 'string' || !f.name) continue;
       const tid = getNativeTrackId(f.rel_path);
-      if (tid) items.push({ id: tid, title: String(f.name).slice(0, 140) });
+      if (!tid) continue;
+      const folderKey = typeof f.folder === 'string' && f.folder ? f.folder.split(/[/\\]/)[0] : '__ROOT__';
+      items.push({ id: tid, title: String(f.name).slice(0, 140), group_id: getNativeGroupId(folderKey) });
     }
-    const sig = playlistLabel + '|' + items.map(it => it.id).join(',');
-    return { sig, payload: { playlist: playlistLabel, items } };
+    const activeGroupId = getNativeGroupId(pl);
+    const sig = activeGroupId + '|' + playlistLabel + '|' + groups.map(g => `${g.id}:${g.count}`).join(',') + '|' + items.map(it => it.id).join(',');
+    return { sig, payload: { playlist: playlistLabel, active_group_id: activeGroupId, total_tracks: plFiles.length, groups, items } };
   }
   const consumeNativeCommand = createNativeCommandConsumer({
     media: () => audioEl,
@@ -3815,6 +3847,7 @@ document.addEventListener('DOMContentLoaded', () => {
     currentTrackId: () => (typeof activeTrackObj !== 'undefined' && activeTrackObj && typeof activeTrackObj.rel_path === 'string'
       ? getNativeTrackId(activeTrackObj.rel_path)
       : null),
+    activeGroupId: () => getNativeGroupId(typeof activePlaylist === 'string' && activePlaylist ? activePlaylist : 'ALL'),
     captureIntent: () => {
       const intentVersion = ++transportIntentVersion;
       return () => intentVersion === transportIntentVersion;
@@ -3843,6 +3876,17 @@ document.addEventListener('DOMContentLoaded', () => {
           : null;
         if (!target) return false;
         return loadTrack(target, Boolean(cmd && cmd.params && cmd.params.auto_play), { nativePlayback });
+      }
+      if (action === 'select_group') {
+        const gid = cmd && cmd.params ? cmd.params.group_id : null;
+        const key = typeof gid === 'string' ? nativeGroupKeyById.get(gid) : null;
+        if (!key) return false;
+        activePlaylist = key;
+        if (typeof playlistSelectDropdown !== 'undefined' && playlistSelectDropdown) playlistSelectDropdown.value = activePlaylist;
+        if (typeof renderPlaylists === 'function') renderPlaylists();
+        if (typeof applyFiltersAndRenderTable === 'function') applyFiltersAndRenderTable();
+        if (typeof persistWorkspaceState === 'function') persistWorkspaceState();
+        return true;
       }
     },
   });

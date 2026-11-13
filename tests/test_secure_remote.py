@@ -143,7 +143,7 @@ def test_tls_pinned_pair_state_roles_and_strict_protocol():
         assert request('GET', '/v1/session', token=token)[1]['status'] == 'pending'
         assert request('GET', '/v1/state', token=token)[0] == 403
         remote.approve(pair['device_id'], 'view_only')
-        assert request('GET', '/v1/capabilities', token=token)[1]['commands'] == ['play', 'pause', 'stop', 'fade_out', 'prev', 'next', 'select_track']
+        assert request('GET', '/v1/capabilities', token=token)[1]['commands'] == ['play', 'pause', 'stop', 'fade_out', 'prev', 'next', 'select_track', 'select_group']
         assert request('GET', '/v1/state', token=token)[0] == 200
         assert request('POST', '/v1/commands', {'action': 'play', 'idempotency_key': 'request-0001'}, token)[1]['code'] == 'view_only'
         for path in ('/api/library', '/v1/state?token=secret', '/v1/state/', '//v1/state', '/v1/%73tate'):
@@ -304,4 +304,56 @@ def test_tracks_catalog_sanitization_and_select_track_commands():
     # Offline master clears served tracks cleanly.
     now[0] += 3.0
     offline_tracks = remote.tracks(pair['token'])
-    assert offline_tracks['master_online'] is False and offline_tracks['tracks'] == []
+    assert offline_tracks['master_online'] is False and offline_tracks['tracks'] == [] and offline_tracks['groups'] == []
+
+
+def test_tracks_catalog_groups_and_select_group_command():
+    from web_ui import RemotePlayerHub
+    from secure_remote import SecureRemote, RemoteError
+    remote = SecureRemote(RemotePlayerHub())
+    remote.activate()
+    pair = remote.pair(remote.open_invite(), 'GroupRemote')
+    remote.approve(pair['device_id'], 'control')
+    remote.master_poll(
+        {'is_playing': False},
+        [],
+        'master-group-instance',
+        catalog={
+            'playlist': 'Semua Lagu',
+            'active_group_id': 'g_all',
+            'total_tracks': 2,
+            'groups': [
+                {'id': 'g_all', 'name': 'Semua Lagu', 'count': 2},
+                {'id': 'g_opening', 'name': r'D:\Music\Opening', 'count': 2},
+                {'id': 'g_bad_url', 'name': 'https://evil.test/steal', 'count': 1},
+            ],
+            'items': [
+                {'id': 'trk_a', 'title': 'Fanfare.wav', 'group_id': 'g_opening'},
+                {'id': 'trk_b', 'title': 'Anthem.wav', 'group_id': 'g_missing'},
+            ],
+        },
+    )
+    catalog = remote.tracks(pair['token'])
+    assert catalog['active_group_id'] == 'g_all'
+    assert catalog['total_tracks'] == 2
+    assert catalog['groups'] == [
+        {'id': 'g_all', 'name': 'Semua Lagu', 'count': 2},
+        {'id': 'g_opening', 'name': 'Opening', 'count': 2},
+    ]
+    assert catalog['tracks'] == [
+        {'id': 'trk_a', 'title': 'Fanfare.wav', 'group_id': 'g_opening'},
+        {'id': 'trk_b', 'title': 'Anthem.wav'},
+    ]
+    try:
+        remote.command(pair['token'], 'select_group', 'grp-missing-1', group_id='g_missing')
+        assert False
+    except RemoteError as exc:
+        assert exc.code == 'unknown_group'
+    accepted = remote.command(pair['token'], 'select_group', 'grp-req-0001', group_id='g_opening')
+    delivered = remote.master_poll({'is_playing': False}, [], 'master-group-instance')
+    assert delivered[0]['params'] == {'group_id': 'g_opening'}
+    remote.master_poll({'is_playing': False}, [
+        {'command_id': accepted['command_id'], 'status': 'applied', 'observed': {'active_group_id': 'g_opening'}}
+    ], 'master-group-instance')
+    assert remote.command_status(pair['token'], accepted['command_id'])['status'] == 'applied'
+    assert remote.tracks(pair['token'])['active_group_id'] == 'g_opening'

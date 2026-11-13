@@ -31,8 +31,10 @@ class SecureRemote:
     RECORD_TTL = 300
     MAX_RECORDS = 256
     MAX_TRACKS = 250
+    MAX_GROUPS = 64
     TRACK_ID_RE = re.compile(r'^[A-Za-z0-9_-]{3,32}$')
-    ALLOWED_ACTIONS = ('play', 'pause', 'stop', 'fade_out', 'prev', 'next', 'select_track')
+    GROUP_ID_RE = re.compile(r'^[A-Za-z0-9_-]{2,32}$')
+    ALLOWED_ACTIONS = ('play', 'pause', 'stop', 'fade_out', 'prev', 'next', 'select_track', 'select_group')
 
     def __init__(self, hub, clock=time.time):
         self.hub, self.clock = hub, clock
@@ -44,6 +46,10 @@ class SecureRemote:
         self.records = {}
         self.catalog_tracks = []
         self.track_ids = set()
+        self.catalog_groups = []
+        self.group_ids = set()
+        self.active_group_id = None
+        self.total_tracks = 0
         self.current_track_id = None
         self.playlist_label = None
         self.catalog_version = 0
@@ -121,6 +127,10 @@ class SecureRemote:
     def _clear_catalog(self):
         self.catalog_tracks = []
         self.track_ids = set()
+        self.catalog_groups = []
+        self.group_ids = set()
+        self.active_group_id = None
+        self.total_tracks = 0
         self.current_track_id = None
         self.playlist_label = None
         self.tracks_synced = False
@@ -138,6 +148,23 @@ class SecureRemote:
         raw_items = catalog.get('items')
         if not isinstance(raw_items, list):
             return
+        sanitized_groups = []
+        seen_group_ids = set()
+        raw_groups = catalog.get('groups')
+        if isinstance(raw_groups, list):
+            for entry in raw_groups[:self.MAX_GROUPS]:
+                if not isinstance(entry, dict):
+                    continue
+                gid = entry.get('id')
+                if not isinstance(gid, str) or not self.GROUP_ID_RE.fullmatch(gid) or gid in seen_group_ids:
+                    continue
+                name = self._sanitize_title(entry.get('name'), max_len=60)
+                if not name:
+                    continue
+                raw_count = entry.get('count', 0)
+                count = raw_count if (type(raw_count) is int and raw_count >= 0) else 0
+                seen_group_ids.add(gid)
+                sanitized_groups.append({'id': gid, 'name': name, 'count': min(count, 100000)})
         sanitized = []
         seen_ids = set()
         for item in raw_items[:self.MAX_TRACKS]:
@@ -150,7 +177,17 @@ class SecureRemote:
             if not title:
                 continue
             seen_ids.add(tid)
-            sanitized.append({'id': tid, 'title': title})
+            entry = {'id': tid, 'title': title}
+            item_gid = item.get('group_id')
+            if isinstance(item_gid, str) and item_gid in seen_group_ids:
+                entry['group_id'] = item_gid
+            sanitized.append(entry)
+        self.catalog_groups = sanitized_groups
+        self.group_ids = seen_group_ids
+        raw_active_group = catalog.get('active_group_id')
+        self.active_group_id = raw_active_group if (isinstance(raw_active_group, str) and raw_active_group in seen_group_ids) else None
+        raw_total = catalog.get('total_tracks')
+        self.total_tracks = min(raw_total, 100000) if (type(raw_total) is int and raw_total >= len(sanitized)) else len(sanitized)
         self.catalog_tracks = sanitized
         self.track_ids = seen_ids
         self.playlist_label = self._sanitize_title(catalog.get('playlist'), max_len=60)
@@ -264,24 +301,29 @@ class SecureRemote:
     def _result(r):
         return {k: r[k] for k in ('command_id', 'action', 'status', 'expires_at')}
 
-    def command(self, token, action, key, track_id=None, auto_play=False):
+    def command(self, token, action, key, track_id=None, auto_play=False, group_id=None):
         with self.lock:
             d = self._device(token, active=True, control=True)
             if action not in self.ALLOWED_ACTIONS or not isinstance(key, str) or not re.fullmatch(r'[A-Za-z0-9_-]{8,80}', key):
                 raise RemoteError('invalid_command', 400)
             if action == 'select_track':
-                if not isinstance(track_id, str) or not self.TRACK_ID_RE.fullmatch(track_id) or type(auto_play) is not bool:
+                if not isinstance(track_id, str) or not self.TRACK_ID_RE.fullmatch(track_id) or type(auto_play) is not bool or group_id is not None:
                     raise RemoteError('invalid_command', 400)
                 cmd_params = {'track_id': track_id, 'auto_play': auto_play}
+            elif action == 'select_group':
+                if not isinstance(group_id, str) or not self.GROUP_ID_RE.fullmatch(group_id) or track_id is not None or auto_play:
+                    raise RemoteError('invalid_command', 400)
+                cmd_params = {'group_id': group_id}
             else:
-                if track_id is not None or auto_play:
+                if track_id is not None or auto_play or group_id is not None:
                     raise RemoteError('invalid_command', 400)
                 cmd_params = {}
             self._prune_records()
             for r in self.records.values():
                 if r['device_id'] == d['device_id'] and r['key'] == key:
                     if (r['action'] != action or r.get('track_id') != track_id or
-                            bool(r.get('auto_play', False)) != bool(auto_play)):
+                            bool(r.get('auto_play', False)) != bool(auto_play) or
+                            r.get('group_id') != group_id):
                         raise RemoteError('idempotency_conflict', 409)
                     return self._result(r)
             if len(self.records) >= self.MAX_RECORDS:
@@ -291,11 +333,13 @@ class SecureRemote:
                 raise RemoteError('master_unavailable', 409)
             if action == 'select_track' and track_id not in self.track_ids:
                 raise RemoteError('unknown_track', 409)
+            if action == 'select_group' and group_id not in self.group_ids:
+                raise RemoteError('unknown_group', 409)
             cid = secrets.token_urlsafe(18)
             now = self.clock()
             r = {'command_id': cid, 'device_id': d['device_id'], 'key': key,
                  'action': action, 'track_id': track_id, 'auto_play': bool(auto_play),
-                 'status': 'accepted', 'created_at': now, 'expires_at': now + self.COMMAND_TTL}
+                 'group_id': group_id, 'status': 'accepted', 'created_at': now, 'expires_at': now + self.COMMAND_TTL}
             self.records[cid] = r
             # Reuse the existing hub queue; mark within its lock before any poll.
             with self.hub.lock:
@@ -325,6 +369,9 @@ class SecureRemote:
                 'master_online': online,
                 'catalog_version': self.catalog_version,
                 'playlist': self.playlist_label if online else None,
+                'active_group_id': self.active_group_id if online else None,
+                'total_tracks': self.total_tracks if online else 0,
+                'groups': list(self.catalog_groups) if online else [],
                 'current_track_id': current,
                 'tracks': list(self.catalog_tracks) if online else [],
             }
@@ -401,6 +448,10 @@ class SecureRemote:
                                     else observed.get('is_playing') is False))
                         if matches and isinstance(r.get('track_id'), str):
                             self.current_track_id = r['track_id']
+                    elif r['action'] == 'select_group':
+                        matches = observed.get('active_group_id') == r.get('group_id')
+                        if matches and isinstance(r.get('group_id'), str):
+                            self.active_group_id = r['group_id']
                     elif r['action'] in ('prev', 'next'):
                         tid = observed.get('track_id')
                         matches = (isinstance(tid, str) and bool(self.TRACK_ID_RE.fullmatch(tid)) and

@@ -392,6 +392,7 @@ console.log('PASS cross-poll browser Stop/Play/track load, asynchronous ack hand
 }
 {
   let loadedTrack = null;
+  let activeGroup = 'g_all';
   let hasActive = false;
   const selMedia = {
     paused: true, ended: false, readyState: 4, currentTime: 0, error: null,
@@ -402,6 +403,7 @@ console.log('PASS cross-poll browser Stop/Play/track load, asynchronous ack hand
     media: () => selMedia,
     hasTrack: () => hasActive,
     currentTrackId: () => loadedTrack,
+    activeGroupId: () => activeGroup,
     now: () => 1000,
     authorize: async () => true,
     execute: async (action, _guard, cmd) => {
@@ -410,6 +412,10 @@ console.log('PASS cross-poll browser Stop/Play/track load, asynchronous ack hand
         hasActive = true;
         if (cmd.params.auto_play) await selMedia.play();
         else selMedia.pause();
+        return true;
+      }
+      if (action === 'select_group') {
+        activeGroup = cmd.params.group_id;
         return true;
       }
       if (action === 'next') {
@@ -424,6 +430,9 @@ console.log('PASS cross-poll browser Stop/Play/track load, asynchronous ack hand
   assert.equal(res.status, 'applied');
   assert.equal(res.observed.track_id, 'trk_1');
   assert.equal(res.observed.is_playing, false);
+  res = await selConsumer({ native_id: 'sel-grp', action: 'select_group', params: { group_id: 'g_opening' }, expires_at: 1005 });
+  assert.equal(res.status, 'applied');
+  assert.equal(res.observed.active_group_id, 'g_opening');
   res = await selConsumer({ native_id: 'sel-play', action: 'select_track', params: { track_id: 'trk_3', auto_play: true }, expires_at: 1005 });
   assert.equal(res.status, 'applied');
   assert.equal(res.observed.track_id, 'trk_3');
@@ -431,5 +440,5 @@ console.log('PASS cross-poll browser Stop/Play/track load, asynchronous ack hand
   res = await selConsumer({ native_id: 'sel-next', action: 'next', expires_at: 1005 });
   assert.equal(res.status, 'applied');
   assert.equal(res.observed.track_id, 'trk_2');
-  console.log('PASS native select_track (including empty deck Cue/Play) and next');
+  console.log('PASS native select_track (including empty deck Cue/Play), select_group, and next');
 }

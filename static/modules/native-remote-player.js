@@ -1,8 +1,8 @@
 // Only native v1 commands enter here. Legacy/local player actions stay unchanged.
 // Injection keeps actual media observations testable without replacing the engine.
-export function createNativeCommandConsumer({ media, hasTrack, execute, isFadingOut = () => false, currentTrackId = () => null, captureIntent = () => () => true, authorize = async () => false, now = () => Date.now() / 1000 }) {
+export function createNativeCommandConsumer({ media, hasTrack, execute, isFadingOut = () => false, currentTrackId = () => null, activeGroupId = () => null, captureIntent = () => () => true, authorize = async () => false, now = () => Date.now() / 1000 }) {
   const seen = new Map();
-  const allowedActions = ['play', 'pause', 'stop', 'fade_out', 'prev', 'next', 'select_track'];
+  const allowedActions = ['play', 'pause', 'stop', 'fade_out', 'prev', 'next', 'select_track', 'select_group'];
   return async cmd => {
     if (!cmd || typeof cmd.native_id !== 'string') return null;
     for (const [id, expiry] of seen) if (now() >= expiry) seen.delete(id);
@@ -14,6 +14,8 @@ export function createNativeCommandConsumer({ media, hasTrack, execute, isFading
     if (!allowedActions.includes(cmd.action) || !media()) return result('rejected');
     if (cmd.action === 'select_track') {
       if (!cmd.params || typeof cmd.params.track_id !== 'string' || !cmd.params.track_id) return result('rejected');
+    } else if (cmd.action === 'select_group') {
+      if (!cmd.params || typeof cmd.params.group_id !== 'string' || !cmd.params.group_id) return result('rejected');
     } else if (!hasTrack()) {
       return result('rejected');
     }
@@ -46,12 +48,15 @@ export function createNativeCommandConsumer({ media, hasTrack, execute, isFading
       const paused = Boolean(audio && audio.paused);
       const stopped = paused && audio.currentTime === 0;
       const trackId = currentTrackId() || null;
+      const groupId = activeGroupId() || null;
       let applied = false;
       if (cmd.action === 'play') applied = playing;
       else if (cmd.action === 'stop') applied = stopped;
       else if (cmd.action === 'fade_out') applied = playing && fading;
       else if (cmd.action === 'select_track') {
         applied = Boolean(trackId && trackId === cmd.params?.track_id && (cmd.params?.auto_play ? playing : paused));
+      } else if (cmd.action === 'select_group') {
+        applied = Boolean(groupId && groupId === cmd.params?.group_id);
       } else if (cmd.action === 'prev' || cmd.action === 'next') {
         applied = Boolean(trackId && hasTrack());
       } else {
@@ -62,6 +67,7 @@ export function createNativeCommandConsumer({ media, hasTrack, execute, isFading
         current_time: Number.isFinite(audio?.currentTime) ? audio.currentTime : null,
         transport_state: fading ? 'FADING' : stopped ? 'STOPPED' : playing ? 'PLAYING' : 'PAUSED',
         track_id: trackId,
+        active_group_id: groupId,
       } };
     } catch (_) {
       return result('rejected');
