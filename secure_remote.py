@@ -30,6 +30,9 @@ class SecureRemote:
     COMMAND_TTL = 4
     RECORD_TTL = 300
     MAX_RECORDS = 256
+    MAX_TRACKS = 250
+    TRACK_ID_RE = re.compile(r'^[A-Za-z0-9_-]{3,32}$')
+    ALLOWED_ACTIONS = ('play', 'pause', 'stop', 'fade_out', 'prev', 'next', 'select_track')
 
     def __init__(self, hub, clock=time.time):
         self.hub, self.clock = hub, clock
@@ -39,6 +42,12 @@ class SecureRemote:
         self.invite = None
         self.devices = {}
         self.records = {}
+        self.catalog_tracks = []
+        self.track_ids = set()
+        self.current_track_id = None
+        self.playlist_label = None
+        self.catalog_version = 0
+        self.tracks_synced = False
         self.master_instance = None
         self.master_seen = 0
         self.listener = None
@@ -95,6 +104,7 @@ class SecureRemote:
             self.session_id = secrets.token_urlsafe(24)
             self.devices.clear()
             self.records.clear()
+            self._clear_catalog()
             self._discard_queue()
             self.invite = None
 
@@ -104,8 +114,50 @@ class SecureRemote:
             self.invite = None
             self.devices.clear()
             self.records.clear()
+            self._clear_catalog()
             self._discard_queue()
             self.session_id = None
+
+    def _clear_catalog(self):
+        self.catalog_tracks = []
+        self.track_ids = set()
+        self.current_track_id = None
+        self.playlist_label = None
+        self.tracks_synced = False
+
+    @staticmethod
+    def _sanitize_title(raw, max_len=160):
+        if not isinstance(raw, str) or '://' in raw:
+            return None
+        title = re.split(r'[/\\]', raw)[-1]
+        return ''.join(c for c in title if c.isprintable()).strip()[:max_len] or None
+
+    def _update_catalog(self, catalog):
+        if not isinstance(catalog, dict):
+            return
+        raw_items = catalog.get('items')
+        if not isinstance(raw_items, list):
+            return
+        sanitized = []
+        seen_ids = set()
+        for item in raw_items[:self.MAX_TRACKS]:
+            if not isinstance(item, dict):
+                continue
+            tid = item.get('id')
+            if not isinstance(tid, str) or not self.TRACK_ID_RE.fullmatch(tid) or tid in seen_ids:
+                continue
+            title = self._sanitize_title(item.get('title'), max_len=140)
+            if not title:
+                continue
+            seen_ids.add(tid)
+            sanitized.append({'id': tid, 'title': title})
+        self.catalog_tracks = sanitized
+        self.track_ids = seen_ids
+        self.playlist_label = self._sanitize_title(catalog.get('playlist'), max_len=60)
+        if self.current_track_id not in self.track_ids:
+            self.current_track_id = None
+        self.catalog_version += 1
+        self.tracks_synced = True
 
     def _enabled(self):
         if not self.enabled:
@@ -212,15 +264,24 @@ class SecureRemote:
     def _result(r):
         return {k: r[k] for k in ('command_id', 'action', 'status', 'expires_at')}
 
-    def command(self, token, action, key):
+    def command(self, token, action, key, track_id=None, auto_play=False):
         with self.lock:
             d = self._device(token, active=True, control=True)
-            if action not in ('play', 'pause', 'stop', 'fade_out') or not isinstance(key, str) or not re.fullmatch(r'[A-Za-z0-9_-]{8,80}', key):
+            if action not in self.ALLOWED_ACTIONS or not isinstance(key, str) or not re.fullmatch(r'[A-Za-z0-9_-]{8,80}', key):
                 raise RemoteError('invalid_command', 400)
+            if action == 'select_track':
+                if not isinstance(track_id, str) or not self.TRACK_ID_RE.fullmatch(track_id) or type(auto_play) is not bool:
+                    raise RemoteError('invalid_command', 400)
+                cmd_params = {'track_id': track_id, 'auto_play': auto_play}
+            else:
+                if track_id is not None or auto_play:
+                    raise RemoteError('invalid_command', 400)
+                cmd_params = {}
             self._prune_records()
             for r in self.records.values():
                 if r['device_id'] == d['device_id'] and r['key'] == key:
-                    if r['action'] != action:
+                    if (r['action'] != action or r.get('track_id') != track_id or
+                            bool(r.get('auto_play', False)) != bool(auto_play)):
                         raise RemoteError('idempotency_conflict', 409)
                     return self._result(r)
             if len(self.records) >= self.MAX_RECORDS:
@@ -228,16 +289,18 @@ class SecureRemote:
             online = self.master_instance is not None and self.clock() - self.master_seen < 2.0
             if not online:
                 raise RemoteError('master_unavailable', 409)
+            if action == 'select_track' and track_id not in self.track_ids:
+                raise RemoteError('unknown_track', 409)
             cid = secrets.token_urlsafe(18)
             now = self.clock()
             r = {'command_id': cid, 'device_id': d['device_id'], 'key': key,
-                 'action': action, 'status': 'accepted', 'created_at': now,
-                 'expires_at': now + self.COMMAND_TTL}
+                 'action': action, 'track_id': track_id, 'auto_play': bool(auto_play),
+                 'status': 'accepted', 'created_at': now, 'expires_at': now + self.COMMAND_TTL}
             self.records[cid] = r
             # Reuse the existing hub queue; mark within its lock before any poll.
             with self.hub.lock:
                 cmd = {'id': self.hub.next_cmd_id, 'native_id': cid, 'action': action,
-                       'params': {}, 'client_id': d['device_id'], 'created_at': now,
+                       'params': cmd_params, 'client_id': d['device_id'], 'created_at': now,
                        'expires_at': r['expires_at']}
                 self.hub.next_cmd_id += 1
                 self.hub.command_queue.append(cmd)
@@ -252,6 +315,20 @@ class SecureRemote:
                 return {'command_id': cid, 'status': 'unknown'}
             return self._result(r)
 
+    def tracks(self, token):
+        with self.lock:
+            self._device(token, active=True)
+            online = self.master_instance is not None and self.clock() - self.master_seen < 2.0
+            current = self.current_track_id if (online and self.current_track_id in self.track_ids) else None
+            return {
+                'protocol': 'v1',
+                'master_online': online,
+                'catalog_version': self.catalog_version,
+                'playlist': self.playlist_label if online else None,
+                'current_track_id': current,
+                'tracks': list(self.catalog_tracks) if online else [],
+            }
+
     def state(self, token):
         with self.lock:
             d = self._device(token, active=True)
@@ -260,17 +337,12 @@ class SecureRemote:
                 # Only bounded display text; never forward track paths, URLs or QC.
                 snapshot = {k: state.get(k) for k in ('is_playing', 'transport_state', 'current_time', 'duration')}
                 track = state.get('track')
-                title = track.get('name') if isinstance(track, dict) else None
-                if isinstance(title, str) and '://' not in title:
-                    title = re.split(r'[/\\]', title)[-1]
-                    title = ''.join(c for c in title if c.isprintable()).strip()[:160] or None
-                else:
-                    title = None
+                title = self._sanitize_title(track.get('name') if isinstance(track, dict) else None, max_len=160)
                 snapshot['track_title'] = title
                 online = self.master_instance is not None and self.clock() - self.master_seen < 2.0
             return {'protocol': 'v1', 'role': d['role'], 'master_online': online, 'state': snapshot}
 
-    def master_poll(self, state, acknowledgements, instance):
+    def master_poll(self, state, acknowledgements, instance, catalog=None):
         with self.lock:
             if not isinstance(instance, str) or not re.fullmatch(r'[A-Za-z0-9_-]{16,80}', instance) or not isinstance(state, dict) or not state:
                 raise RemoteError('invalid_master_state', 400)
@@ -278,8 +350,14 @@ class SecureRemote:
             if self.master_instance != instance or self.clock() - self.master_seen >= 2.0:
                 for d in self.devices.values():
                     self._cancel_device_commands(d['device_id'])
+                self._clear_catalog()
             self.master_instance = instance
             self.master_seen = self.clock()
+            if catalog is not None:
+                self._update_catalog(catalog)
+            if 'native_track_id' in state:
+                tid = state.get('native_track_id')
+                self.current_track_id = tid if (isinstance(tid, str) and tid in self.track_ids) else None
             queue, *_ = self.hub.update_master_state(state)
             return self.master_exchange(queue, acknowledgements)
 
@@ -317,6 +395,18 @@ class SecureRemote:
                     elif r['action'] == 'fade_out':
                         matches = (observed.get('transport_state') == 'FADING' and
                                    observed.get('is_playing') is True)
+                    elif r['action'] == 'select_track':
+                        matches = (observed.get('track_id') == r.get('track_id') and
+                                   (observed.get('is_playing') is True if r.get('auto_play')
+                                    else observed.get('is_playing') is False))
+                        if matches and isinstance(r.get('track_id'), str):
+                            self.current_track_id = r['track_id']
+                    elif r['action'] in ('prev', 'next'):
+                        tid = observed.get('track_id')
+                        matches = (isinstance(tid, str) and bool(self.TRACK_ID_RE.fullmatch(tid)) and
+                                   isinstance(observed.get('is_playing'), bool))
+                        if matches:
+                            self.current_track_id = tid
                     else:
                         matches = observed.get('is_playing') is False
                     if matches:

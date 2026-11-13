@@ -390,3 +390,46 @@ console.log('PASS cross-poll browser Stop/Play/track load, asynchronous ack hand
   assert.equal(fadeBadges.at(-1), 'PAUSED');
   console.log('PASS actual triggerSmoothFadeOut via consumeNativeCommand');
 }
+{
+  let loadedTrack = null;
+  let hasActive = false;
+  const selMedia = {
+    paused: true, ended: false, readyState: 4, currentTime: 0, error: null,
+    async play() { this.paused = false; },
+    pause() { this.paused = true; },
+  };
+  const selConsumer = createNativeCommandConsumer({
+    media: () => selMedia,
+    hasTrack: () => hasActive,
+    currentTrackId: () => loadedTrack,
+    now: () => 1000,
+    authorize: async () => true,
+    execute: async (action, _guard, cmd) => {
+      if (action === 'select_track') {
+        loadedTrack = cmd.params.track_id;
+        hasActive = true;
+        if (cmd.params.auto_play) await selMedia.play();
+        else selMedia.pause();
+        return true;
+      }
+      if (action === 'next') {
+        loadedTrack = 'trk_2';
+        return true;
+      }
+      return false;
+    },
+  });
+  // Must succeed even when no track is loaded on PC yet (!hasTrack()).
+  let res = await selConsumer({ native_id: 'sel-cue', action: 'select_track', params: { track_id: 'trk_1', auto_play: false }, expires_at: 1005 });
+  assert.equal(res.status, 'applied');
+  assert.equal(res.observed.track_id, 'trk_1');
+  assert.equal(res.observed.is_playing, false);
+  res = await selConsumer({ native_id: 'sel-play', action: 'select_track', params: { track_id: 'trk_3', auto_play: true }, expires_at: 1005 });
+  assert.equal(res.status, 'applied');
+  assert.equal(res.observed.track_id, 'trk_3');
+  assert.equal(res.observed.is_playing, true);
+  res = await selConsumer({ native_id: 'sel-next', action: 'next', expires_at: 1005 });
+  assert.equal(res.status, 'applied');
+  assert.equal(res.observed.track_id, 'trk_2');
+  console.log('PASS native select_track (including empty deck Cue/Play) and next');
+}

@@ -924,19 +924,20 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function loadTrack(fileObj, autoPlay = false, opts = {}) {
-    if (!fileObj || !audioEl) return;
+    if (!fileObj || !audioEl) return false;
     if (isRemoteController && !opts.fromRemoteSync) {
       sendRemoteCommand('load_track', {
         rel_path: fileObj.rel_path,
         auto_play: Boolean(autoPlay),
       });
-      return;
+      return true;
     }
+    if (opts.nativePlayback && !opts.nativePlayback.isCurrent()) return false;
     cancelActiveFade();
     ensureAudioGraph();
 
     activeTrackObj = fileObj;
-    transportIntentVersion++;
+    if (!opts.nativePlayback) transportIntentVersion++;
     activeTrackRelPath = fileObj.rel_path;
     persistWorkspaceState();
 
@@ -988,11 +989,16 @@ document.addEventListener('DOMContentLoaded', () => {
     renderCuePads();
 
     if (autoPlay) {
-      playCurrentTrack({ isSessionRestore: Boolean(opts.isSessionRestore), startTime });
+      return playCurrentTrack({
+        isSessionRestore: Boolean(opts.isSessionRestore),
+        startTime,
+        nativePlayback: opts.nativePlayback,
+      });
     } else {
       setTransportStateBadge('CUED');
       syncPlayPauseButton(false);
       savePlaybackSessionState(false);
+      return true;
     }
   }
 
@@ -1043,8 +1049,10 @@ document.addEventListener('DOMContentLoaded', () => {
       highlightActiveRowInTable();
       renderCuePads();
       savePlaybackSessionState(true);
+      return true;
     } catch (err) {
       if (intentVersion !== transportIntentVersion) return false;
+      if (opts && opts.nativePlayback) return false;
       if (opts && opts.isSessionRestore) {
         pendingAutoResumeOnGesture = true;
         setTransportStateBadge('PAUSED');
@@ -3764,10 +3772,49 @@ document.addEventListener('DOMContentLoaded', () => {
   let isMasterSyncInFlight = false;
   const nativeMasterInstance = isRemoteController ? null : (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16); }));
   const nativeAcks = [];
+  const nativeIdByRelPath = new Map();
+  const nativeRelPathById = new Map();
+  let nativeTrackSeq = 0;
+  let lastAckedNativeCatalogSig = '';
+  function getNativeTrackId(relPath) {
+    if (typeof relPath !== 'string' || !relPath) return null;
+    let tid = nativeIdByRelPath.get(relPath);
+    if (!tid) {
+      tid = 't_' + (++nativeTrackSeq).toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+      nativeIdByRelPath.set(relPath, tid);
+      nativeRelPathById.set(tid, relPath);
+    }
+    return tid;
+  }
+  function buildNativeCatalogSnapshot() {
+    if (typeof allFiles === 'undefined' || !Array.isArray(allFiles)) return null;
+    const vis = typeof visibleFiles !== 'undefined' && Array.isArray(visibleFiles) ? visibleFiles : [];
+    const pl = typeof activePlaylist === 'string' && activePlaylist ? activePlaylist : 'ALL';
+    const list = pl !== 'ALL' && vis.length > 0 ? vis : allFiles;
+    const playlistsArr = typeof allPlaylists !== 'undefined' && Array.isArray(allPlaylists) ? allPlaylists : [];
+    let playlistLabel = 'Semua Lagu';
+    if (pl !== 'ALL') {
+      const matched = playlistsArr.find(p => p && p.name === pl);
+      const rawLabel = matched && matched.label ? matched.label : pl;
+      playlistLabel = String(rawLabel).replace(/^📁\s*/, '').trim() || pl;
+    }
+    const items = [];
+    for (let i = 0; i < list.length && items.length < 250; i++) {
+      const f = list[i];
+      if (!f || typeof f.rel_path !== 'string' || !f.name) continue;
+      const tid = getNativeTrackId(f.rel_path);
+      if (tid) items.push({ id: tid, title: String(f.name).slice(0, 140) });
+    }
+    const sig = playlistLabel + '|' + items.map(it => it.id).join(',');
+    return { sig, payload: { playlist: playlistLabel, items } };
+  }
   const consumeNativeCommand = createNativeCommandConsumer({
     media: () => audioEl,
     hasTrack: () => Boolean(activeTrackObj),
     isFadingOut: () => typeof isFadingOut !== 'undefined' && Boolean(isFadingOut),
+    currentTrackId: () => (typeof activeTrackObj !== 'undefined' && activeTrackObj && typeof activeTrackObj.rel_path === 'string'
+      ? getNativeTrackId(activeTrackObj.rel_path)
+      : null),
     captureIntent: () => {
       const intentVersion = ++transportIntentVersion;
       return () => intentVersion === transportIntentVersion;
@@ -3778,26 +3825,50 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       return Boolean(ok && data && data.authorized === true);
     },
-    execute: (action, nativePlayback) => {
+    execute: (action, nativePlayback, cmd) => {
       if (action === 'play') return playCurrentTrack({ nativePlayback });
       if (action === 'pause') return pauseCurrentTrack();
       if (action === 'stop') return stopAndResetCue();
       if (action === 'fade_out') return triggerSmoothFadeOut(3.0);
+      if (action === 'prev' || action === 'next') {
+        const adj = typeof getAdjacentTrack === 'function' ? getAdjacentTrack(action === 'prev' ? -1 : 1) : null;
+        if (!adj) return false;
+        return loadTrack(adj, Boolean(audioEl && !audioEl.paused), { nativePlayback });
+      }
+      if (action === 'select_track') {
+        const tid = cmd && cmd.params ? cmd.params.track_id : null;
+        const rel = typeof tid === 'string' ? nativeRelPathById.get(tid) : null;
+        const target = rel && typeof allFiles !== 'undefined' && Array.isArray(allFiles)
+          ? allFiles.find(f => f && f.rel_path === rel)
+          : null;
+        if (!target) return false;
+        return loadTrack(target, Boolean(cmd && cmd.params && cmd.params.auto_play), { nativePlayback });
+      }
     },
   });
   async function pushMasterStateAndPollCommands() {
     if (isRemoteController || isMasterSyncInFlight || isPageUnloading) return;
     isMasterSyncInFlight = true;
     const sentAcks = nativeAcks.slice(0, 64);
+    const stateSnapshot = buildMasterStateSnapshot() || {};
+    if (typeof activeTrackObj !== 'undefined' && activeTrackObj && typeof activeTrackObj.rel_path === 'string') {
+      stateSnapshot.native_track_id = getNativeTrackId(activeTrackObj.rel_path);
+    }
+    const catalogSnap = buildNativeCatalogSnapshot();
+    const sentCatalogSig = catalogSnap && catalogSnap.sig !== lastAckedNativeCatalogSig ? catalogSnap.sig : null;
+    const bodyPayload = { state: stateSnapshot, native_acks: sentAcks, master_instance: nativeMasterInstance };
+    if (sentCatalogSig) bodyPayload.native_catalog = catalogSnap.payload;
     try {
       const res = await fetch('/api/remote/state', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ state: buildMasterStateSnapshot(), native_acks: sentAcks, master_instance: nativeMasterInstance }),
+        body: JSON.stringify(bodyPayload),
       });
       if (res.ok) {
         const data = await res.json();
         nativeAcks.splice(0, sentAcks.length);
+        if (data.native_catalog_synced === false) lastAckedNativeCatalogSig = '';
+        else if (sentCatalogSig) lastAckedNativeCatalogSig = sentCatalogSig;
         if (data.pin) remotePin = data.pin;
         const cnt = Number(data.active_remotes_count) || 0;
         if (btnOpenRemoteModal && remoteHeaderLabel) {

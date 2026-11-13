@@ -143,7 +143,7 @@ def test_tls_pinned_pair_state_roles_and_strict_protocol():
         assert request('GET', '/v1/session', token=token)[1]['status'] == 'pending'
         assert request('GET', '/v1/state', token=token)[0] == 403
         remote.approve(pair['device_id'], 'view_only')
-        assert request('GET', '/v1/capabilities', token=token)[1]['commands'] == ['play', 'pause', 'stop', 'fade_out']
+        assert request('GET', '/v1/capabilities', token=token)[1]['commands'] == ['play', 'pause', 'stop', 'fade_out', 'prev', 'next', 'select_track']
         assert request('GET', '/v1/state', token=token)[0] == 200
         assert request('POST', '/v1/commands', {'action': 'play', 'idempotency_key': 'request-0001'}, token)[1]['code'] == 'view_only'
         for path in ('/api/library', '/v1/state?token=secret', '/v1/state/', '//v1/state', '/v1/%73tate'):
@@ -239,3 +239,69 @@ def test_fade_out_command_requires_fading_state_and_rejects_paused():
         {'command_id': rejected['command_id'], 'status': 'rejected'}
     ], 'master-instance-one')
     assert remote.command_status(pair['token'], rejected['command_id'])['status'] == 'rejected'
+
+
+def test_tracks_catalog_sanitization_and_select_track_commands():
+    import json
+    from web_ui import RemotePlayerHub
+    from secure_remote import SecureRemote, RemoteError
+    now = [1000.0]
+    remote = SecureRemote(RemotePlayerHub(), clock=lambda: now[0])
+    remote.activate()
+    invite = remote.open_invite()
+    pair = remote.pair(invite, 'Selector')
+    remote.approve(pair['device_id'], 'control')
+    remote.master_poll(
+        {'is_playing': False, 'native_track_id': 'trk_one'},
+        [],
+        'master-track-instance',
+        catalog={
+            'playlist': r'C:\private\Resepsi',
+            'items': [
+                {'id': 'trk_one', 'title': r'D:\Music\01 - Opening.wav', 'rel_path': 'secret/path'},
+                {'id': 'trk_two', 'title': 'https://evil.test/steal.mp3'},
+                {'id': 'bad id!', 'title': 'Ignored'},
+                {'id': 'trk_three', 'title': '02 - Masuk.\x00mp3'},
+            ],
+        },
+    )
+    catalog = remote.tracks(pair['token'])
+    assert catalog['master_online'] is True
+    assert catalog['playlist'] == 'Resepsi'
+    assert catalog['current_track_id'] == 'trk_one'
+    assert catalog['tracks'] == [
+        {'id': 'trk_one', 'title': '01 - Opening.wav'},
+        {'id': 'trk_three', 'title': '02 - Masuk.mp3'},
+    ]
+    # Even view_only can inspect tracks, and /v1/state still keeps only its 5 public fields.
+    assert set(remote.state(pair['token'])['state']) == {'track_title', 'is_playing', 'transport_state', 'current_time', 'duration'}
+    # Unknown track or wrong auto_play fails closed.
+    for args in [('trk_missing', False), ('bad id', False), ('trk_three', 'yes')]:
+        try:
+            remote.command(pair['token'], 'select_track', f'bad-{args[0]}', track_id=args[0], auto_play=args[1])
+            assert False
+        except RemoteError:
+            pass
+    accepted = remote.command(pair['token'], 'select_track', 'sel-req-0001', track_id='trk_three', auto_play=True)
+    # Reusing same idempotency key for a different track conflicts.
+    try:
+        remote.command(pair['token'], 'select_track', 'sel-req-0001', track_id='trk_one', auto_play=True)
+        assert False
+    except RemoteError as exc:
+        assert exc.code == 'idempotency_conflict'
+    delivered = remote.master_poll({'is_playing': False}, [], 'master-track-instance')
+    assert delivered[0]['params'] == {'track_id': 'trk_three', 'auto_play': True}
+    # Spoofing auto_play=True as stopped must not verify as applied.
+    remote.master_poll({'is_playing': False}, [
+        {'command_id': accepted['command_id'], 'status': 'applied', 'observed': {'is_playing': False, 'track_id': 'trk_three'}}
+    ], 'master-track-instance')
+    assert remote.command_status(pair['token'], accepted['command_id'])['status'] == 'pending'
+    remote.master_poll({'is_playing': True, 'native_track_id': 'trk_three'}, [
+        {'command_id': accepted['command_id'], 'status': 'applied', 'observed': {'is_playing': True, 'track_id': 'trk_three'}}
+    ], 'master-track-instance')
+    assert remote.command_status(pair['token'], accepted['command_id'])['status'] == 'applied'
+    assert remote.tracks(pair['token'])['current_track_id'] == 'trk_three'
+    # Offline master clears served tracks cleanly.
+    now[0] += 3.0
+    offline_tracks = remote.tracks(pair['token'])
+    assert offline_tracks['master_online'] is False and offline_tracks['tracks'] == []

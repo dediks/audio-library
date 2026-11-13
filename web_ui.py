@@ -2075,7 +2075,10 @@ class AudioServerHandler(BaseHTTPRequestHandler):
                 remote_hub.set_enabled(payload["enabled"])
             if native_master:
                 try:
-                    commands = self.server.secure_remote.master_poll(payload.get('state'), payload.get('native_acks', []), payload.get('master_instance'))
+                    commands = self.server.secure_remote.master_poll(
+                        payload.get('state'), payload.get('native_acks', []),
+                        payload.get('master_instance'), catalog=payload.get('native_catalog'),
+                    )
                 except RemoteError as exc:
                     self.send_json(exc.status, {'code': exc.code})
                     return
@@ -2084,7 +2087,7 @@ class AudioServerHandler(BaseHTTPRequestHandler):
             else:
                 commands, active_count, current_pin, is_enabled = remote_hub.update_master_state(payload.get("state"), include_native=False)
             active_list, blocked_list = remote_hub.get_clients_lists()
-            self.send_json(200, {
+            response_body = {
                 "ok": True,
                 "commands": commands,
                 "active_remotes_count": active_count,
@@ -2093,7 +2096,10 @@ class AudioServerHandler(BaseHTTPRequestHandler):
                 "pin": current_pin,
                 "enabled": is_enabled,
                 "port": int(self.server.server_address[1]),
-            })
+            }
+            if native_master:
+                response_body["native_catalog_synced"] = bool(self.server.secure_remote.tracks_synced)
+            self.send_json(200, response_body)
         elif path == "/api/remote/clients":
             if not is_local:
                 self.send_json(403, {"error": "Hanya Master Deck lokal yang dapat mengelola koneksi HP."})

@@ -247,7 +247,7 @@ class NativeHandler(BaseHTTPRequestHandler):
     def _dispatch(self):
         owner = self.server.owner
         self.server.rate('all')
-        fixed = {'/v1/pair', '/v1/session', '/v1/capabilities', '/v1/state', '/v1/commands'}
+        fixed = {'/v1/pair', '/v1/session', '/v1/capabilities', '/v1/state', '/v1/tracks', '/v1/commands'}
         status_route = re.fullmatch(r'/v1/commands/([A-Za-z0-9_-]{24})', self.path)
         if self.path not in fixed and not status_route:
             raise RemoteError('unknown_route', 404)
@@ -261,9 +261,18 @@ class NativeHandler(BaseHTTPRequestHandler):
                     raise RemoteError('invalid_fields', 400)
                 return 202, owner.pair(self._token(), payload['label'])
             if self.path == '/v1/commands':
+                action = payload.get('action')
+                if action == 'select_track':
+                    if set(payload) not in ({'action', 'idempotency_key', 'track_id'},
+                                            {'action', 'idempotency_key', 'track_id', 'auto_play'}):
+                        raise RemoteError('invalid_fields', 400)
+                    return 202, owner.command(
+                        self._token(), action, payload['idempotency_key'],
+                        track_id=payload['track_id'], auto_play=payload.get('auto_play', False),
+                    )
                 if set(payload) != {'action', 'idempotency_key'}:
                     raise RemoteError('invalid_fields', 400)
-                return 202, owner.command(self._token(), payload['action'], payload['idempotency_key'])
+                return 202, owner.command(self._token(), action, payload['idempotency_key'])
             raise RemoteError('method_not_allowed', 405)
         if self.command != 'GET':
             raise RemoteError('method_not_allowed', 405)
@@ -274,12 +283,14 @@ class NativeHandler(BaseHTTPRequestHandler):
             return 200, owner.session(token)
         if self.path == '/v1/state':
             return 200, owner.state(token)
+        if self.path == '/v1/tracks':
+            return 200, owner.tracks(token)
         if status_route:
             return 200, owner.command_status(token, status_route[1])
         if self.path == '/v1/capabilities':
             with owner.lock:
                 owner._device(token, active=True)
-            return 200, {'protocol': 'v1', 'commands': ['play', 'pause', 'stop', 'fade_out'],
+            return 200, {'protocol': 'v1', 'commands': list(owner.ALLOWED_ACTIONS),
                          'media': False, 'command_ttl_seconds': owner.COMMAND_TTL,
                          'idempotency_ttl_seconds': owner.RECORD_TTL}
         raise RemoteError('method_not_allowed', 405)
