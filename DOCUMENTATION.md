@@ -320,6 +320,15 @@ Server lokal [`web_ui.py`](file:///home/dedik/project/audio-library-starter/web_
 | `POST` | `/api/batch-rename`     | Simulasi preview (`preview: true`) atau eksekusi (`preview: false`) Auto-Numbering & Pembersih Tag YouTube (`source_dir`, `rel_paths`, `numbering_mode`, `start_number`, `strip_yt_id`, `strip_junk_tags`, `clean_spaces`). |
 | `POST` | `/api/delete`           | Menghapus satu file, satu folder playlist, atau _batch delete_ banyak file sekaligus (`source_dir`, `rel_path` / `rel_paths`, `is_folder`).                                                                                 |
 
+### Android Native Remote v1 (HTTPS Terpisah di Port Default `8766`)
+
+Menu **Android Remote** pada Player menjalankan listener HTTPS native yang terpisah dari endpoint browser HTTP/PIN lama (spesifikasi lengkap & batasan keamanan ada di [SECURE_REMOTE.md](./SECURE_REMOTE.md)):
+
+- `POST /v1/pair`, `GET /v1/session`, `GET /v1/capabilities`: pairing sekali pakai berbasis fingerprint sertifikat sesi, persetujuan peran (`control` / `view_only`), dan revoke/expiry.
+- `GET /v1/state`: snapshot playback (`is_playing`, `transport_state`, `current_time`, `duration`, `track_title` yang disanitasi tanpa path/URL).
+- `GET /v1/tracks`: katalog aman untuk aplikasi Android berisi `groups[]` (hingga 64 grup folder, dengan `active_group_id` dan `total_tracks`) serta `tracks[]` (hingga 250 item `{id, title, group_id?}`).
+- `POST /v1/commands` & `GET /v1/commands/<id>`: mendukung `play`, `pause`, `stop`, `fade_out` (3 detik halus), `prev`, `next`, `select_track` (`track_id`, `auto_play`), dan `select_group` (`group_id`).
+
 ---
 
 ## 10. Sistem Pembaruan Otomatis (In-App GitHub Release Auto-Updater)

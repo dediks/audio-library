@@ -27,10 +27,18 @@ Every response is JSON, no-store, connection-close. No redirects or CORS/browser
 
 - `POST /v1/pair`: `Authorization: Bearer <one-time invite>`; body `{"label":"operator device"}` (1–80 characters). 202 returns `device_id`, random `token`, `status:pending`. Invite consumed atomically. Token is issued only once; losing the response requires a new local invite. Pending token cannot read playback or command. Operator approves control/view_only or denies locally.
 - `GET /v1/session`: Bearer device token; reports pending/active role and expiration. Revoked/denied/expired tokens return explicit 403 code; missing/bad tokens 401. Listener shutdown means disabled/transport unavailable, not playback failure.
-- `GET /v1/capabilities`: approved token; protocol `v1`, commands `play/pause/stop`, media false, command/idempotency TTLs.
+- `GET /v1/capabilities`: approved token; protocol `v1`, commands `play/pause/stop/fade_out/prev/next/select_track/select_group`, media false, command/idempotency TTLs.
 - `GET /v1/state`: approved token; role, master_online, playback booleans/transport/time/duration and `state.track_title`. The optional display title is a printable basename, capped at160 characters; URL-shaped values are omitted. No track paths, folders, QC or other library metadata.
-- `POST /v1/commands`: approved **control** token; `{"action":"play|pause|stop","idempotency_key":"8-to-80_ASCII_letters_digits_underscore_hyphen"}`. 202 is **accepted**, not applied. Same key + device + session repeats the existing record; changing action returns 409. Distinct device/session does not share keys. Offline master rejects early (409).
+- `GET /v1/tracks`: approved token; privacy-safe track/group snapshot (`master_online`, `catalog_version`, `playlist`, `active_group_id`, `total_tracks`, `groups[]` up to 64 safe folder groups, `current_track_id`, `tracks[]` up to 250 sanitized `{id, title, group_id?}` entries; no paths, URLs, or QC metrics).
+- `POST /v1/commands`: approved **control** token; `{"action":"play|pause|stop|fade_out|prev|next|select_track|select_group","idempotency_key":"8-to-80_ASCII_letters_digits_underscore_hyphen"}` (plus `"track_id"` + optional `"auto_play":bool` for `select_track`, or `"group_id"` for `select_group`). 202 is **accepted**, not applied. Same key + params + device + session repeats the existing record; changing action or params returns 409. Distinct device/session does not share keys. Offline master or unknown `track_id`/`group_id` rejects early (409).
 - `GET /v1/commands/<command_id>`: approved token, only its own records. Status accepted/pending/applied/rejected/expired/unknown. Unknown ID, another device's ID, or forgotten records yield unknown, not evidence of execution.
+
+## Protocol v1 extensions (Fade Out, Navigation, Catalog & Grouping)
+
+- `fade_out` invokes `triggerSmoothFadeOut` and returns `applied` only after observing transition to `FADING`.
+- `prev` / `next` and `select_track` (`track_id`, `auto_play`) drive track changes and playback inside the active desktop workspace/deck, supporting both active-deck switches and empty-deck Cue/Play.
+- `select_group` (`group_id`) switches the desktop workspace playlist/folder filter cleanly and reports `observed['active_group_id']` for ack verification.
+- Desktop tests verified after these additions: `.venv/bin/python tests/run_tests.py` (`82/82 passed`), `node tests/dual-remote.test.mjs`, `tests/native-admin.test.mjs` (`12/12 passed`), and `tests/native-player.test.mjs` (all passed with simulated player harness).
 
 Limits: 32 device records/session, 256 command records, records retained 300s; capacity rejects instead of evicting idempotency entries early. Pair rate bucket 10 burst + 1/6s refill; global request bucket 120 burst + 20/s refill; fixed bucket count. Max 16 live connections, three-second socket/handshake idle timeout, six-second absolute connection deadline, bounded request queue, one request per TLS connection. Listener/worker/watchdog threads are daemonized and sockets closed during shutdown. Saturation may close the transport without a JSON response: client must report unknown, not auto-replay.
 
