@@ -143,7 +143,15 @@ def test_tls_pinned_pair_state_roles_and_strict_protocol():
         assert request('GET', '/v1/session', token=token)[1]['status'] == 'pending'
         assert request('GET', '/v1/state', token=token)[0] == 403
         remote.approve(pair['device_id'], 'view_only')
-        assert request('GET', '/v1/capabilities', token=token)[1]['commands'] == ['play', 'pause', 'stop', 'fade_out', 'prev', 'next', 'select_track', 'select_group']
+        legacy = ['play', 'pause', 'stop']
+        # Released Android 0.6.1 rejects unknown actions; default stays v1/3.
+        for headers in [None, {'X-Swararia-Capabilities': 'unsupported'}, {'X-Swararia-Capabilities': 'extended-v1,other'}, {'X-Swararia-Capabilities': 'EXTENDED-V1'}]:
+            status, capabilities = request('GET', '/v1/capabilities', token=token, headers=headers)
+            assert status == 200 and capabilities['protocol'] == 'v1'
+            assert capabilities['commands'] == legacy
+        extended = {'X-Swararia-Capabilities': 'extended-v1'}
+        assert request('GET', '/v1/capabilities', token=token, headers=extended)[1]['commands'] == ['play', 'pause', 'stop', 'fade_out', 'prev', 'next', 'select_track', 'select_group']
+        assert request('GET', '/v1/capabilities?extended-v1', token=token, headers=extended)[0] == 404
         assert request('GET', '/v1/state', token=token)[0] == 200
         assert request('POST', '/v1/commands', {'action': 'play', 'idempotency_key': 'request-0001'}, token)[1]['code'] == 'view_only'
         for path in ('/api/library', '/v1/state?token=secret', '/v1/state/', '//v1/state', '/v1/%73tate'):

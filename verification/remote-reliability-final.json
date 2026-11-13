@@ -1,0 +1,48 @@
+{
+  "status": "verified_host_source_only",
+  "base": "b3b9ced44df87bafc950af0bb39beea5d026399b",
+  "branch": "feature/dual-browser-native-remote-v1",
+  "desktop_reviewed_candidate_sha256": "d4df8fe6bce3327f02b833cb7bd67e046d42fd0be2b1f1df9a6684561e64241d",
+  "android_commit": "d19a86b7885c4e5f6761bfbf7ab6d26c7b3682a4",
+  "android_base": "34fb6f7aac391ff8c7d83f9ee139d107337aaa6f",
+  "android_source_version": "7 / 0.5.1-spike",
+  "independent_review": {
+    "delegation": "deleg_c1669f19",
+    "passed": true,
+    "security_concerns": [],
+    "logic_errors": [],
+    "suggestions": [],
+    "summary": "Reviewer independently verified both immutable targets; reviewed all five bug boundaries, compatible negotiation, ordered persistence/owner fencing and real callers. Corrected fixtures match production presence/readiness semantics. PowerShell inputs, exit and postcondition handling have no blocking findings. Ten focused desktop regressions independently passed. No source edits by reviewer. Host-source approval only."
+  },
+  "verification": {
+    "desktop_python": {"passed": 92, "total": 92},
+    "desktop_admin_node": {"passed": 12, "total": 12},
+    "desktop_player_and_dual_node": "passed, strict unhandled rejections",
+    "android_remote_junit": 24,
+    "android_data_junit": 13,
+    "android_sqlite_source_tests": 8,
+    "android_wiring_tests": 3,
+    "android_source_version_tests": 1,
+    "actual_kotlin_https": "passed trust, route-only opt-in, authorization, no replay, total deadline and cancellation",
+    "released_decoder": "Actual 0610303 source with test-only package rename accepts actual default/unsupported-header three-command TLS replies",
+    "unicode_catalog": "Actual current decoder accepts 97550-byte CJK/astral response with 64 groups and truthful total250",
+    "desktop_unchanged_base_files": 100,
+    "android_unchanged_base_files": 231,
+    "desktop_preview_unchanged_files": 22
+  },
+  "initial_failures": {
+    "desktop_full_suite": "88/92; four stale fixture failures after inspector contract was strengthened",
+    "closure": "Corrected rule-name/presence metadata and actual inspector seams only; no production predicate weakened. Full92/92 and reviewer10 focused regressions passed."
+  },
+  "static_heuristic": "One expected subprocess boundary in web_ui.py was contextually reviewed; no literal secret or private-key finding. Heuristic scan is not proof of security.",
+  "recovery": "Verified source bundles and staged/unstaged/preview snapshots outside repositories; scoped revert after preserving newer work, never whole-tree reset or app-data deletion.",
+  "limitations": [
+    "No real Windows PowerShell/UAC/firewall/WSL or physical phone acceptance",
+    "No full Gradle/KSP/APK build; scanner16.1.0 remains uncached and no download was authorized",
+    "No real Keystore, process-death durability, storage deletion under I/O failure, scanner/Play Services, audio or device rendering claim",
+    "Existing URL(String) deprecation warning remains"
+  ],
+  "installations": [],
+  "push_performed": false,
+  "commit_identifier": "Recorded in adjacent dist release manifest; this report is part of that commit."
+}

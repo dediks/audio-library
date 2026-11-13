@@ -174,7 +174,17 @@ def test_native_dialog_connect_form_wraps_without_changing_browser_modal():
 def test_wsl_foh_companion_bridge_security_and_forwarding():
     import web_ui as web
     hub = web.RemotePlayerHub()
+    original_bind = web.LocalAudioServer.server_bind
+
+    def loopback_primary_bind(server):
+        # Preserve logical wildcard startup (which creates the FOH companion),
+        # but never open a LAN socket in this integration fixture.
+        assert server.server_address[0] == '0.0.0.0'
+        server.server_address = ('127.0.0.1', server.server_address[1])
+        return original_bind(server)
+
     with patch.object(web, 'remote_hub', hub), \
+            patch.object(web.LocalAudioServer, 'server_bind', loopback_primary_bind), \
             patch.object(web, 'is_wsl_environment', return_value=True), \
             patch.object(web, '_cleanup_stale_wsl_listen_port'), \
             patch.object(web, '_get_linux_internal_ips', return_value=['192.168.85.3']), \
@@ -254,7 +264,7 @@ def test_wsl_foh_bridge_status_targets_internal_port_and_avoids_native_collision
 
         with patch.object(web, '_find_windows_sys32_bin', side_effect=fake_bin), \
                 patch.object(web, '_list_windows_portproxy_rules', return_value=[('0.0.0.0', 8766, '192.168.85.3', 8765)]), \
-                patch.object(web, '_check_windows_firewall_rule', return_value=True), \
+                patch.object(web, '_inspect_windows_firewall_rules', return_value={'Swararia FOH Remote 8766': True}), \
                 patch.object(web, '_verify_windows_http_reachable', return_value=False):
             st_old = web.get_wsl_bridge_status(8765)
             assert st_old['bridge_active'] is False
@@ -263,25 +273,25 @@ def test_wsl_foh_bridge_status_targets_internal_port_and_avoids_native_collision
 
         with patch.object(web, '_find_windows_sys32_bin', side_effect=lambda n: '/fake/netsh.exe' if n == 'netsh.exe' else None), \
                 patch.object(web, '_list_windows_portproxy_rules', return_value=[('0.0.0.0', 8766, '192.168.85.3', 8765)]), \
-                patch.object(web, '_check_windows_firewall_rule', return_value=True):
+                patch.object(web, '_inspect_windows_firewall_rules', return_value={'Swararia FOH Remote 8766': True}):
             assert web.get_wsl_bridge_status(8765)['bridge_active'] is False
 
         with patch.object(web, '_find_windows_sys32_bin', side_effect=fake_bin), \
                 patch.object(web, '_list_windows_portproxy_rules', return_value=[('0.0.0.0', 8766, '127.0.0.1', 8769)]), \
-                patch.object(web, '_check_windows_firewall_rule', return_value=True), \
+                patch.object(web, '_inspect_windows_firewall_rules', return_value={'Swararia FOH Remote 8766': True}), \
                 patch.object(web, '_verify_windows_http_reachable', return_value=True):
             assert web.get_wsl_bridge_status(8765)['bridge_active'] is True
 
         with patch.object(web, '_find_windows_sys32_bin', side_effect=fake_bin), \
                 patch.object(web, '_list_windows_portproxy_rules', return_value=[('0.0.0.0', 8766, '127.0.0.1', 8769)]), \
-                patch.object(web, '_check_windows_firewall_rule', return_value=False), \
+                patch.object(web, '_inspect_windows_firewall_rules', return_value={'Swararia FOH Remote 8766': False}), \
                 patch.object(web, '_verify_windows_http_reachable', return_value=True):
             assert web.get_wsl_bridge_status(8765)['bridge_active'] is False
 
         with patch.object(web, '_find_windows_sys32_bin', side_effect=lambda n: '/fake/' + n if n in ('powershell.exe', 'netsh.exe', 'curl.exe') else None), \
                 patch.object(web, '_run_elevated_windows_powershell', return_value=(True, '')) as run_ps, \
                 patch.object(web, '_list_windows_portproxy_rules', return_value=[('0.0.0.0', 8766, '127.0.0.1', 8769)]), \
-                patch.object(web, '_check_windows_firewall_rule', return_value=True), \
+                patch.object(web, '_inspect_windows_firewall_rules', return_value={'Swararia FOH Remote 8766': True}), \
                 patch.object(web, '_verify_windows_http_reachable', return_value=True):
             ok_en, msg_en, st_en = web.enable_wsl_port_bridge(8765)
             assert ok_en is True and st_en['bridge_active'] is True and '127.0.0.1:8769' in msg_en
@@ -291,6 +301,6 @@ def test_wsl_foh_bridge_status_targets_internal_port_and_avoids_native_collision
 
             run_ps.reset_mock()
             ok_dis, _, _ = web.disable_wsl_port_bridge(8765)
-            assert ok_dis is True
+            assert ok_dis is False, 'unchanged mocked rules must not claim removal'
             dis_cmd = ' '.join(run_ps.call_args[0][0])
             assert 'listenport=8766' in dis_cmd and 'listenport=8769' in dis_cmd

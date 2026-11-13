@@ -239,7 +239,7 @@ def test_wsl2_nat_maps_windows_wifi_ip_avoids_foh_port_and_gates_bridge():
             assert local('GET', '/api/native-remote/wsl-bridge?foo=1')[0] == 404
             assert local('POST', '/api/native-remote/wsl-bridge', {'action': 'status'}, {'Origin': 'http://evil.test'})[0] == 403
             with patch.object(web_ui, '_list_windows_portproxy_rules', return_value=[('0.0.0.0', pub_port, '127.0.0.1', priv_port)]), \
-                    patch.object(web_ui, '_check_windows_firewall_rule', return_value=True), \
+                    patch.object(web_ui, '_inspect_windows_firewall_rules', return_value={f'Swararia Android Remote {pub_port}': True}), \
                     patch.object(web_ui, '_find_windows_sys32_bin', return_value='/fake/curl.exe'), \
                     patch.object(web_ui, '_verify_windows_tls_reachable', return_value=True):
                 st_b, body_b = local('POST', '/api/native-remote/wsl-bridge', {'action': 'status'})

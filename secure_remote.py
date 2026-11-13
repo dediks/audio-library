@@ -6,6 +6,7 @@ created in a private temporary directory and removed immediately after loading.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import secrets
 import threading
@@ -16,6 +17,14 @@ class RemoteError(Exception):
     def __init__(self, code, status=403):
         self.code, self.status = code, status
         super().__init__(code)
+
+
+MAX_CATALOG_BYTES = 98_304
+
+
+def encode_remote_json(data):
+    """One serialization policy for catalog budgeting and the actual TLS reply."""
+    return json.dumps(data, allow_nan=False).encode('utf-8')
 
 
 def _digest(value):
@@ -140,7 +149,10 @@ class SecureRemote:
         if not isinstance(raw, str) or '://' in raw:
             return None
         title = re.split(r'[/\\]', raw)[-1]
-        return ''.join(c for c in title if c.isprintable()).strip()[:max_len] or None
+        title = ''.join(c for c in title if c.isprintable()).strip()
+        # Android (including released v1 clients) bounds strings in UTF-16 units.
+        # Dropping an incomplete final pair keeps whole Unicode scalar values.
+        return title.encode('utf-16-le')[:max_len * 2].decode('utf-16-le', errors='ignore') or None
 
     def _update_catalog(self, catalog):
         if not isinstance(catalog, dict):
@@ -364,7 +376,7 @@ class SecureRemote:
             self._device(token, active=True)
             online = self.master_instance is not None and self.clock() - self.master_seen < 2.0
             current = self.current_track_id if (online and self.current_track_id in self.track_ids) else None
-            return {
+            payload = {
                 'protocol': 'v1',
                 'master_online': online,
                 'catalog_version': self.catalog_version,
@@ -375,6 +387,22 @@ class SecureRemote:
                 'current_track_id': current,
                 'tracks': list(self.catalog_tracks) if online else [],
             }
+            # Fixed bounded metadata and at most 64 bounded groups fit on their
+            # own. Select the largest deterministic track prefix fitting the
+            # *actual* reply encoding, without changing total_tracks or IDs used
+            # for command validation. The current ID may be outside that prefix.
+            if len(encode_remote_json(payload)) > MAX_CATALOG_BYTES:
+                tracks = payload['tracks']
+                low, high = 0, len(tracks)
+                while low < high:
+                    mid = (low + high + 1) // 2
+                    payload['tracks'] = tracks[:mid]
+                    if len(encode_remote_json(payload)) <= MAX_CATALOG_BYTES:
+                        low = mid
+                    else:
+                        high = mid - 1
+                payload['tracks'] = tracks[:low]
+            return payload
 
     def state(self, token):
         with self.lock:

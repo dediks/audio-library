@@ -640,7 +640,8 @@ def get_wsl_bridge_status(port: int) -> dict:
     wifi_ip = lan_ips[0] if lan_ips else ""
     rule_name = f"Swararia FOH Remote {bridge_port}"
 
-    rules = _list_windows_portproxy_rules()
+    observed_rules = _list_windows_portproxy_rules()
+    rules = observed_rules or []
     valid_addrs = {"0.0.0.0", "*"}
     if wifi_ip:
         valid_addrs.add(wifi_ip)
@@ -652,14 +653,16 @@ def get_wsl_bridge_status(port: int) -> dict:
         lp == bridge_port and la in valid_addrs and (ca, cp) in {(wsl_ip, port), (wsl_ip, internal_port)}
         for (la, lp, ca, cp) in rules
     )
-    firewall_active = _check_windows_firewall_rule(rule_name) if _find_windows_sys32_bin("netsh.exe") else True
+    firewall_rules = _inspect_windows_firewall_rules((rule_name, f"Swararia FOH Remote {port}"))
+    firewall_active = firewall_rules.get(rule_name, False) if firewall_rules is not None else None
+    firewall_present = bool(firewall_rules) if firewall_rules is not None else None
 
     if wifi_ip and _find_windows_sys32_bin("curl.exe"):
         has_rule = has_primary_rule or has_fallback_rule
-        bridge_active = has_rule and firewall_active and _verify_windows_http_reachable(wifi_ip, bridge_port)
+        bridge_active = has_rule and firewall_active is True and _verify_windows_http_reachable(wifi_ip, bridge_port)
     else:
         has_rule = has_primary_rule
-        bridge_active = has_rule and firewall_active
+        bridge_active = has_rule and firewall_active is True
 
     ps_parts = _foh_bridge_script_lines(port, bridge_port, internal_port, wifi_ip, quiet=False)
     return {
@@ -669,6 +672,10 @@ def get_wsl_bridge_status(port: int) -> dict:
         "bridge_port": bridge_port,
         "internal_port": internal_port,
         "bridge_active": bridge_active,
+        "has_portproxy": (any(lp in {port, bridge_port, internal_port} for _, lp, _, _ in rules)
+                          if observed_rules is not None else None),
+        "firewall_active": firewall_active,
+        "firewall_present": firewall_present,
         "powershell_admin_cmd": "; ".join(ps_parts),
     }
 
@@ -756,7 +763,19 @@ def disable_wsl_port_bridge(port: int) -> tuple[bool, str, dict]:
         return False, f"Gagal menutup jembatan port: {exec_err}", get_wsl_bridge_status(port)
 
     updated = get_wsl_bridge_status(port)
-    return True, f"Jembatan Port {bridge_port} & aturan Firewall telah dihapus kembali (Tertutup Rapat).", updated
+    if updated.get("has_portproxy") is not False or updated.get("firewall_present") is not False:
+        return False, "Penghapusan belum terverifikasi; aturan Windows masih aktif atau status tidak tersedia.", updated
+    return True, f"Aturan jembatan Port {bridge_port} & Firewall telah dihapus.", updated
+
+
+def _reserved_browser_ports(http_port: int) -> set[int]:
+    reserved = {http_port}
+    if is_wsl_environment():
+        reserved.update({_get_wsl_remote_bridge_port(http_port), _get_wsl_foh_internal_port(http_port)})
+        with _wsl_foh_ports_lock:
+            for primary, internal in _active_wsl_foh_ports.items():
+                reserved.update({primary, primary + 1, internal})
+    return reserved
 
 
 def _get_native_remote_default_port(http_port: int) -> int:
@@ -765,6 +784,9 @@ def _get_native_remote_default_port(http_port: int) -> int:
     reserved = {http_port}
     if is_wsl:
         reserved.add(_get_wsl_remote_bridge_port(http_port))
+        with _wsl_foh_ports_lock:
+            for primary, internal in _active_wsl_foh_ports.items():
+                reserved.update({primary, primary + 1, internal})
     port = 8767 if is_wsl else 8766
     limit = 65534 if is_wsl else 65535
     while port in reserved and port < limit:
@@ -784,7 +806,7 @@ def _get_wsl_native_internal_port(
     """Chooses an internal WSL2 loopback port distinct from public_port, web UI, and FOH bridge."""
     reserved = {public_port, http_port, _get_wsl_remote_bridge_port(http_port)}
     if _include_foh_internal:
-        reserved.add(_get_wsl_foh_internal_port(http_port))
+        reserved.update(_reserved_browser_ports(http_port))
     for delta in range(1, 32):
         for candidate in (public_port + delta, public_port - delta):
             if 1024 <= candidate <= 65535 and candidate not in reserved:
@@ -792,10 +814,10 @@ def _get_wsl_native_internal_port(
     return 8768
 
 
-def _list_windows_portproxy_rules() -> list[tuple[str, int, str, int]]:
+def _list_windows_portproxy_rules() -> list[tuple[str, int, str, int]] | None:
     netsh_bin = _find_windows_sys32_bin("netsh.exe")
     if not netsh_bin:
-        return []
+        return None
     rules: list[tuple[str, int, str, int]] = []
     try:
         out = subprocess.check_output(
@@ -814,31 +836,71 @@ def _list_windows_portproxy_rules() -> list[tuple[str, int, str, int]]:
             if m:
                 rules.append((m.group(1), int(m.group(2)), m.group(3), int(m.group(4))))
     except Exception:
-        pass
+        return None
     return rules
 
 
-def _check_windows_firewall_rule(rule_name: str) -> bool:
-    netsh_bin = _find_windows_sys32_bin("netsh.exe")
-    if not netsh_bin:
-        return False
+def _inspect_windows_firewall_rules(rule_names: tuple[str, ...]) -> dict[str, bool] | None:
+    """Map present app rule names to readiness from one ActiveStore read.
+
+    An empty mapping proves absence; None means unknown, never absent. A key
+    remains present even if every rule with that name is disabled or unsuitable.
+    """
+    ports = {}
+    for name in rule_names:
+        match = re.fullmatch(r"Swararia (?:Android|FOH) Remote ([0-9]{1,5})", name) if isinstance(name, str) else None
+        if not match or not 1 <= int(match[1]) <= 65535:
+            return None
+        ports[name] = str(int(match[1]))
+    if not ports:
+        return None
+    names_ps = ', '.join(f"'{name}'" for name in ports)
+    ps_bin = _find_windows_sys32_bin("powershell.exe")
+    if not ps_bin:
+        return None
+    script = (
+        "$ErrorActionPreference = 'Stop'; try { "
+        f"$names = @({names_ps}); $rules = @(Get-NetFirewallRule -PolicyStore ActiveStore -ErrorAction Stop | Where-Object {{ $names -contains $_.DisplayName }}); "
+        "$rows = @($rules | ForEach-Object { $r = $_; "
+        "$p = $r | Get-NetFirewallPortFilter -ErrorAction Stop; "
+        "[PSCustomObject]@{ name=[string]$r.DisplayName; enabled=($r.Enabled -eq 'True'); inbound=($r.Direction -eq 'Inbound'); "
+        "allow=($r.Action -eq 'Allow'); all_profiles=($r.Profile -eq 'Any' -or [int]$r.Profile -eq 7); "
+        "protocol=[string]$p.Protocol; local_port=[string]$p.LocalPort } }); "
+        "ConvertTo-Json -InputObject $rows -Compress; exit 0 } catch { exit 1 }"
+    )
+    encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
     try:
         proc = subprocess.run(
-            [netsh_bin, "advfirewall", "firewall", "show", "rule", f"name={rule_name}"],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="ignore",
-            timeout=2.5,
-            check=False,
+            [ps_bin, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            encoding="utf-8", errors="strict", timeout=2.5, check=False,
         )
         if proc.returncode != 0:
-            return False
-        low = proc.stdout.lower()
-        return ("enabled:" in low and "yes" in low and "direction:" in low and "in" in low)
+            return None
+        rows = json.loads(proc.stdout)
+        flags = ('enabled', 'inbound', 'allow', 'all_profiles')
+        if not isinstance(rows, list) or any(
+            not isinstance(row, dict) or not isinstance(row.get('name'), str) or row['name'] not in ports
+            or any(type(row.get(k)) is not bool for k in flags)
+            or not isinstance(row.get('protocol'), str) or not isinstance(row.get('local_port'), str)
+            for row in rows
+        ):
+            return None
+        present = {}
+        for row in rows:
+            name = row['name']
+            ready = (all(row[k] for k in flags) and row['protocol'].upper() in ('TCP', '6')
+                     and row['local_port'] == ports[name])
+            present[name] = present.get(name, False) or ready
+        return present
     except Exception:
-        return False
+        return None
+
+
+def _check_windows_firewall_rule(rule_name: str) -> bool | None:
+    """Readiness only; False does NOT prove rule absence."""
+    rules = _inspect_windows_firewall_rules((rule_name,))
+    return rules.get(rule_name, False) if rules is not None else None
 
 
 def _verify_windows_tls_reachable(ip: str, port: int) -> bool:
@@ -876,15 +938,45 @@ def _run_elevated_windows_powershell(inner_lines: list[str], timeout: float = 35
     ps_bin = _find_windows_sys32_bin("powershell.exe")
     if not ps_bin:
         return False, "powershell.exe tidak ditemukan dari lingkungan ini."
-    inner_script = " ".join(inner_lines)
+    checked_lines = []
+    for line in inner_lines:
+        if line.lstrip().startswith("netsh "):
+            command = line.strip().rstrip("; ")
+            checked = command + "; if ($LASTEXITCODE -ne 0) { exit 1 };"
+            proxy_delete = re.fullmatch(
+                r'netsh interface portproxy delete v4tov4 listenport=([0-9]+) listenaddress=([0-9.]+)(?: \| Out-Null)?', command)
+            firewall_delete = re.fullmatch(
+                r'netsh advfirewall firewall delete rule name="(Swararia (?:Android|FOH) Remote [0-9]+)"(?: \| Out-Null)?', command)
+            # netsh returns failure for an already-absent target too. Skip only
+            # after a successful read proves absence; never ignore delete errors.
+            if proxy_delete:
+                port, address = proxy_delete.groups()
+                pattern = rf'^\s*{re.escape(address)}\s+{port}\s+'
+                line = (
+                    "$existing = @(netsh interface portproxy show v4tov4); if ($LASTEXITCODE -ne 0) { exit 1 }; "
+                    f"$existing = @($existing | Where-Object {{ $_ -match '{pattern}' }}); "
+                    f"if ($existing.Count -gt 0) {{ {checked} }};"
+                )
+            elif firewall_delete:
+                name = firewall_delete[1]
+                line = (
+                    "$existing = @(Get-NetFirewallRule -PolicyStore PersistentStore -ErrorAction Stop | "
+                    f"Where-Object {{ $_.DisplayName -eq '{name}' }}); "
+                    f"if ($existing.Count -gt 0) {{ {checked} }};"
+                )
+            else:
+                line = checked
+        checked_lines.append(line)
+    inner_script = "$ErrorActionPreference = 'Stop'; try { " + " ".join(checked_lines) + " ; exit 0 } catch { exit 1 }"
     inner_b64 = base64.b64encode(inner_script.encode("utf-16le")).decode("ascii")
     outer_cmd = (
-        f"Start-Process powershell.exe -Verb RunAs -WindowStyle Hidden "
-        f"-Wait -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand','{inner_b64}'"
+        "$ErrorActionPreference = 'Stop'; try { $child = Start-Process powershell.exe -Verb RunAs -WindowStyle Hidden "
+        f"-Wait -PassThru -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand','{inner_b64}'; "
+        "exit $child.ExitCode } catch { exit 1 }"
     )
     outer_b64 = base64.b64encode(outer_cmd.encode("utf-16le")).decode("ascii")
     try:
-        subprocess.run(
+        proc = subprocess.run(
             [ps_bin, "-NoProfile", "-NonInteractive", "-EncodedCommand", outer_b64],
             stdin=subprocess.DEVNULL,
             capture_output=True,
@@ -894,9 +986,9 @@ def _run_elevated_windows_powershell(inner_lines: list[str], timeout: float = 35
             timeout=timeout,
             check=False,
         )
-        return True, ""
-    except Exception as exc:
-        return False, str(exc)
+        return (True, "") if proc.returncode == 0 else (False, "PowerShell tidak berhasil (UAC dibatalkan atau aturan gagal).")
+    except Exception:
+        return False, "PowerShell tidak selesai atau tidak tersedia."
 
 
 def _validated_bridge_target(http_port: int, public_port: int | None, wifi_ip: str, native_local_port: int | None) -> tuple[int, int, str]:
@@ -978,20 +1070,27 @@ def get_native_remote_bridge_status(
 
     needs_portproxy = bool(is_wsl and (not eff_ip or eff_ip not in linux_ips))
     rule_name = f"Swararia Android Remote {eff_port}"
-    port_conflict = eff_port == http_port or (is_wsl and eff_port == foh_bridge_port)
+    reserved = _reserved_browser_ports(http_port)
+    port_conflict = eff_port in reserved or (needs_portproxy and internal_port in reserved)
 
     has_portproxy = True
+    portproxy_present = False
     if needs_portproxy:
+        observed_rules = _list_windows_portproxy_rules()
+        portproxy_present = (any(lp == eff_port for _, lp, _, _ in observed_rules)
+                             if observed_rules is not None else None)
         valid_targets = {("127.0.0.1", internal_port)}
         if wsl_ip:
             valid_targets.add((wsl_ip, eff_port))
             valid_targets.add((wsl_ip, internal_port))
         has_portproxy = any(
             lp == eff_port and la in ("0.0.0.0", "*", eff_ip) and (ca, cp) in valid_targets
-            for (la, lp, ca, cp) in _list_windows_portproxy_rules()
+            for (la, lp, ca, cp) in (observed_rules or [])
         )
 
-    firewall_active = _check_windows_firewall_rule(rule_name)
+    firewall_rules = _inspect_windows_firewall_rules((rule_name,))
+    firewall_active = firewall_rules.get(rule_name, False) if firewall_rules is not None else None
+    firewall_present = bool(firewall_rules) if firewall_rules is not None else None
     tls_reachable = None
     if native_enabled and eff_ip and not port_conflict and _find_windows_sys32_bin("curl.exe"):
         tls_reachable = _verify_windows_tls_reachable(eff_ip, eff_port)
@@ -1003,7 +1102,7 @@ def get_native_remote_bridge_status(
     bridge_active = (
         not port_conflict
         and has_portproxy
-        and firewall_active
+        and firewall_active is True
         and (tls_reachable is True if tls_reachable is not None else True)
     )
     return {
@@ -1014,7 +1113,9 @@ def get_native_remote_bridge_status(
         "needs_firewall": True,
         "bridge_active": bridge_active,
         "has_portproxy": has_portproxy,
+        "portproxy_present": portproxy_present,
         "firewall_active": firewall_active,
+        "firewall_present": firewall_present,
         "port_conflict": port_conflict,
         "foh_bridge_port": foh_bridge_port,
         "wifi_ip": eff_ip,
@@ -1109,9 +1210,6 @@ def disable_native_remote_bridge(
             inner_lines.insert(1, f"netsh interface portproxy delete v4tov4 listenport={eff_port} listenaddress={eff_ip} | Out-Null;")
 
     ok_ps, err = _run_elevated_windows_powershell(inner_lines, timeout=30.0)
-    if not ok_ps:
-        return False, f"Gagal menghapus aturan Windows: {err}", status
-
     updated = get_native_remote_bridge_status(
         http_port,
         public_port=eff_port,
@@ -1119,6 +1217,11 @@ def disable_native_remote_bridge(
         native_enabled=native_enabled,
         native_local_port=native_local_port,
     )
+    if not ok_ps:
+        return False, f"Gagal menghapus aturan Windows: {err}", updated
+    if (updated.get("firewall_present") is not False or
+            (updated.get("needs_portproxy") and updated.get("portproxy_present", updated.get("has_portproxy")) is not False)):
+        return False, "Penghapusan belum terverifikasi; aturan Windows masih aktif atau status tidak tersedia.", updated
     return True, f"Aturan Bridge/Firewall Android Remote port {eff_port} telah dihapus.", updated
 
 
@@ -1692,14 +1795,14 @@ class AudioServerHandler(BaseHTTPRequestHandler):
                 from secure_remote_tls import validate_bind
                 validate_bind(bind_ip, port)
                 is_wsl = is_wsl_environment()
+                if port in _reserved_browser_ports(http_port):
+                    raise RemoteError('wsl_port_reserved' if is_wsl else 'port_reserved', 409)
                 linux_ips = set(_get_linux_internal_ips()) if is_wsl else set()
                 if is_wsl and not ipaddress.IPv4Address(bind_ip).is_loopback and bind_ip not in linux_ips:
                     reachable_ips = {ip for ip in get_local_lan_ips(force_refresh=False) if _is_rfc1918_ipv4(ip)}
                     if bind_ip not in reachable_ips:
                         reachable_ips = {ip for ip in get_local_lan_ips(force_refresh=True) if _is_rfc1918_ipv4(ip)}
                     if bind_ip in reachable_ips:
-                        if port in (http_port, _get_wsl_remote_bridge_port(http_port)):
-                            raise RemoteError('wsl_port_reserved', 409)
                         internal_port = _get_wsl_native_internal_port(port, http_port)
                         remote.start('127.0.0.1', internal_port, advertise_ip=bind_ip, advertise_port=port)
                     else:

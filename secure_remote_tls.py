@@ -15,7 +15,7 @@ import tempfile
 import threading
 import time
 
-from secure_remote import RemoteError
+from secure_remote import RemoteError, encode_remote_json
 
 
 def tls_context(host, extra_ips=()):
@@ -187,7 +187,7 @@ class NativeHandler(BaseHTTPRequestHandler):
 
     def reply(self, status, data):
         self.close_connection = True
-        body = json.dumps(data, allow_nan=False).encode('utf-8')
+        body = encode_remote_json(data)
         self.send_response(status)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(body)))
@@ -297,7 +297,9 @@ class NativeHandler(BaseHTTPRequestHandler):
         if self.path == '/v1/capabilities':
             with owner.lock:
                 owner._device(token, active=True)
-            return 200, {'protocol': 'v1', 'commands': list(owner.ALLOWED_ACTIONS),
+            extended = self.headers.get_all('X-Swararia-Capabilities', []) == ['extended-v1']
+            actions = owner.ALLOWED_ACTIONS if extended else ('play', 'pause', 'stop')
+            return 200, {'protocol': 'v1', 'commands': list(actions),
                          'media': False, 'command_ttl_seconds': owner.COMMAND_TTL,
                          'idempotency_ttl_seconds': owner.RECORD_TTL}
         raise RemoteError('method_not_allowed', 405)
