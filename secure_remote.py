@@ -215,7 +215,7 @@ class SecureRemote:
     def command(self, token, action, key):
         with self.lock:
             d = self._device(token, active=True, control=True)
-            if action not in ('play', 'pause', 'stop') or not isinstance(key, str) or not re.fullmatch(r'[A-Za-z0-9_-]{8,80}', key):
+            if action not in ('play', 'pause', 'stop', 'fade_out') or not isinstance(key, str) or not re.fullmatch(r'[A-Za-z0-9_-]{8,80}', key):
                 raise RemoteError('invalid_command', 400)
             self._prune_records()
             for r in self.records.values():
@@ -308,10 +308,17 @@ class SecureRemote:
                 if ack.get('status') == 'rejected':
                     r['status'] = 'rejected'
                 elif ack.get('status') == 'applied' and isinstance(observed, dict):
-                    matches = (observed.get('is_playing') is True if r['action'] == 'play'
-                               else observed.get('is_playing') is False)
-                    if r['action'] == 'stop':
-                        matches = matches and observed.get('transport_state') == 'STOPPED' and observed.get('current_time') == 0
+                    if r['action'] == 'play':
+                        matches = observed.get('is_playing') is True
+                    elif r['action'] == 'stop':
+                        matches = (observed.get('is_playing') is False and
+                                   observed.get('transport_state') == 'STOPPED' and
+                                   observed.get('current_time') == 0)
+                    elif r['action'] == 'fade_out':
+                        matches = (observed.get('transport_state') == 'FADING' and
+                                   observed.get('is_playing') is True)
+                    else:
+                        matches = observed.get('is_playing') is False
                     if matches:
                         r['status'] = 'applied'
             deliver = []

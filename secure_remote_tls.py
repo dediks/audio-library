@@ -279,7 +279,7 @@ class NativeHandler(BaseHTTPRequestHandler):
         if self.path == '/v1/capabilities':
             with owner.lock:
                 owner._device(token, active=True)
-            return 200, {'protocol': 'v1', 'commands': ['play', 'pause', 'stop'],
+            return 200, {'protocol': 'v1', 'commands': ['play', 'pause', 'stop', 'fade_out'],
                          'media': False, 'command_ttl_seconds': owner.COMMAND_TTL,
                          'idempotency_ttl_seconds': owner.RECORD_TTL}
         raise RemoteError('method_not_allowed', 405)

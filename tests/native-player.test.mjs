@@ -52,7 +52,33 @@ media.paused = false;
 media.readyState = 0;
 ack = await consumer(cmd('no-media'));
 assert.equal(ack.status, 'rejected', 'unready media cannot be applied');
-console.log('PASS native player: observed play/pause/stop, rejection, no-track, TTL, dedup');
+let fadingFlag = false;
+const fadeMedia = {
+  paused: false, ended: false, readyState: 4, currentTime: 12, error: null,
+  play() { this.paused = false; },
+  pause() { this.paused = true; },
+};
+const fadeConsumer = createNativeCommandConsumer({
+  media: () => fadeMedia, hasTrack: () => true, now: () => now, authorize: async () => true,
+  isFadingOut: () => fadingFlag,
+  execute: async action => {
+    if (action !== 'fade_out') return false;
+    if (fadeMedia.paused || fadingFlag) return false;
+    fadingFlag = true;
+    return true;
+  },
+});
+ack = await fadeConsumer(cmd('fade-ok', 'fade_out'));
+assert.equal(ack.status, 'applied', 'fade_out while playing observes FADING immediately');
+assert.equal(ack.observed.transport_state, 'FADING');
+assert.equal(ack.observed.is_playing, true);
+ack = await fadeConsumer(cmd('fade-already', 'fade_out'));
+assert.equal(ack.status, 'rejected', 'duplicate fade_out while fading must be rejected');
+fadingFlag = false;
+fadeMedia.paused = true;
+ack = await fadeConsumer(cmd('fade-paused', 'fade_out'));
+assert.equal(ack.status, 'rejected', 'fade_out while paused must be rejected');
+console.log('PASS native player: observed play/pause/stop/fade_out, rejection, no-track, TTL, dedup');
 
 // Execute the actual polling function, not a source-string assertion.
 const vm = await import('node:vm');
@@ -332,3 +358,35 @@ for (const action of ['stop', 'play', 'load_track']) {
   assert.equal(h.plays, action === 'play' ? 1 : 0, 'duplicate native delivery has no playback effect');
 }
 console.log('PASS cross-poll browser Stop/Play/track load, asynchronous ack handoff, native dedup');
+{
+  const timers = [];
+  const fadeBadges = [];
+  const fadeAudio = {
+    paused: false, ended: false, readyState: 4, currentTime: 15, error: null,
+    play() { this.paused = false; }, pause() { this.paused = true; }, load() { this.paused = true; this.currentTime = 0; },
+  };
+  const fadeCtx = {
+    URLSearchParams, window: { location: { search: '' } }, fetch: async () => ({ ok: true, json: async () => ({ commands: [] }) }),
+    document: { hidden: false, getElementById: () => null }, navigator: { locks: null },
+    BroadcastChannel: function() { return { postMessage() {} }; },
+    clearInterval() {}, setInterval: () => 0, setTimeout: fn => { timers.push(fn); return timers.length; }, clearTimeout() {},
+    createNativeCommandConsumer: options => createNativeCommandConsumer({ ...options, now: () => 1000 }),
+    isRemoteController: false, audioEl: fadeAudio, activeTrackObj: { rel_path: 'cue.wav' },
+    audioCtx: { state: 'running', currentTime: 10 }, fadeGainNode: null, fadeTimerId: null, isFadingOut: false,
+    transportIntentVersion: 0, ensureAudioGraph() {}, setTransportStateBadge: b => fadeBadges.push(b),
+    syncPlayPauseButton() {}, highlightActiveRowInTable() {}, renderCuePads() {},
+    apiPost: async () => ({ ok: true, data: { authorized: true } }),
+  };
+  vm.createContext(fadeCtx);
+  vm.runInContext(player.slice(player.indexOf('  function triggerSmoothFadeOut('), player.indexOf('  function getAdjacentTrack(')) + '\n' + polling, fadeCtx);
+  const firstFade = await vm.runInContext(`consumeNativeCommand(${JSON.stringify(cmd('real-fade-1', 'fade_out'))})`, fadeCtx);
+  assert.equal(firstFade.status, 'applied');
+  assert.equal(firstFade.observed.transport_state, 'FADING');
+  assert.equal(fadeBadges.at(-1), 'FADING');
+  const secondFade = await vm.runInContext(`consumeNativeCommand(${JSON.stringify(cmd('real-fade-2', 'fade_out'))})`, fadeCtx);
+  assert.equal(secondFade.status, 'rejected', 'concurrent triggerSmoothFadeOut rejected cleanly');
+  timers.forEach(fn => fn());
+  assert.equal(fadeAudio.paused, true);
+  assert.equal(fadeBadges.at(-1), 'PAUSED');
+  console.log('PASS actual triggerSmoothFadeOut via consumeNativeCommand');
+}

@@ -143,7 +143,7 @@ def test_tls_pinned_pair_state_roles_and_strict_protocol():
         assert request('GET', '/v1/session', token=token)[1]['status'] == 'pending'
         assert request('GET', '/v1/state', token=token)[0] == 403
         remote.approve(pair['device_id'], 'view_only')
-        assert request('GET', '/v1/capabilities', token=token)[1]['commands'] == ['play', 'pause', 'stop']
+        assert request('GET', '/v1/capabilities', token=token)[1]['commands'] == ['play', 'pause', 'stop', 'fade_out']
         assert request('GET', '/v1/state', token=token)[0] == 200
         assert request('POST', '/v1/commands', {'action': 'play', 'idempotency_key': 'request-0001'}, token)[1]['code'] == 'view_only'
         for path in ('/api/library', '/v1/state?token=secret', '/v1/state/', '//v1/state', '/v1/%73tate'):
@@ -210,3 +210,32 @@ def test_tls_advertised_lan_san_and_posix_immediate_restart():
         remote2 = SecureRemote(RemotePlayerHub())
         remote2.start('127.0.0.1', bind_port, advertise_ip='192.168.18.47', advertise_port=8767)
         remote2.stop()
+
+
+def test_fade_out_command_requires_fading_state_and_rejects_paused():
+    from web_ui import RemotePlayerHub
+    from secure_remote import SecureRemote
+    remote = SecureRemote(RemotePlayerHub())
+    remote.activate()
+    pair = remote.pair(remote.open_invite(), 'Operator')
+    remote.approve(pair['device_id'], 'control')
+    remote.master_poll({'is_playing': True, 'transport_state': 'PLAYING'}, [], 'master-instance-one')
+    accepted = remote.command(pair['token'], 'fade_out', 'fade-req-0001')
+    assert accepted['status'] == 'accepted'
+    delivered = remote.master_poll({'is_playing': True, 'transport_state': 'PLAYING'}, [], 'master-instance-one')
+    assert [c['action'] for c in delivered] == ['fade_out']
+    # Spoofed ack reporting paused instead of FADING must not verify fade_out.
+    remote.master_poll({'is_playing': False}, [
+        {'command_id': accepted['command_id'], 'status': 'applied', 'observed': {'is_playing': False, 'transport_state': 'PAUSED'}}
+    ], 'master-instance-one')
+    assert remote.command_status(pair['token'], accepted['command_id'])['status'] == 'pending'
+    remote.master_poll({'is_playing': True, 'transport_state': 'FADING'}, [
+        {'command_id': accepted['command_id'], 'status': 'applied', 'observed': {'is_playing': True, 'transport_state': 'FADING'}}
+    ], 'master-instance-one')
+    assert remote.command_status(pair['token'], accepted['command_id'])['status'] == 'applied'
+    rejected = remote.command(pair['token'], 'fade_out', 'fade-req-0002')
+    remote.master_poll({'is_playing': False}, [], 'master-instance-one')
+    remote.master_poll({'is_playing': False}, [
+        {'command_id': rejected['command_id'], 'status': 'rejected'}
+    ], 'master-instance-one')
+    assert remote.command_status(pair['token'], rejected['command_id'])['status'] == 'rejected'

@@ -1107,9 +1107,9 @@ document.addEventListener('DOMContentLoaded', () => {
   function triggerSmoothFadeOut(durationSec = 3.0) {
     if (isRemoteController) {
       sendRemoteCommand('fade', { duration: durationSec });
-      return;
+      return false;
     }
-    if (!audioEl || audioEl.paused || isFadingOut) return;
+    if (!audioEl || audioEl.paused || isFadingOut) return false;
     ensureAudioGraph();
     isFadingOut = true;
     setTransportStateBadge('FADING');
@@ -1134,6 +1134,7 @@ document.addEventListener('DOMContentLoaded', () => {
       highlightActiveRowInTable();
       renderCuePads();
     }, Math.round(durationSec * 1000));
+    return true;
   }
 
   function getAdjacentTrack(offset) {
@@ -3766,6 +3767,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const consumeNativeCommand = createNativeCommandConsumer({
     media: () => audioEl,
     hasTrack: () => Boolean(activeTrackObj),
+    isFadingOut: () => typeof isFadingOut !== 'undefined' && Boolean(isFadingOut),
     captureIntent: () => {
       const intentVersion = ++transportIntentVersion;
       return () => intentVersion === transportIntentVersion;
@@ -3780,6 +3782,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (action === 'play') return playCurrentTrack({ nativePlayback });
       if (action === 'pause') return pauseCurrentTrack();
       if (action === 'stop') return stopAndResetCue();
+      if (action === 'fade_out') return triggerSmoothFadeOut(3.0);
     },
   });
   async function pushMasterStateAndPollCommands() {

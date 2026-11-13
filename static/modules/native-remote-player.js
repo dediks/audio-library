@@ -1,6 +1,6 @@
 // Only native v1 commands enter here. Legacy/local player actions stay unchanged.
 // Injection keeps actual media observations testable without replacing the engine.
-export function createNativeCommandConsumer({ media, hasTrack, execute, captureIntent = () => () => true, authorize = async () => false, now = () => Date.now() / 1000 }) {
+export function createNativeCommandConsumer({ media, hasTrack, execute, isFadingOut = () => false, captureIntent = () => () => true, authorize = async () => false, now = () => Date.now() / 1000 }) {
   const seen = new Map();
   return async cmd => {
     if (!cmd || typeof cmd.native_id !== 'string') return null;
@@ -10,7 +10,7 @@ export function createNativeCommandConsumer({ media, hasTrack, execute, captureI
     seen.set(cmd.native_id, now() + 300);
     const result = status => ({ command_id: cmd.native_id, status });
     if (!Number.isFinite(cmd.expires_at) || now() >= cmd.expires_at) return result('expired');
-    if (!['play', 'pause', 'stop'].includes(cmd.action) || !media() || !hasTrack()) return result('rejected');
+    if (!['play', 'pause', 'stop', 'fade_out'].includes(cmd.action) || !media() || !hasTrack()) return result('rejected');
     // Reserve ordering synchronously, before even the first authorization yields.
     const isIntentCurrent = captureIntent();
     let timer;
@@ -35,14 +35,15 @@ export function createNativeCommandConsumer({ media, hasTrack, execute, captureI
       if (completed !== 'completed') return result(completed);
       if (now() >= cmd.expires_at) return result('unknown');
       const audio = media();
+      const fading = Boolean(isFadingOut());
       const playing = Boolean(audio && !audio.paused && !audio.ended && !audio.error && audio.readyState >= 2);
       const paused = Boolean(audio && audio.paused);
       const stopped = paused && audio.currentTime === 0;
-      const applied = cmd.action === 'play' ? playing : cmd.action === 'stop' ? stopped : paused;
+      const applied = cmd.action === 'play' ? playing : cmd.action === 'stop' ? stopped : cmd.action === 'fade_out' ? (playing && fading) : paused;
       return { ...result(applied ? 'applied' : 'rejected'), observed: {
         is_playing: playing,
         current_time: Number.isFinite(audio?.currentTime) ? audio.currentTime : null,
-        transport_state: stopped ? 'STOPPED' : playing ? 'PLAYING' : 'PAUSED',
+        transport_state: fading ? 'FADING' : stopped ? 'STOPPED' : playing ? 'PLAYING' : 'PAUSED',
       } };
     } catch (_) {
       return result('rejected');
